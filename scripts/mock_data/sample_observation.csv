@@ -1,0 +1,4 @@
+station_code,device_code,record_time,temperature,humidity
+ST001,DV001,2026-05-09 10:00:00,22.5,57
+ST001,DV001,2026-05-09 10:05:00,22.7,58
+

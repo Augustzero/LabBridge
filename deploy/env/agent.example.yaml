@@ -1,0 +1,13 @@
+agent:
+  node_code: lab-node-001
+  name: default-lab-node
+  server_url: http://127.0.0.1:18080
+  heartbeat_interval_seconds: 15
+
+storage:
+  queue_db: ./data/agent_queue.db
+  work_dir: ./data/work
+
+tasks:
+  poll_interval_seconds: 10
+
