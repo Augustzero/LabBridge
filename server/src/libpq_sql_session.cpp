@@ -1,6 +1,7 @@
 #include "labbridge/server/libpq_sql_session.h"
 
 #include <stdexcept>
+#include <utility>
 #include <vector>
 
 namespace labbridge::server {
@@ -40,6 +41,32 @@ private:
     PGresult* result_{nullptr};
 };
 
+std::vector<SqlRow> read_rows(PGresult* result) {
+    std::vector<SqlRow> rows;
+    const int row_count = PQntuples(result);
+    rows.reserve(static_cast<std::size_t>(row_count));
+
+    for (int row_index = 0; row_index < row_count; ++row_index) {
+        SqlRow row;
+        for (int column = 0; column < PQnfields(result); ++column) {
+            const char* name = PQfname(result, column);
+            if (name == nullptr) {
+                continue;
+            }
+
+            if (PQgetisnull(result, row_index, column) != 0) {
+                row[name] = "";
+                continue;
+            }
+
+            row[name] = PQgetvalue(result, row_index, column);
+        }
+        rows.push_back(std::move(row));
+    }
+
+    return rows;
+}
+
 }  // namespace
 
 LibpqSqlSession::LibpqSqlSession(const std::string& connection_info) {
@@ -77,6 +104,14 @@ void LibpqSqlSession::execute(const std::string& sql, const SqlParams& params) {
 }
 
 std::optional<SqlRow> LibpqSqlSession::query_one(const std::string& sql, const SqlParams& params) {
+    const auto rows = query_all(sql, params);
+    if (rows.empty()) {
+        return std::nullopt;
+    }
+    return rows.front();
+}
+
+std::vector<SqlRow> LibpqSqlSession::query_all(const std::string& sql, const SqlParams& params) {
     const auto values = make_param_values(params);
     ResultGuard result(PQexecParams(connection_,
                                     sql.c_str(),
@@ -91,25 +126,7 @@ std::optional<SqlRow> LibpqSqlSession::query_one(const std::string& sql, const S
         throw make_error(connection_, "failed to execute PostgreSQL query");
     }
 
-    if (PQntuples(result.get()) == 0) {
-        return std::nullopt;
-    }
-
-    SqlRow row;
-    for (int column = 0; column < PQnfields(result.get()); ++column) {
-        const char* name = PQfname(result.get(), column);
-        if (name == nullptr) {
-            continue;
-        }
-
-        if (PQgetisnull(result.get(), 0, column) != 0) {
-            row[name] = "";
-            continue;
-        }
-
-        row[name] = PQgetvalue(result.get(), 0, column);
-    }
-    return row;
+    return read_rows(result.get());
 }
 
 int LibpqSqlSession::client_version() {

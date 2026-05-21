@@ -21,6 +21,7 @@ public:
 
     void execute(const std::string& sql, const SqlParams& params) override;
     std::optional<SqlRow> query_one(const std::string& sql, const SqlParams& params) override;
+    std::vector<SqlRow> query_all(const std::string& sql, const SqlParams& params) override;
 
     static int client_version();
 

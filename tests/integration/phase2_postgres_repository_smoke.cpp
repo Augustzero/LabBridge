@@ -35,6 +35,15 @@ public:
         return row;
     }
 
+    std::vector<labbridge::server::SqlRow> query_all(const std::string& sql,
+                                                     const labbridge::server::SqlParams& params) override {
+        queried.push_back({sql, params});
+        if (row.empty() || row["node_code"] != params[0]) {
+            return {};
+        }
+        return {row};
+    }
+
     std::vector<RecordedStatement> executed;
     std::vector<RecordedStatement> queried;
     labbridge::server::SqlRow row;

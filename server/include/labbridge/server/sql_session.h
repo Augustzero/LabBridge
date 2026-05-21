@@ -16,6 +16,7 @@ public:
 
     virtual void execute(const std::string& sql, const SqlParams& params) = 0;
     virtual std::optional<SqlRow> query_one(const std::string& sql, const SqlParams& params) = 0;
+    virtual std::vector<SqlRow> query_all(const std::string& sql, const SqlParams& params) = 0;
 };
 
 }  // namespace labbridge::server
