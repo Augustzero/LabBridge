@@ -31,7 +31,10 @@ add_executable(labbridge_server
     server/src/node_repository.cpp
     server/src/postgres_config_repository.cpp
     server/src/postgres_node_repository.cpp
+    server/src/postgres_task_run_repository.cpp
     server/src/node_service.cpp
+    server/src/task_run_repository.cpp
+    server/src/task_run_service.cpp
 )
 
 target_link_libraries(labbridge_server
@@ -150,6 +153,29 @@ target_link_libraries(labbridge_phase5_config_repository_smoke
 )
 
 target_include_directories(labbridge_phase5_config_repository_smoke
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/server/include
+)
+
+add_executable(labbridge_phase6_task_run_repository_smoke
+    tests/integration/phase6_task_run_repository_smoke.cpp
+    server/src/config_repository.cpp
+    server/src/config_service.cpp
+    server/src/node_repository.cpp
+    server/src/node_service.cpp
+    server/src/postgres_config_repository.cpp
+    server/src/postgres_node_repository.cpp
+    server/src/postgres_task_run_repository.cpp
+    server/src/task_run_repository.cpp
+    server/src/task_run_service.cpp
+)
+
+target_link_libraries(labbridge_phase6_task_run_repository_smoke
+    PRIVATE
+        labbridge_core
+)
+
+target_include_directories(labbridge_phase6_task_run_repository_smoke
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/server/include
 )

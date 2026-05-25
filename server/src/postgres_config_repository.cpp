@@ -138,6 +138,24 @@ std::string PostgresConfigRepository::create_task(TaskRecord task) {
     return get_or_empty(*row, "id");
 }
 
+std::optional<TaskRecord> PostgresConfigRepository::find_task(const std::string& task_id) const {
+    static const std::string sql =
+        "SELECT t.id::text AS id, n.node_code, t.data_source_id::text AS data_source_id, "
+        "t.name, t.task_type, t.schedule_expr, t.parser_type, "
+        "COALESCE(t.qc_profile, '') AS qc_profile, "
+        "CASE WHEN t.enabled THEN 'true' ELSE 'false' END AS enabled "
+        "FROM tasks t "
+        "JOIN nodes n ON n.id = t.node_id "
+        "WHERE t.id = $1::bigint "
+        "LIMIT 1";
+
+    const auto row = session_.query_one(sql, {task_id});
+    if (!row.has_value()) {
+        return std::nullopt;
+    }
+    return to_task_record(*row);
+}
+
 std::vector<TaskRecord> PostgresConfigRepository::find_enabled_tasks_by_node(
     const std::string& node_code) const {
     static const std::string sql =

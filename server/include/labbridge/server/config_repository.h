@@ -37,6 +37,7 @@ public:
     virtual std::string create_data_source(DataSourceRecord data_source) = 0;
     virtual std::optional<DataSourceRecord> find_data_source(const std::string& data_source_id) const = 0;
     virtual std::string create_task(TaskRecord task) = 0;
+    virtual std::optional<TaskRecord> find_task(const std::string& task_id) const = 0;
     virtual std::vector<TaskRecord> find_enabled_tasks_by_node(const std::string& node_code) const = 0;
 };
 
@@ -45,6 +46,7 @@ public:
     std::string create_data_source(DataSourceRecord data_source) override;
     std::optional<DataSourceRecord> find_data_source(const std::string& data_source_id) const override;
     std::string create_task(TaskRecord task) override;
+    std::optional<TaskRecord> find_task(const std::string& task_id) const override;
     std::vector<TaskRecord> find_enabled_tasks_by_node(const std::string& node_code) const override;
 
 private:

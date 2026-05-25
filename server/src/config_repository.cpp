@@ -33,6 +33,14 @@ std::string InMemoryConfigRepository::create_task(TaskRecord task) {
     return id;
 }
 
+std::optional<TaskRecord> InMemoryConfigRepository::find_task(const std::string& task_id) const {
+    const auto iter = tasks_.find(task_id);
+    if (iter == tasks_.end()) {
+        return std::nullopt;
+    }
+    return iter->second;
+}
+
 std::vector<TaskRecord> InMemoryConfigRepository::find_enabled_tasks_by_node(
     const std::string& node_code) const {
     std::vector<TaskRecord> tasks;
