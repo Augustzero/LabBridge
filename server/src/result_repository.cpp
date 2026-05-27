@@ -33,6 +33,15 @@ std::string InMemoryResultRepository::create_parsed_record(ParsedRecordRecord pa
     return id;
 }
 
+std::optional<ParsedRecordRecord> InMemoryResultRepository::find_parsed_record(
+    const std::string& parsed_record_id) const {
+    const auto iter = parsed_records_.find(parsed_record_id);
+    if (iter == parsed_records_.end()) {
+        return std::nullopt;
+    }
+    return iter->second;
+}
+
 std::vector<ParsedRecordRecord> InMemoryResultRepository::find_parsed_records_by_run(
     const std::string& task_run_id) const {
     std::vector<ParsedRecordRecord> records;

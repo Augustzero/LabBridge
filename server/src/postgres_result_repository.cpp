@@ -128,6 +128,25 @@ std::string PostgresResultRepository::create_parsed_record(ParsedRecordRecord pa
     return get_or_empty(*row, "id");
 }
 
+std::optional<ParsedRecordRecord> PostgresResultRepository::find_parsed_record(
+    const std::string& parsed_record_id) const {
+    static const std::string sql =
+        "SELECT pr.id::text AS id, COALESCE(pr.raw_file_id::text, '') AS raw_file_id, "
+        "pr.task_run_id::text AS task_run_id, COALESCE(pr.station_code, '') AS station_code, "
+        "COALESCE(pr.device_code, '') AS device_code, "
+        "COALESCE(to_char(pr.record_time, 'YYYY-MM-DD HH24:MI:SS'), '') AS record_time, "
+        "pr.payload_json::text AS payload_json, pr.parse_status "
+        "FROM parsed_records pr "
+        "WHERE pr.id = $1::bigint "
+        "LIMIT 1";
+
+    const auto row = session_.query_one(sql, {parsed_record_id});
+    if (!row.has_value()) {
+        return std::nullopt;
+    }
+    return to_parsed_record(*row);
+}
+
 std::vector<ParsedRecordRecord> PostgresResultRepository::find_parsed_records_by_run(
     const std::string& task_run_id) const {
     static const std::string sql =
