@@ -7,24 +7,13 @@
 #include "labbridge/server/postgres_result_repository.h"
 #include "labbridge/server/postgres_task_run_repository.h"
 #include "labbridge/server/result_service.h"
+#include "labbridge/server/storage_mapping.h"
 #include "labbridge/server/task_run_service.h"
 
 #include <cassert>
 #include <cstdlib>
 #include <iostream>
 #include <string>
-
-namespace {
-
-std::string get_or_empty(const labbridge::server::SqlRow& row, const std::string& key) {
-    const auto iter = row.find(key);
-    if (iter == row.end()) {
-        return {};
-    }
-    return iter->second;
-}
-
-}  // namespace
 
 int main() {
     const char* connection_info = std::getenv("LABBRIDGE_DATABASE_URL");
@@ -183,12 +172,14 @@ int main() {
         {node_code, raw_file.id, first_record.id});
 
     assert(persisted.has_value());
-    assert(get_or_empty(*persisted, "node_code") == node_code);
-    assert(get_or_empty(*persisted, "raw_file_id") == raw_file.id);
-    assert(get_or_empty(*persisted, "parsed_record_id") == first_record.id);
-    assert(get_or_empty(*persisted, "device_code") == "device-a");
-    assert(get_or_empty(*persisted, "payload_json").find("temperature") != std::string::npos);
-    assert(get_or_empty(*persisted, "status") == "succeeded");
+    assert(labbridge::server::storage::value_or_empty(*persisted, "node_code") == node_code);
+    assert(labbridge::server::storage::value_or_empty(*persisted, "raw_file_id") == raw_file.id);
+    assert(labbridge::server::storage::value_or_empty(*persisted, "parsed_record_id") ==
+           first_record.id);
+    assert(labbridge::server::storage::value_or_empty(*persisted, "device_code") == "device-a");
+    assert(labbridge::server::storage::value_or_empty(*persisted, "payload_json")
+               .find("temperature") != std::string::npos);
+    assert(labbridge::server::storage::value_or_empty(*persisted, "status") == "succeeded");
 
     return 0;
 }

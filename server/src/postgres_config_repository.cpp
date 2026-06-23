@@ -1,70 +1,34 @@
 #include "labbridge/server/postgres_config_repository.h"
+#include "labbridge/server/storage_mapping.h"
 
 #include <stdexcept>
 
 namespace labbridge::server {
 namespace {
 
-std::string to_storage_source_type(labbridge::core::SourceType source_type) {
-    switch (source_type) {
-        case labbridge::core::SourceType::LocalDirectory:
-            return "local_directory";
-        case labbridge::core::SourceType::Ftp:
-            return "ftp";
-        case labbridge::core::SourceType::Oracle:
-            return "oracle";
-    }
-    return "local_directory";
-}
-
-labbridge::core::SourceType from_storage_source_type(const std::string& source_type) {
-    if (source_type == "ftp") {
-        return labbridge::core::SourceType::Ftp;
-    }
-    if (source_type == "oracle") {
-        return labbridge::core::SourceType::Oracle;
-    }
-    return labbridge::core::SourceType::LocalDirectory;
-}
-
-std::string bool_param(bool value) {
-    return value ? "true" : "false";
-}
-
-bool from_storage_bool(const std::string& value) {
-    return value == "true" || value == "t" || value == "1";
-}
-
-std::string get_or_empty(const SqlRow& row, const std::string& key) {
-    const auto iter = row.find(key);
-    if (iter == row.end()) {
-        return {};
-    }
-    return iter->second;
-}
-
 DataSourceRecord to_data_source_record(const SqlRow& row) {
     DataSourceRecord record;
-    record.id = get_or_empty(row, "id");
-    record.node_code = get_or_empty(row, "node_code");
-    record.source_type = from_storage_source_type(get_or_empty(row, "source_type"));
-    record.name = get_or_empty(row, "name");
-    record.config_json = get_or_empty(row, "config_json");
-    record.enabled = from_storage_bool(get_or_empty(row, "enabled"));
+    record.id = storage::value_or_empty(row, "id");
+    record.node_code = storage::value_or_empty(row, "node_code");
+    record.source_type =
+        storage::source_type_from_storage(storage::value_or_empty(row, "source_type"));
+    record.name = storage::value_or_empty(row, "name");
+    record.config_json = storage::value_or_empty(row, "config_json");
+    record.enabled = storage::bool_value(storage::value_or_empty(row, "enabled"));
     return record;
 }
 
 TaskRecord to_task_record(const SqlRow& row) {
     TaskRecord record;
-    record.id = get_or_empty(row, "id");
-    record.node_code = get_or_empty(row, "node_code");
-    record.data_source_id = get_or_empty(row, "data_source_id");
-    record.name = get_or_empty(row, "name");
-    record.task_type = get_or_empty(row, "task_type");
-    record.schedule_expr = get_or_empty(row, "schedule_expr");
-    record.parser_type = get_or_empty(row, "parser_type");
-    record.qc_profile = get_or_empty(row, "qc_profile");
-    record.enabled = from_storage_bool(get_or_empty(row, "enabled"));
+    record.id = storage::value_or_empty(row, "id");
+    record.node_code = storage::value_or_empty(row, "node_code");
+    record.data_source_id = storage::value_or_empty(row, "data_source_id");
+    record.name = storage::value_or_empty(row, "name");
+    record.task_type = storage::value_or_empty(row, "task_type");
+    record.schedule_expr = storage::value_or_empty(row, "schedule_expr");
+    record.parser_type = storage::value_or_empty(row, "parser_type");
+    record.qc_profile = storage::value_or_empty(row, "qc_profile");
+    record.enabled = storage::bool_value(storage::value_or_empty(row, "enabled"));
     return record;
 }
 
@@ -82,15 +46,15 @@ std::string PostgresConfigRepository::create_data_source(DataSourceRecord data_s
     const auto row = session_.query_one(sql,
                                         {
                                             data_source.node_code,
-                                            to_storage_source_type(data_source.source_type),
+                                            storage::to_storage(data_source.source_type),
                                             data_source.name,
                                             data_source.config_json,
-                                            bool_param(data_source.enabled),
+                                            storage::bool_param(data_source.enabled),
                                         });
     if (!row.has_value()) {
         throw std::runtime_error("failed to create data source");
     }
-    return get_or_empty(*row, "id");
+    return storage::value_or_empty(*row, "id");
 }
 
 std::optional<DataSourceRecord> PostgresConfigRepository::find_data_source(
@@ -130,12 +94,12 @@ std::string PostgresConfigRepository::create_task(TaskRecord task) {
                                             task.schedule_expr,
                                             task.parser_type,
                                             task.qc_profile,
-                                            bool_param(task.enabled),
+                                            storage::bool_param(task.enabled),
                                         });
     if (!row.has_value()) {
         throw std::runtime_error("failed to create task");
     }
-    return get_or_empty(*row, "id");
+    return storage::value_or_empty(*row, "id");
 }
 
 std::optional<TaskRecord> PostgresConfigRepository::find_task(const std::string& task_id) const {

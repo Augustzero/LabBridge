@@ -1,36 +1,9 @@
 #include "labbridge/server/postgres_node_repository.h"
+#include "labbridge/server/storage_mapping.h"
 
 #include <utility>
 
 namespace labbridge::server {
-namespace {
-
-std::string to_storage_status(labbridge::core::NodeStatus status) {
-    switch (status) {
-        case labbridge::core::NodeStatus::Online:
-            return "online";
-        case labbridge::core::NodeStatus::Offline:
-            return "offline";
-    }
-    return "offline";
-}
-
-labbridge::core::NodeStatus from_storage_status(const std::string& status) {
-    if (status == "online") {
-        return labbridge::core::NodeStatus::Online;
-    }
-    return labbridge::core::NodeStatus::Offline;
-}
-
-std::string get_or_empty(const SqlRow& row, const std::string& key) {
-    const auto iter = row.find(key);
-    if (iter == row.end()) {
-        return {};
-    }
-    return iter->second;
-}
-
-}  // namespace
 
 PostgresNodeRepository::PostgresNodeRepository(ISqlSession& session) : session_(session) {}
 
@@ -50,7 +23,7 @@ void PostgresNodeRepository::upsert(NodeRecord node) {
                      {
                          node.info.node_code,
                          node.info.name,
-                         to_storage_status(node.status),
+                         storage::to_storage(node.status),
                          node.info.agent_version,
                          node.last_heartbeat_at,
                      });
@@ -68,11 +41,11 @@ std::optional<NodeRecord> PostgresNodeRepository::find_by_code(const std::string
     }
 
     NodeRecord record;
-    record.info.node_code = get_or_empty(*row, "node_code");
-    record.info.name = get_or_empty(*row, "name");
-    record.info.agent_version = get_or_empty(*row, "agent_version");
-    record.status = from_storage_status(get_or_empty(*row, "status"));
-    record.last_heartbeat_at = get_or_empty(*row, "last_heartbeat_at");
+    record.info.node_code = storage::value_or_empty(*row, "node_code");
+    record.info.name = storage::value_or_empty(*row, "name");
+    record.info.agent_version = storage::value_or_empty(*row, "agent_version");
+    record.status = storage::node_status_from_storage(storage::value_or_empty(*row, "status"));
+    record.last_heartbeat_at = storage::value_or_empty(*row, "last_heartbeat_at");
     return record;
 }
 

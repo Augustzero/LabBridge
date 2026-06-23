@@ -9,24 +9,13 @@
 #include "labbridge/server/postgres_task_run_repository.h"
 #include "labbridge/server/qc_service.h"
 #include "labbridge/server/result_service.h"
+#include "labbridge/server/storage_mapping.h"
 #include "labbridge/server/task_run_service.h"
 
 #include <cassert>
 #include <cstdlib>
 #include <iostream>
 #include <string>
-
-namespace {
-
-std::string get_or_empty(const labbridge::server::SqlRow& row, const std::string& key) {
-    const auto iter = row.find(key);
-    if (iter == row.end()) {
-        return {};
-    }
-    return iter->second;
-}
-
-}  // namespace
 
 int main() {
     const char* connection_info = std::getenv("LABBRIDGE_DATABASE_URL");
@@ -204,14 +193,18 @@ int main() {
         {node_code, parsed_record.id, required_result.id});
 
     assert(persisted.has_value());
-    assert(get_or_empty(*persisted, "node_code") == node_code);
-    assert(get_or_empty(*persisted, "parsed_record_id") == parsed_record.id);
-    assert(get_or_empty(*persisted, "qc_result_id") == required_result.id);
-    assert(get_or_empty(*persisted, "qc_rule_id") == required_rule.id);
-    assert(get_or_empty(*persisted, "rule_type") == "required_fields");
-    assert(get_or_empty(*persisted, "level") == "pass");
-    assert(get_or_empty(*persisted, "result") == "passed");
-    assert(get_or_empty(*persisted, "status") == "succeeded");
+    assert(labbridge::server::storage::value_or_empty(*persisted, "node_code") == node_code);
+    assert(labbridge::server::storage::value_or_empty(*persisted, "parsed_record_id") ==
+           parsed_record.id);
+    assert(labbridge::server::storage::value_or_empty(*persisted, "qc_result_id") ==
+           required_result.id);
+    assert(labbridge::server::storage::value_or_empty(*persisted, "qc_rule_id") ==
+           required_rule.id);
+    assert(labbridge::server::storage::value_or_empty(*persisted, "rule_type") ==
+           "required_fields");
+    assert(labbridge::server::storage::value_or_empty(*persisted, "level") == "pass");
+    assert(labbridge::server::storage::value_or_empty(*persisted, "result") == "passed");
+    assert(labbridge::server::storage::value_or_empty(*persisted, "status") == "succeeded");
 
     return 0;
 }

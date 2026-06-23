@@ -15,8 +15,7 @@ int main(int argc, char* argv[]) {
     labbridge::core::log_info(kComponent, "starting LabBridge agent");
     labbridge::core::log_info(kComponent, labbridge::core::kVersion);
     labbridge::core::log_info(kComponent, "config path: " + config_path);
-    labbridge::core::log_info(kComponent, "phase 0 skeleton is ready");
+    labbridge::core::log_info(kComponent, "agent bootstrap is ready");
 
     return 0;
 }
-

@@ -1,44 +1,29 @@
 #include "labbridge/server/postgres_qc_repository.h"
+#include "labbridge/server/storage_mapping.h"
 
 #include <stdexcept>
 
 namespace labbridge::server {
 namespace {
 
-std::string bool_param(bool value) {
-    return value ? "true" : "false";
-}
-
-bool from_storage_bool(const std::string& value) {
-    return value == "true" || value == "t" || value == "1";
-}
-
-std::string get_or_empty(const SqlRow& row, const std::string& key) {
-    const auto iter = row.find(key);
-    if (iter == row.end()) {
-        return {};
-    }
-    return iter->second;
-}
-
 QcRuleRecord to_rule_record(const SqlRow& row) {
     QcRuleRecord rule;
-    rule.id = get_or_empty(row, "id");
-    rule.name = get_or_empty(row, "name");
-    rule.rule_type = get_or_empty(row, "rule_type");
-    rule.rule_config_json = get_or_empty(row, "rule_config_json");
-    rule.enabled = from_storage_bool(get_or_empty(row, "enabled"));
+    rule.id = storage::value_or_empty(row, "id");
+    rule.name = storage::value_or_empty(row, "name");
+    rule.rule_type = storage::value_or_empty(row, "rule_type");
+    rule.rule_config_json = storage::value_or_empty(row, "rule_config_json");
+    rule.enabled = storage::bool_value(storage::value_or_empty(row, "enabled"));
     return rule;
 }
 
 QcResultRecord to_result_record(const SqlRow& row) {
     QcResultRecord result;
-    result.id = get_or_empty(row, "id");
-    result.parsed_record_id = get_or_empty(row, "parsed_record_id");
-    result.qc_rule_id = get_or_empty(row, "qc_rule_id");
-    result.level = get_or_empty(row, "level");
-    result.result = get_or_empty(row, "result");
-    result.message = get_or_empty(row, "message");
+    result.id = storage::value_or_empty(row, "id");
+    result.parsed_record_id = storage::value_or_empty(row, "parsed_record_id");
+    result.qc_rule_id = storage::value_or_empty(row, "qc_rule_id");
+    result.level = storage::value_or_empty(row, "level");
+    result.result = storage::value_or_empty(row, "result");
+    result.message = storage::value_or_empty(row, "message");
     return result;
 }
 
@@ -57,12 +42,12 @@ std::string PostgresQcRepository::create_rule(QcRuleRecord rule) {
                                             rule.name,
                                             rule.rule_type,
                                             rule.rule_config_json,
-                                            bool_param(rule.enabled),
+                                            storage::bool_param(rule.enabled),
                                         });
     if (!row.has_value()) {
         throw std::runtime_error("failed to create qc rule");
     }
-    return get_or_empty(*row, "id");
+    return storage::value_or_empty(*row, "id");
 }
 
 std::optional<QcRuleRecord> PostgresQcRepository::find_rule(const std::string& qc_rule_id) const {
@@ -97,7 +82,7 @@ std::string PostgresQcRepository::create_result(QcResultRecord result) {
     if (!row.has_value()) {
         throw std::runtime_error("failed to create qc result");
     }
-    return get_or_empty(*row, "id");
+    return storage::value_or_empty(*row, "id");
 }
 
 std::vector<QcResultRecord> PostgresQcRepository::find_results_by_parsed_record(

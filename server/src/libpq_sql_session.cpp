@@ -98,7 +98,7 @@ void LibpqSqlSession::execute(const std::string& sql, const SqlParams& params) {
                                     nullptr,
                                     0));
 
-    if (PQresultStatus(result.get()) != PGRES_COMMAND_OK) {
+    if (result.get() == nullptr || PQresultStatus(result.get()) != PGRES_COMMAND_OK) {
         throw make_error(connection_, "failed to execute PostgreSQL command");
     }
 }
@@ -122,7 +122,7 @@ std::vector<SqlRow> LibpqSqlSession::query_all(const std::string& sql, const Sql
                                     nullptr,
                                     0));
 
-    if (PQresultStatus(result.get()) != PGRES_TUPLES_OK) {
+    if (result.get() == nullptr || PQresultStatus(result.get()) != PGRES_TUPLES_OK) {
         throw make_error(connection_, "failed to execute PostgreSQL query");
     }
 

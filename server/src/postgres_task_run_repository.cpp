@@ -1,66 +1,25 @@
 #include "labbridge/server/postgres_task_run_repository.h"
+#include "labbridge/server/storage_mapping.h"
 
 #include <stdexcept>
 
 namespace labbridge::server {
 namespace {
 
-std::string to_storage_status(labbridge::core::TaskRunStatus status) {
-    switch (status) {
-        case labbridge::core::TaskRunStatus::Pending:
-            return "pending";
-        case labbridge::core::TaskRunStatus::Running:
-            return "running";
-        case labbridge::core::TaskRunStatus::Succeeded:
-            return "succeeded";
-        case labbridge::core::TaskRunStatus::Failed:
-            return "failed";
-    }
-    return "failed";
-}
-
-labbridge::core::TaskRunStatus from_storage_status(const std::string& status) {
-    if (status == "running") {
-        return labbridge::core::TaskRunStatus::Running;
-    }
-    if (status == "succeeded") {
-        return labbridge::core::TaskRunStatus::Succeeded;
-    }
-    if (status == "failed") {
-        return labbridge::core::TaskRunStatus::Failed;
-    }
-    return labbridge::core::TaskRunStatus::Pending;
-}
-
-std::string get_or_empty(const SqlRow& row, const std::string& key) {
-    const auto iter = row.find(key);
-    if (iter == row.end()) {
-        return {};
-    }
-    return iter->second;
-}
-
-int get_or_zero(const SqlRow& row, const std::string& key) {
-    const auto value = get_or_empty(row, key);
-    if (value.empty()) {
-        return 0;
-    }
-    return std::stoi(value);
-}
-
 TaskRunRecord to_task_run_record(const SqlRow& row) {
     TaskRunRecord record;
-    record.id = get_or_empty(row, "id");
-    record.task_id = get_or_empty(row, "task_id");
-    record.node_code = get_or_empty(row, "node_code");
-    record.status = from_storage_status(get_or_empty(row, "status"));
-    record.started_at = get_or_empty(row, "started_at");
-    record.finished_at = get_or_empty(row, "finished_at");
-    record.items_total = get_or_zero(row, "items_total");
-    record.items_success = get_or_zero(row, "items_success");
-    record.items_failed = get_or_zero(row, "items_failed");
-    record.error_summary = get_or_empty(row, "error_summary");
-    record.trigger_type = get_or_empty(row, "trigger_type");
+    record.id = storage::value_or_empty(row, "id");
+    record.task_id = storage::value_or_empty(row, "task_id");
+    record.node_code = storage::value_or_empty(row, "node_code");
+    record.status =
+        storage::task_run_status_from_storage(storage::value_or_empty(row, "status"));
+    record.started_at = storage::value_or_empty(row, "started_at");
+    record.finished_at = storage::value_or_empty(row, "finished_at");
+    record.items_total = storage::int_or_zero(row, "items_total");
+    record.items_success = storage::int_or_zero(row, "items_success");
+    record.items_failed = storage::int_or_zero(row, "items_failed");
+    record.error_summary = storage::value_or_empty(row, "error_summary");
+    record.trigger_type = storage::value_or_empty(row, "trigger_type");
     return record;
 }
 
@@ -84,7 +43,7 @@ std::string PostgresTaskRunRepository::create(TaskRunRecord task_run) {
                                         {
                                             task_run.task_id,
                                             task_run.node_code,
-                                            to_storage_status(task_run.status),
+                                            storage::to_storage(task_run.status),
                                             task_run.started_at,
                                             std::to_string(task_run.items_total),
                                             std::to_string(task_run.items_success),
@@ -95,7 +54,7 @@ std::string PostgresTaskRunRepository::create(TaskRunRecord task_run) {
     if (!row.has_value()) {
         throw std::runtime_error("failed to create task run");
     }
-    return get_or_empty(*row, "id");
+    return storage::value_or_empty(*row, "id");
 }
 
 std::optional<TaskRunRecord> PostgresTaskRunRepository::find_by_id(
@@ -133,7 +92,7 @@ void PostgresTaskRunRepository::finish(TaskRunRecord task_run) {
     session_.execute(sql,
                      {
                          task_run.id,
-                         to_storage_status(task_run.status),
+                         storage::to_storage(task_run.status),
                          task_run.finished_at,
                          std::to_string(task_run.items_total),
                          std::to_string(task_run.items_success),

@@ -5,24 +5,13 @@
 #include "labbridge/server/postgres_config_repository.h"
 #include "labbridge/server/postgres_node_repository.h"
 #include "labbridge/server/postgres_task_run_repository.h"
+#include "labbridge/server/storage_mapping.h"
 #include "labbridge/server/task_run_service.h"
 
 #include <cassert>
 #include <cstdlib>
 #include <iostream>
 #include <string>
-
-namespace {
-
-std::string get_or_empty(const labbridge::server::SqlRow& row, const std::string& key) {
-    const auto iter = row.find(key);
-    if (iter == row.end()) {
-        return {};
-    }
-    return iter->second;
-}
-
-}  // namespace
 
 int main() {
     const char* connection_info = std::getenv("LABBRIDGE_DATABASE_URL");
@@ -141,11 +130,12 @@ int main() {
         {node_code, data_source.id, task.id, started.id});
 
     assert(persisted.has_value());
-    assert(get_or_empty(*persisted, "node_code") == node_code);
-    assert(get_or_empty(*persisted, "data_source_id") == data_source.id);
-    assert(get_or_empty(*persisted, "task_id") == task.id);
-    assert(get_or_empty(*persisted, "task_run_id") == started.id);
-    assert(get_or_empty(*persisted, "status") == "succeeded");
+    assert(labbridge::server::storage::value_or_empty(*persisted, "node_code") == node_code);
+    assert(labbridge::server::storage::value_or_empty(*persisted, "data_source_id") ==
+           data_source.id);
+    assert(labbridge::server::storage::value_or_empty(*persisted, "task_id") == task.id);
+    assert(labbridge::server::storage::value_or_empty(*persisted, "task_run_id") == started.id);
+    assert(labbridge::server::storage::value_or_empty(*persisted, "status") == "succeeded");
 
     return 0;
 }

@@ -1,50 +1,35 @@
 #include "labbridge/server/postgres_result_repository.h"
+#include "labbridge/server/storage_mapping.h"
 
 #include <stdexcept>
 
 namespace labbridge::server {
 namespace {
 
-std::string get_or_empty(const SqlRow& row, const std::string& key) {
-    const auto iter = row.find(key);
-    if (iter == row.end()) {
-        return {};
-    }
-    return iter->second;
-}
-
-long long get_or_zero(const SqlRow& row, const std::string& key) {
-    const auto value = get_or_empty(row, key);
-    if (value.empty()) {
-        return 0;
-    }
-    return std::stoll(value);
-}
-
 RawFileRecord to_raw_file_record(const SqlRow& row) {
     RawFileRecord record;
-    record.id = get_or_empty(row, "id");
-    record.task_run_id = get_or_empty(row, "task_run_id");
-    record.node_code = get_or_empty(row, "node_code");
-    record.original_name = get_or_empty(row, "original_name");
-    record.file_hash = get_or_empty(row, "file_hash");
-    record.storage_path = get_or_empty(row, "storage_path");
-    record.size_bytes = get_or_zero(row, "size_bytes");
-    record.source_mtime = get_or_empty(row, "source_mtime");
-    record.ingest_status = get_or_empty(row, "ingest_status");
+    record.id = storage::value_or_empty(row, "id");
+    record.task_run_id = storage::value_or_empty(row, "task_run_id");
+    record.node_code = storage::value_or_empty(row, "node_code");
+    record.original_name = storage::value_or_empty(row, "original_name");
+    record.file_hash = storage::value_or_empty(row, "file_hash");
+    record.storage_path = storage::value_or_empty(row, "storage_path");
+    record.size_bytes = storage::int64_or_zero(row, "size_bytes");
+    record.source_mtime = storage::value_or_empty(row, "source_mtime");
+    record.ingest_status = storage::value_or_empty(row, "ingest_status");
     return record;
 }
 
 ParsedRecordRecord to_parsed_record(const SqlRow& row) {
     ParsedRecordRecord record;
-    record.id = get_or_empty(row, "id");
-    record.raw_file_id = get_or_empty(row, "raw_file_id");
-    record.task_run_id = get_or_empty(row, "task_run_id");
-    record.record.station_code = get_or_empty(row, "station_code");
-    record.record.device_code = get_or_empty(row, "device_code");
-    record.record.record_time = get_or_empty(row, "record_time");
-    record.record.payload_json = get_or_empty(row, "payload_json");
-    record.parse_status = get_or_empty(row, "parse_status");
+    record.id = storage::value_or_empty(row, "id");
+    record.raw_file_id = storage::value_or_empty(row, "raw_file_id");
+    record.task_run_id = storage::value_or_empty(row, "task_run_id");
+    record.record.station_code = storage::value_or_empty(row, "station_code");
+    record.record.device_code = storage::value_or_empty(row, "device_code");
+    record.record.record_time = storage::value_or_empty(row, "record_time");
+    record.record.payload_json = storage::value_or_empty(row, "payload_json");
+    record.parse_status = storage::value_or_empty(row, "parse_status");
     return record;
 }
 
@@ -78,7 +63,7 @@ std::string PostgresResultRepository::create_raw_file(RawFileRecord raw_file) {
     if (!row.has_value()) {
         throw std::runtime_error("failed to create raw file");
     }
-    return get_or_empty(*row, "id");
+    return storage::value_or_empty(*row, "id");
 }
 
 std::optional<RawFileRecord> PostgresResultRepository::find_raw_file(
@@ -125,7 +110,7 @@ std::string PostgresResultRepository::create_parsed_record(ParsedRecordRecord pa
     if (!row.has_value()) {
         throw std::runtime_error("failed to create parsed record");
     }
-    return get_or_empty(*row, "id");
+    return storage::value_or_empty(*row, "id");
 }
 
 std::optional<ParsedRecordRecord> PostgresResultRepository::find_parsed_record(
