@@ -85,6 +85,22 @@ std::string PostgresQcRepository::create_result(QcResultRecord result) {
     return storage::value_or_empty(*row, "id");
 }
 
+std::optional<QcResultRecord> PostgresQcRepository::find_result(
+    const std::string& qc_result_id) const {
+    static const std::string sql =
+        "SELECT id::text AS id, parsed_record_id::text AS parsed_record_id, "
+        "qc_rule_id::text AS qc_rule_id, level, result, COALESCE(message, '') AS message "
+        "FROM qc_results "
+        "WHERE id = $1::bigint "
+        "LIMIT 1";
+
+    const auto row = session_.query_one(sql, {qc_result_id});
+    if (!row.has_value()) {
+        return std::nullopt;
+    }
+    return to_result_record(*row);
+}
+
 std::vector<QcResultRecord> PostgresQcRepository::find_results_by_parsed_record(
     const std::string& parsed_record_id) const {
     static const std::string sql =

@@ -32,6 +32,15 @@ std::string InMemoryQcRepository::create_result(QcResultRecord result) {
     return id;
 }
 
+std::optional<QcResultRecord> InMemoryQcRepository::find_result(
+    const std::string& qc_result_id) const {
+    const auto iter = results_.find(qc_result_id);
+    if (iter == results_.end()) {
+        return std::nullopt;
+    }
+    return iter->second;
+}
+
 std::vector<QcResultRecord> InMemoryQcRepository::find_results_by_parsed_record(
     const std::string& parsed_record_id) const {
     std::vector<QcResultRecord> results;
