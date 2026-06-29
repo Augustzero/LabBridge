@@ -11,6 +11,8 @@ public:
 
     std::string create_raw_file(RawFileRecord raw_file) override;
     std::optional<RawFileRecord> find_raw_file(const std::string& raw_file_id) const override;
+    std::vector<RawFileRecord> find_raw_files_by_run(
+        const std::string& task_run_id) const override;
     std::string create_parsed_record(ParsedRecordRecord parsed_record) override;
     std::optional<ParsedRecordRecord> find_parsed_record(
         const std::string& parsed_record_id) const override;

@@ -42,6 +42,7 @@ TaskRunDetailQueryResult ControlPlaneQueryService::find_task_run_detail(
                 std::nullopt,
                 {},
                 {},
+                {},
                 {}};
     }
     if (task_run_id.empty()) {
@@ -49,17 +50,19 @@ TaskRunDetailQueryResult ControlPlaneQueryService::find_task_run_detail(
                 std::nullopt,
                 {},
                 {},
+                {},
                 {}};
     }
 
     if (!node_repository_.find_by_code(node_code).has_value()) {
-        return {labbridge::core::Status::failure("node is not found"), std::nullopt, {}, {}, {}};
+        return {labbridge::core::Status::failure("node is not found"), std::nullopt, {}, {}, {}, {}};
     }
 
     auto task_run = task_run_repository_.find_by_id(task_run_id);
     if (!task_run.has_value()) {
         return {labbridge::core::Status::failure("task run is not found"),
                 std::nullopt,
+                {},
                 {},
                 {},
                 {}};
@@ -69,12 +72,14 @@ TaskRunDetailQueryResult ControlPlaneQueryService::find_task_run_detail(
                 std::nullopt,
                 {},
                 {},
+                {},
                 {}};
     }
 
     TaskRunDetailQueryResult result;
     result.status = labbridge::core::Status::success();
     result.task_run = task_run;
+    result.raw_files = result_repository_.find_raw_files_by_run(task_run_id);
     result.parsed_records = result_repository_.find_parsed_records_by_run(task_run_id);
     for (const auto& parsed_record : result.parsed_records) {
         auto qc_results = qc_repository_.find_results_by_parsed_record(parsed_record.id);

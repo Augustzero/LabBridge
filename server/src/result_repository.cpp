@@ -23,6 +23,17 @@ std::optional<RawFileRecord> InMemoryResultRepository::find_raw_file(
     return iter->second;
 }
 
+std::vector<RawFileRecord> InMemoryResultRepository::find_raw_files_by_run(
+    const std::string& task_run_id) const {
+    std::vector<RawFileRecord> records;
+    for (const auto& [id, record] : raw_files_) {
+        if (record.task_run_id == task_run_id) {
+            records.push_back(record);
+        }
+    }
+    return records;
+}
+
 std::string InMemoryResultRepository::create_parsed_record(ParsedRecordRecord parsed_record) {
     if (parsed_record.id.empty()) {
         parsed_record.id = std::to_string(next_parsed_record_id_++);

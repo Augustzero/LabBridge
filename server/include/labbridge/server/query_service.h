@@ -24,6 +24,7 @@ struct NodeOverviewQueryResult {
 struct TaskRunDetailQueryResult {
     labbridge::core::Status status;
     std::optional<TaskRunRecord> task_run;
+    std::vector<RawFileRecord> raw_files;
     std::vector<ParsedRecordRecord> parsed_records;
     std::vector<QcResultRecord> qc_results;
     std::vector<AlertRecord> alerts;

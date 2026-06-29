@@ -86,6 +86,26 @@ std::optional<RawFileRecord> PostgresResultRepository::find_raw_file(
     return to_raw_file_record(*row);
 }
 
+std::vector<RawFileRecord> PostgresResultRepository::find_raw_files_by_run(
+    const std::string& task_run_id) const {
+    static const std::string sql =
+        "SELECT rf.id::text AS id, rf.task_run_id::text AS task_run_id, n.node_code, "
+        "rf.original_name, COALESCE(rf.file_hash, '') AS file_hash, rf.storage_path, "
+        "rf.size_bytes::text AS size_bytes, "
+        "COALESCE(to_char(rf.source_mtime, 'YYYY-MM-DD HH24:MI:SS'), '') AS source_mtime, "
+        "rf.ingest_status "
+        "FROM raw_files rf "
+        "JOIN nodes n ON n.id = rf.node_id "
+        "WHERE rf.task_run_id = $1::bigint "
+        "ORDER BY rf.id";
+
+    std::vector<RawFileRecord> records;
+    for (const auto& row : session_.query_all(sql, {task_run_id})) {
+        records.push_back(to_raw_file_record(row));
+    }
+    return records;
+}
+
 std::string PostgresResultRepository::create_parsed_record(ParsedRecordRecord parsed_record) {
     static const std::string sql =
         "INSERT INTO parsed_records "

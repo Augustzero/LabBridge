@@ -433,3 +433,60 @@ target_include_directories(labbridge_phase14_real_postgres_query_flow_smoke
         ${CMAKE_CURRENT_SOURCE_DIR}/server/include
 )
 
+add_executable(labbridge_phase15_control_plane_archive_trace_smoke
+    tests/integration/phase15_control_plane_archive_trace_smoke.cpp
+    server/src/alert_repository.cpp
+    server/src/config_repository.cpp
+    server/src/config_service.cpp
+    server/src/node_repository.cpp
+    server/src/node_service.cpp
+    server/src/qc_repository.cpp
+    server/src/query_service.cpp
+    server/src/result_repository.cpp
+    server/src/result_service.cpp
+    server/src/task_run_repository.cpp
+    server/src/task_run_service.cpp
+)
+
+target_link_libraries(labbridge_phase15_control_plane_archive_trace_smoke
+    PRIVATE
+        labbridge_core
+)
+
+target_include_directories(labbridge_phase15_control_plane_archive_trace_smoke
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/server/include
+)
+
+add_executable(labbridge_phase15_real_postgres_archive_trace_smoke
+    tests/integration/phase15_real_postgres_archive_trace_smoke.cpp
+    server/src/alert_repository.cpp
+    server/src/config_repository.cpp
+    server/src/config_service.cpp
+    server/src/libpq_sql_session.cpp
+    server/src/node_repository.cpp
+    server/src/node_service.cpp
+    server/src/postgres_alert_repository.cpp
+    server/src/postgres_config_repository.cpp
+    server/src/postgres_node_repository.cpp
+    server/src/postgres_qc_repository.cpp
+    server/src/postgres_result_repository.cpp
+    server/src/postgres_task_run_repository.cpp
+    server/src/qc_repository.cpp
+    server/src/query_service.cpp
+    server/src/result_repository.cpp
+    server/src/result_service.cpp
+    server/src/task_run_repository.cpp
+    server/src/task_run_service.cpp
+)
+
+target_link_libraries(labbridge_phase15_real_postgres_archive_trace_smoke
+    PRIVATE
+        labbridge_core
+        PostgreSQL::PostgreSQL
+)
+
+target_include_directories(labbridge_phase15_real_postgres_archive_trace_smoke
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/server/include
+)

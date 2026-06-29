@@ -38,6 +38,7 @@ public:
 
     ResultCreateResult record_raw_file(const RecordRawFileRequest& request);
     ResultCreateResult record_parsed_record(const RecordParsedRecordRequest& request);
+    std::vector<RawFileRecord> find_raw_files(const std::string& task_run_id) const;
     std::vector<ParsedRecordRecord> find_parsed_records(const std::string& task_run_id) const;
 
 private:

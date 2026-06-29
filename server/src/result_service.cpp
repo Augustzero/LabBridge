@@ -78,6 +78,13 @@ ResultCreateResult ResultService::record_parsed_record(const RecordParsedRecordR
     return {labbridge::core::Status::success(), id};
 }
 
+std::vector<RawFileRecord> ResultService::find_raw_files(const std::string& task_run_id) const {
+    if (task_run_id.empty()) {
+        return {};
+    }
+    return result_repository_.find_raw_files_by_run(task_run_id);
+}
+
 std::vector<ParsedRecordRecord> ResultService::find_parsed_records(
     const std::string& task_run_id) const {
     if (task_run_id.empty()) {
