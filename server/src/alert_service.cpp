@@ -71,6 +71,23 @@ AlertCreateResult AlertService::create_from_qc_result(
     return {labbridge::core::Status::success(), id};
 }
 
+AlertCreateResult AlertService::create_from_qc_result_if_needed(
+    const CreateAlertFromQcResultRequest& request) {
+    if (request.qc_result_id.empty()) {
+        return {labbridge::core::Status::failure("qc_result_id is required"), {}};
+    }
+
+    const auto qc_result = qc_repository_.find_result(request.qc_result_id);
+    if (!qc_result.has_value()) {
+        return {labbridge::core::Status::failure("qc result is not found"), {}};
+    }
+    if (!is_alert_qc_result(*qc_result)) {
+        return {labbridge::core::Status::success(), {}};
+    }
+
+    return create_from_qc_result(request);
+}
+
 std::vector<AlertRecord> AlertService::find_alerts_by_node(
     const std::string& node_code) const {
     if (node_code.empty()) {

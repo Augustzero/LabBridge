@@ -28,6 +28,8 @@ public:
                  IAlertRepository& alert_repository);
 
     AlertCreateResult create_from_qc_result(const CreateAlertFromQcResultRequest& request);
+    AlertCreateResult create_from_qc_result_if_needed(
+        const CreateAlertFromQcResultRequest& request);
     std::vector<AlertRecord> find_alerts_by_node(const std::string& node_code) const;
     std::vector<AlertRecord> find_alerts_by_task_run(const std::string& task_run_id) const;
 
