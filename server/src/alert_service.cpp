@@ -49,7 +49,11 @@ AlertCreateResult AlertService::create_from_qc_result(
         return {labbridge::core::Status::failure("qc result does not require alert"), {}};
     }
 
-    const auto parsed_record = result_repository_.find_parsed_record(qc_result->parsed_record_id);
+    return create_alert(*qc_result);
+}
+
+AlertCreateResult AlertService::create_alert(const QcResultRecord& qc_result) {
+    const auto parsed_record = result_repository_.find_parsed_record(qc_result.parsed_record_id);
     if (!parsed_record.has_value()) {
         return {labbridge::core::Status::failure("parsed record is not found"), {}};
     }
@@ -63,8 +67,8 @@ AlertCreateResult AlertService::create_from_qc_result(
     alert.node_code = task_run->node_code;
     alert.task_run_id = parsed_record->task_run_id;
     alert.alert_type = "qc_result";
-    alert.severity = alert_severity(*qc_result);
-    alert.message = alert_message(*qc_result);
+    alert.severity = alert_severity(qc_result);
+    alert.message = alert_message(qc_result);
     alert.status = "open";
 
     const auto id = alert_repository_.create(std::move(alert));
@@ -85,7 +89,7 @@ AlertCreateResult AlertService::create_from_qc_result_if_needed(
         return {labbridge::core::Status::success(), {}};
     }
 
-    return create_from_qc_result(request);
+    return create_alert(*qc_result);
 }
 
 std::vector<AlertRecord> AlertService::find_alerts_by_node(

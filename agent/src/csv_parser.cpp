@@ -1,6 +1,7 @@
 #include "labbridge/agent/csv_parser.h"
 
 #include <fstream>
+#include <iomanip>
 #include <sstream>
 #include <string>
 
@@ -17,6 +18,43 @@ std::vector<std::string> split_csv_line(const std::string& line) {
     return fields;
 }
 
+std::string escape_json_string(const std::string& value) {
+    std::ostringstream escaped;
+    for (const unsigned char character : value) {
+        switch (character) {
+            case '"':
+                escaped << "\\\"";
+                break;
+            case '\\':
+                escaped << "\\\\";
+                break;
+            case '\b':
+                escaped << "\\b";
+                break;
+            case '\f':
+                escaped << "\\f";
+                break;
+            case '\n':
+                escaped << "\\n";
+                break;
+            case '\r':
+                escaped << "\\r";
+                break;
+            case '\t':
+                escaped << "\\t";
+                break;
+            default:
+                if (character < 0x20) {
+                    escaped << "\\u00" << std::hex << std::setw(2) << std::setfill('0')
+                            << static_cast<int>(character) << std::dec;
+                } else {
+                    escaped << character;
+                }
+        }
+    }
+    return escaped.str();
+}
+
 std::string make_payload_json(const std::vector<std::string>& header, const std::vector<std::string>& row) {
     std::ostringstream payload;
     payload << "{";
@@ -25,7 +63,8 @@ std::string make_payload_json(const std::vector<std::string>& header, const std:
         if (!first) {
             payload << ",";
         }
-        payload << "\"" << header[index] << "\":\"" << row[index] << "\"";
+        payload << "\"" << escape_json_string(header[index]) << "\":\""
+                << escape_json_string(row[index]) << "\"";
         first = false;
     }
     payload << "}";

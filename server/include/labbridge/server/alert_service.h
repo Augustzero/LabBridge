@@ -34,6 +34,8 @@ public:
     std::vector<AlertRecord> find_alerts_by_task_run(const std::string& task_run_id) const;
 
 private:
+    AlertCreateResult create_alert(const QcResultRecord& qc_result);
+
     ITaskRunRepository& task_run_repository_;
     IResultRepository& result_repository_;
     IQcRepository& qc_repository_;
