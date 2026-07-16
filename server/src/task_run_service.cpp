@@ -18,13 +18,16 @@ TaskRunCreateResult TaskRunService::start(const StartTaskRunRequest& request) {
 
     const auto task = config_repository_.find_task(request.task_id);
     if (!task.has_value()) {
-        return {labbridge::core::Status::failure("task is not found"), {}};
+        return {labbridge::core::Status::failure(labbridge::core::StatusCode::NotFound, "task is not found"), {}};
     }
     if (!task->enabled) {
-        return {labbridge::core::Status::failure("task is disabled"), {}};
+        return {labbridge::core::Status::failure(labbridge::core::StatusCode::Conflict, "task is disabled"), {}};
     }
     if (task->node_code != request.node_code) {
-        return {labbridge::core::Status::failure("task does not belong to node"), {}};
+        return {labbridge::core::Status::failure(
+                    labbridge::core::StatusCode::Conflict,
+                    "task does not belong to node"),
+                {}};
     }
 
     TaskRunRecord record;
@@ -49,7 +52,7 @@ labbridge::core::Status TaskRunService::finish(const FinishTaskRunRequest& reque
 
     auto task_run = task_run_repository_.find_by_id(request.task_run_id);
     if (!task_run.has_value()) {
-        return labbridge::core::Status::failure("task run is not found");
+        return labbridge::core::Status::failure(labbridge::core::StatusCode::NotFound, "task run is not found");
     }
 
     task_run->status = request.status;

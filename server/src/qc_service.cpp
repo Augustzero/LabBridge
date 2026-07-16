@@ -43,15 +43,18 @@ QcCreateResult QcService::record_result(const RecordQcResultRequest& request) {
     }
 
     if (!result_repository_.find_parsed_record(request.parsed_record_id).has_value()) {
-        return {labbridge::core::Status::failure("parsed record is not found"), {}};
+        return {labbridge::core::Status::failure(
+                    labbridge::core::StatusCode::NotFound,
+                    "parsed record is not found"),
+                {}};
     }
 
     const auto rule = qc_repository_.find_rule(request.qc_rule_id);
     if (!rule.has_value()) {
-        return {labbridge::core::Status::failure("qc rule is not found"), {}};
+        return {labbridge::core::Status::failure(labbridge::core::StatusCode::NotFound, "qc rule is not found"), {}};
     }
     if (!rule->enabled) {
-        return {labbridge::core::Status::failure("qc rule is disabled"), {}};
+        return {labbridge::core::Status::failure(labbridge::core::StatusCode::Conflict, "qc rule is disabled"), {}};
     }
 
     QcResultRecord result;

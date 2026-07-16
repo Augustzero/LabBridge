@@ -1,15 +1,20 @@
-server:
-  host: 0.0.0.0
-  port: 18080
+listeners:
+  - address: 0.0.0.0
+    port: 18080
+    https: false
 
-database:
-  host: 127.0.0.1
-  port: 5432
-  name: labbridge
-  user: labbridge
-  password: labbridge
+app:
+  number_of_threads: 1
+  enable_session: false
+  client_max_body_size: 1M
+  client_max_memory_body_size: 64K
+  log:
+    log_level: INFO
+    display_local_time: true
 
-storage:
-  type: local
-  root: ./data/archive
-
+custom_config:
+  database:
+    connection_info: "host=127.0.0.1 port=5432 dbname=labbridge user=labbridge password=labbridge"
+  storage:
+    type: local
+    root: ./data/archive

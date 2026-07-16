@@ -7,6 +7,10 @@ project(LabBridge
 )
 
 find_package(PostgreSQL REQUIRED)
+cmake_policy(PUSH)
+cmake_policy(SET CMP0153 OLD)
+find_package(Drogon REQUIRED)
+cmake_policy(POP)
 include(CTest)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -53,6 +57,7 @@ target_include_directories(labbridge_server_domain
 
 add_library(labbridge_server_postgres
     server/src/libpq_sql_session.cpp
+    server/src/postgres_agent_report_executor.cpp
     server/src/postgres_alert_repository.cpp
     server/src/postgres_config_repository.cpp
     server/src/postgres_node_repository.cpp
@@ -83,14 +88,24 @@ target_include_directories(labbridge_agent_domain
         ${CMAKE_CURRENT_SOURCE_DIR}/agent/include
 )
 
+add_library(labbridge_server_http
+    server/src/agent_report_http_controller.cpp
+)
+
+target_link_libraries(labbridge_server_http
+    PUBLIC
+        labbridge_server_domain
+        Drogon::Drogon
+)
+
 add_executable(labbridge_server server/src/main.cpp)
-target_link_libraries(labbridge_server PRIVATE labbridge_server_postgres)
+target_link_libraries(labbridge_server PRIVATE labbridge_server_http labbridge_server_postgres)
 
 add_executable(labbridge_agent agent/src/main.cpp)
 target_link_libraries(labbridge_agent PRIVATE labbridge_agent_domain)
 
 function(add_labbridge_smoke target source)
-    cmake_parse_arguments(ARG "AGENT;POSTGRES" "" "" ${ARGN})
+    cmake_parse_arguments(ARG "AGENT;POSTGRES;HTTP" "" "" ${ARGN})
 
     add_executable(${target} ${source})
     target_link_libraries(${target} PRIVATE labbridge_server_domain)
@@ -100,6 +115,9 @@ function(add_labbridge_smoke target source)
     endif()
     if(ARG_POSTGRES)
         target_link_libraries(${target} PRIVATE labbridge_server_postgres)
+    endif()
+    if(ARG_HTTP)
+        target_link_libraries(${target} PRIVATE labbridge_server_http)
     endif()
     if(BUILD_TESTING)
         add_test(NAME ${target} COMMAND ${target})
@@ -126,4 +144,6 @@ add_labbridge_smoke(labbridge_phase15_control_plane_archive_trace_smoke tests/in
 add_labbridge_smoke(labbridge_phase15_real_postgres_archive_trace_smoke tests/integration/phase15_real_postgres_archive_trace_smoke.cpp POSTGRES)
 add_labbridge_smoke(labbridge_phase16_agent_report_service_smoke tests/integration/phase16_agent_report_service_smoke.cpp)
 add_labbridge_smoke(labbridge_phase16_real_postgres_agent_report_service_smoke tests/integration/phase16_real_postgres_agent_report_service_smoke.cpp POSTGRES)
-add_labbridge_smoke(labbridge_code_quality_smoke tests/integration/code_quality_smoke.cpp AGENT)
+add_labbridge_smoke(labbridge_phase17_http_agent_report_smoke tests/integration/phase17_http_agent_report_smoke.cpp HTTP)
+add_labbridge_smoke(labbridge_phase17_real_postgres_http_agent_report_smoke tests/integration/phase17_real_postgres_http_agent_report_smoke.cpp HTTP POSTGRES)
+add_labbridge_smoke(labbridge_code_quality_smoke tests/integration/phase16_review_code_quality_smoke.cpp AGENT)

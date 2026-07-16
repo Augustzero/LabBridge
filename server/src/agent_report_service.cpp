@@ -131,10 +131,11 @@ labbridge::core::Status AgentReportService::validate_task_run_node(
 
     const auto task_run = task_run_service_.find_run(task_run_id);
     if (!task_run.has_value()) {
-        return labbridge::core::Status::failure("task run is not found");
+        return labbridge::core::Status::failure(labbridge::core::StatusCode::NotFound, "task run is not found");
     }
     if (task_run->node_code != node_code) {
-        return labbridge::core::Status::failure("task run does not belong to node");
+        return labbridge::core::Status::failure(
+            labbridge::core::StatusCode::Conflict, "task run does not belong to node");
     }
     return labbridge::core::Status::success();
 }

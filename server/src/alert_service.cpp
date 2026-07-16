@@ -43,10 +43,13 @@ AlertCreateResult AlertService::create_from_qc_result(
 
     const auto qc_result = qc_repository_.find_result(request.qc_result_id);
     if (!qc_result.has_value()) {
-        return {labbridge::core::Status::failure("qc result is not found"), {}};
+        return {labbridge::core::Status::failure(labbridge::core::StatusCode::NotFound, "qc result is not found"), {}};
     }
     if (!is_alert_qc_result(*qc_result)) {
-        return {labbridge::core::Status::failure("qc result does not require alert"), {}};
+        return {labbridge::core::Status::failure(
+                    labbridge::core::StatusCode::Conflict,
+                    "qc result does not require alert"),
+                {}};
     }
 
     return create_alert(*qc_result);
@@ -55,12 +58,15 @@ AlertCreateResult AlertService::create_from_qc_result(
 AlertCreateResult AlertService::create_alert(const QcResultRecord& qc_result) {
     const auto parsed_record = result_repository_.find_parsed_record(qc_result.parsed_record_id);
     if (!parsed_record.has_value()) {
-        return {labbridge::core::Status::failure("parsed record is not found"), {}};
+        return {labbridge::core::Status::failure(
+                    labbridge::core::StatusCode::NotFound,
+                    "parsed record is not found"),
+                {}};
     }
 
     const auto task_run = task_run_repository_.find_by_id(parsed_record->task_run_id);
     if (!task_run.has_value()) {
-        return {labbridge::core::Status::failure("task run is not found"), {}};
+        return {labbridge::core::Status::failure(labbridge::core::StatusCode::NotFound, "task run is not found"), {}};
     }
 
     AlertRecord alert;
@@ -83,7 +89,7 @@ AlertCreateResult AlertService::create_from_qc_result_if_needed(
 
     const auto qc_result = qc_repository_.find_result(request.qc_result_id);
     if (!qc_result.has_value()) {
-        return {labbridge::core::Status::failure("qc result is not found"), {}};
+        return {labbridge::core::Status::failure(labbridge::core::StatusCode::NotFound, "qc result is not found"), {}};
     }
     if (!is_alert_qc_result(*qc_result)) {
         return {labbridge::core::Status::success(), {}};

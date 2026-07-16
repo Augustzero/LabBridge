@@ -24,10 +24,13 @@ ResultCreateResult ResultService::record_raw_file(const RecordRawFileRequest& re
 
     const auto task_run = task_run_repository_.find_by_id(request.task_run_id);
     if (!task_run.has_value()) {
-        return {labbridge::core::Status::failure("task run is not found"), {}};
+        return {labbridge::core::Status::failure(labbridge::core::StatusCode::NotFound, "task run is not found"), {}};
     }
     if (task_run->node_code != request.node_code) {
-        return {labbridge::core::Status::failure("task run does not belong to node"), {}};
+        return {labbridge::core::Status::failure(
+                    labbridge::core::StatusCode::Conflict,
+                    "task run does not belong to node"),
+                {}};
     }
 
     RawFileRecord record;
@@ -57,15 +60,18 @@ ResultCreateResult ResultService::record_parsed_record(const RecordParsedRecordR
 
     const auto task_run = task_run_repository_.find_by_id(request.task_run_id);
     if (!task_run.has_value()) {
-        return {labbridge::core::Status::failure("task run is not found"), {}};
+        return {labbridge::core::Status::failure(labbridge::core::StatusCode::NotFound, "task run is not found"), {}};
     }
 
     const auto raw_file = result_repository_.find_raw_file(request.raw_file_id);
     if (!raw_file.has_value()) {
-        return {labbridge::core::Status::failure("raw file is not found"), {}};
+        return {labbridge::core::Status::failure(labbridge::core::StatusCode::NotFound, "raw file is not found"), {}};
     }
     if (raw_file->task_run_id != request.task_run_id) {
-        return {labbridge::core::Status::failure("raw file does not belong to task run"), {}};
+        return {labbridge::core::Status::failure(
+                    labbridge::core::StatusCode::Conflict,
+                    "raw file does not belong to task run"),
+                {}};
     }
 
     ParsedRecordRecord record;
