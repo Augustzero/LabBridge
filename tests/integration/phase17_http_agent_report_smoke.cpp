@@ -84,6 +84,7 @@ Json::Value manifest_body(const std::string& task_run_id,
     Json::Value body;
     body["task_run_id"] = task_run_id;
     body["node_code"] = node_code;
+    body["idempotency_key"] = "phase17-manifest";
 
     Json::Value file;
     file["original_name"] = "phase17_observation.csv";
@@ -103,6 +104,7 @@ Json::Value report_body(const std::string& task_run_id,
     Json::Value body;
     body["task_run_id"] = task_run_id;
     body["node_code"] = node_code;
+    body["idempotency_key"] = "phase17-report";
     body["status"] = "failed";
     body["finished_at"] = "2026-07-16 10:03:00+08";
     body["items_total"] = 1;
@@ -145,6 +147,7 @@ int main() {
     labbridge::server::InMemoryResultRepository result_repository;
     labbridge::server::InMemoryQcRepository qc_repository;
     labbridge::server::InMemoryAlertRepository alert_repository;
+    labbridge::server::InMemoryAgentReportReceiptRepository receipt_repository;
 
     labbridge::server::NodeService node_service{node_repository};
     labbridge::server::ConfigService config_service{node_repository, config_repository};
@@ -164,7 +167,8 @@ int main() {
         task_run_service,
         result_service,
         qc_service,
-        alert_service};
+        alert_service,
+        receipt_repository};
     labbridge::server::ControlPlaneQueryService query_service{
         node_repository,
         config_repository,
@@ -189,6 +193,13 @@ int main() {
         "unsupported_media_type");
     assert_error(
         invoke_manifest(controller, "{"),
+        drogon::k400BadRequest,
+        "invalid_argument");
+
+    auto missing_idempotency_key = manifest_body("missing-run", "phase17-node");
+    missing_idempotency_key.removeMember("idempotency_key");
+    assert_error(
+        invoke_manifest(controller, write_json(missing_idempotency_key)),
         drogon::k400BadRequest,
         "invalid_argument");
 
@@ -254,10 +265,18 @@ int main() {
     assert(manifest_response->statusCode() == drogon::k201Created);
     const auto& manifest_json = response_json(manifest_response);
     assert(manifest_json["ok"].asBool());
+    assert(!manifest_json["data"]["replayed"].asBool());
     assert(manifest_json["data"]["raw_file_ids"].size() == 1);
     const auto raw_file_id =
         manifest_json["data"]["raw_file_ids"][Json::ArrayIndex{0}].asString();
     assert(!raw_file_id.empty());
+
+    const auto manifest_replay =
+        invoke_manifest(controller, write_json(manifest_body(started.id, node_code)));
+    assert(manifest_replay->statusCode() == drogon::k201Created);
+    assert(response_json(manifest_replay)["data"]["replayed"].asBool());
+    assert(response_json(manifest_replay)["data"]["raw_file_ids"][Json::ArrayIndex{0}]
+               .asString() == raw_file_id);
 
     const auto rule = qc_service.create_rule({
         "phase17 reported temperature range",
@@ -289,9 +308,19 @@ int main() {
     assert(report_response->statusCode() == drogon::k200OK);
     const auto& report_json = response_json(report_response);
     assert(report_json["ok"].asBool());
+    assert(!report_json["data"]["replayed"].asBool());
     assert(report_json["data"]["parsed_record_ids"].size() == 1);
     assert(report_json["data"]["qc_result_ids"].size() == 2);
     assert(report_json["data"]["alert_ids"].size() == 1);
+
+    const auto report_replay = invoke_report(
+        controller,
+        write_json(report_body(started.id, node_code, raw_file_id, rule.id)));
+    assert(report_replay->statusCode() == drogon::k200OK);
+    const auto& report_replay_json = response_json(report_replay);
+    assert(report_replay_json["data"]["replayed"].asBool());
+    assert(report_replay_json["data"]["parsed_record_ids"] ==
+           report_json["data"]["parsed_record_ids"]);
 
     const auto detail = query_service.find_task_run_detail(node_code, started.id);
     assert(detail.status.ok);

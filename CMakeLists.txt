@@ -7,6 +7,7 @@ project(LabBridge
 )
 
 find_package(PostgreSQL REQUIRED)
+find_package(OpenSSL REQUIRED COMPONENTS Crypto)
 cmake_policy(PUSH)
 cmake_policy(SET CMP0153 OLD)
 find_package(Drogon REQUIRED)
@@ -29,6 +30,7 @@ target_include_directories(labbridge_core
 target_compile_features(labbridge_core PUBLIC cxx_std_20)
 
 add_library(labbridge_server_domain
+    server/src/agent_report_receipt_repository.cpp
     server/src/agent_report_service.cpp
     server/src/alert_repository.cpp
     server/src/alert_service.cpp
@@ -48,6 +50,7 @@ add_library(labbridge_server_domain
 target_link_libraries(labbridge_server_domain
     PUBLIC
         labbridge_core
+        OpenSSL::Crypto
 )
 
 target_include_directories(labbridge_server_domain
@@ -58,12 +61,14 @@ target_include_directories(labbridge_server_domain
 add_library(labbridge_server_postgres
     server/src/libpq_sql_session.cpp
     server/src/postgres_agent_report_executor.cpp
+    server/src/postgres_agent_report_receipt_repository.cpp
     server/src/postgres_alert_repository.cpp
     server/src/postgres_config_repository.cpp
     server/src/postgres_node_repository.cpp
     server/src/postgres_qc_repository.cpp
     server/src/postgres_result_repository.cpp
     server/src/postgres_task_run_repository.cpp
+    server/src/sql_transaction.cpp
 )
 
 target_link_libraries(labbridge_server_postgres
@@ -146,4 +151,6 @@ add_labbridge_smoke(labbridge_phase16_agent_report_service_smoke tests/integrati
 add_labbridge_smoke(labbridge_phase16_real_postgres_agent_report_service_smoke tests/integration/phase16_real_postgres_agent_report_service_smoke.cpp POSTGRES)
 add_labbridge_smoke(labbridge_phase17_http_agent_report_smoke tests/integration/phase17_http_agent_report_smoke.cpp HTTP)
 add_labbridge_smoke(labbridge_phase17_real_postgres_http_agent_report_smoke tests/integration/phase17_real_postgres_http_agent_report_smoke.cpp HTTP POSTGRES)
+add_labbridge_smoke(labbridge_phase18_agent_report_reliability_smoke tests/integration/phase18_agent_report_reliability_smoke.cpp POSTGRES)
+add_labbridge_smoke(labbridge_phase18_real_postgres_agent_report_reliability_smoke tests/integration/phase18_real_postgres_agent_report_reliability_smoke.cpp POSTGRES)
 add_labbridge_smoke(labbridge_code_quality_smoke tests/integration/phase16_review_code_quality_smoke.cpp AGENT)

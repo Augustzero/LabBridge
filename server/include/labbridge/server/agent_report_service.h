@@ -2,6 +2,7 @@
 
 #include "labbridge/core/models.h"
 #include "labbridge/core/result.h"
+#include "labbridge/server/agent_report_receipt_repository.h"
 #include "labbridge/server/alert_service.h"
 #include "labbridge/server/qc_service.h"
 #include "labbridge/server/result_service.h"
@@ -24,12 +25,14 @@ struct RawFileManifestEntry {
 struct RawFileManifestRequest {
     std::string task_run_id;
     std::string node_code;
+    std::string idempotency_key;
     std::vector<RawFileManifestEntry> files;
 };
 
 struct RawFileManifestResult {
     labbridge::core::Status status;
     std::vector<std::string> raw_file_ids;
+    bool replayed{false};
 };
 
 struct TaskRunReportQcResult {
@@ -49,6 +52,7 @@ struct TaskRunReportParsedRecord {
 struct TaskRunReportRequest {
     std::string task_run_id;
     std::string node_code;
+    std::string idempotency_key;
     labbridge::core::TaskRunStatus status{labbridge::core::TaskRunStatus::Succeeded};
     std::string finished_at;
     int items_total{0};
@@ -63,6 +67,7 @@ struct TaskRunReportResult {
     std::vector<std::string> parsed_record_ids;
     std::vector<std::string> qc_result_ids;
     std::vector<std::string> alert_ids;
+    bool replayed{false};
 };
 
 class AgentReportService {
@@ -70,7 +75,8 @@ public:
     AgentReportService(TaskRunService& task_run_service,
                        ResultService& result_service,
                        QcService& qc_service,
-                       AlertService& alert_service);
+                       AlertService& alert_service,
+                       IAgentReportReceiptRepository& receipt_repository);
 
     RawFileManifestResult accept_raw_file_manifest(
         const RawFileManifestRequest& request);
@@ -84,6 +90,7 @@ private:
     ResultService& result_service_;
     QcService& qc_service_;
     AlertService& alert_service_;
+    IAgentReportReceiptRepository& receipt_repository_;
 };
 
 }  // namespace labbridge::server

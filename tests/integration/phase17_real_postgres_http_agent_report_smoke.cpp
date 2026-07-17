@@ -150,6 +150,7 @@ int main() {
     Json::Value manifest;
     manifest["task_run_id"] = started.id;
     manifest["node_code"] = node_code;
+    manifest["idempotency_key"] = "phase17-real-http-manifest";
     Json::Value file;
     file["original_name"] = "phase17_real_http_observation.csv";
     file["file_hash"] = "phase17-real-http-hash";
@@ -171,6 +172,7 @@ int main() {
     Json::Value report;
     report["task_run_id"] = started.id;
     report["node_code"] = node_code;
+    report["idempotency_key"] = "phase17-real-http-report";
     report["status"] = "failed";
     report["finished_at"] = "2026-07-16 11:03:00+08";
     report["items_total"] = 1;

@@ -60,6 +60,7 @@ int main() {
     labbridge::server::PostgresResultRepository result_repository{session};
     labbridge::server::PostgresQcRepository qc_repository{session};
     labbridge::server::PostgresAlertRepository alert_repository{session};
+    labbridge::server::InMemoryAgentReportReceiptRepository receipt_repository;
 
     labbridge::server::NodeService node_service{node_repository};
     labbridge::server::ConfigService config_service{node_repository, config_repository};
@@ -75,7 +76,8 @@ int main() {
         task_run_service,
         result_service,
         qc_service,
-        alert_service};
+        alert_service,
+        receipt_repository};
     labbridge::server::ControlPlaneQueryService query_service{
         node_repository,
         config_repository,
@@ -130,6 +132,7 @@ int main() {
     const auto wrong_node_manifest = agent_report_service.accept_raw_file_manifest({
         started.id,
         other_node_code,
+        "phase16-real-wrong-node-manifest",
         {},
     });
     assert(!wrong_node_manifest.status.ok);
@@ -137,6 +140,7 @@ int main() {
     const auto manifest = agent_report_service.accept_raw_file_manifest({
         started.id,
         node_code,
+        "phase16-real-manifest",
         {
             {
                 "phase16_observation.csv",
@@ -163,6 +167,7 @@ int main() {
     const auto report = agent_report_service.accept_task_run_report({
         started.id,
         node_code,
+        "phase16-real-report",
         labbridge::core::TaskRunStatus::Failed,
         "2026-06-02 10:03:00+08",
         1,

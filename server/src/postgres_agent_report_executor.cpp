@@ -2,6 +2,7 @@
 
 #include "labbridge/server/alert_service.h"
 #include "labbridge/server/libpq_sql_session.h"
+#include "labbridge/server/postgres_agent_report_receipt_repository.h"
 #include "labbridge/server/postgres_alert_repository.h"
 #include "labbridge/server/postgres_config_repository.h"
 #include "labbridge/server/postgres_qc_repository.h"
@@ -9,6 +10,7 @@
 #include "labbridge/server/postgres_task_run_repository.h"
 #include "labbridge/server/qc_service.h"
 #include "labbridge/server/result_service.h"
+#include "labbridge/server/sql_transaction.h"
 #include "labbridge/server/task_run_service.h"
 
 #include <utility>
@@ -25,13 +27,22 @@ public:
           result_repository_(session_),
           qc_repository_(session_),
           alert_repository_(session_),
+          receipt_repository_(session_),
           task_run_service_(config_repository_, task_run_repository_),
           result_service_(task_run_repository_, result_repository_),
           qc_service_(result_repository_, qc_repository_),
           alert_service_(
               task_run_repository_, result_repository_, qc_repository_, alert_repository_),
           agent_report_service_(
-              task_run_service_, result_service_, qc_service_, alert_service_) {}
+              task_run_service_,
+              result_service_,
+              qc_service_,
+              alert_service_,
+              receipt_repository_) {}
+
+    ISqlSession& session() {
+        return session_;
+    }
 
     AgentReportService& agent_report_service() {
         return agent_report_service_;
@@ -44,6 +55,7 @@ private:
     PostgresResultRepository result_repository_;
     PostgresQcRepository qc_repository_;
     PostgresAlertRepository alert_repository_;
+    PostgresAgentReportReceiptRepository receipt_repository_;
     TaskRunService task_run_service_;
     ResultService result_service_;
     QcService qc_service_;
@@ -59,13 +71,23 @@ PostgresAgentReportExecutor::PostgresAgentReportExecutor(std::string connection_
 RawFileManifestResult PostgresAgentReportExecutor::accept_raw_file_manifest(
     const RawFileManifestRequest& request) const {
     AgentReportRequestScope scope{connection_info_};
-    return scope.agent_report_service().accept_raw_file_manifest(request);
+    SqlTransaction transaction{scope.session()};
+    auto result = scope.agent_report_service().accept_raw_file_manifest(request);
+    if (result.status.ok) {
+        transaction.commit();
+    }
+    return result;
 }
 
 TaskRunReportResult PostgresAgentReportExecutor::accept_task_run_report(
     const TaskRunReportRequest& request) const {
     AgentReportRequestScope scope{connection_info_};
-    return scope.agent_report_service().accept_task_run_report(request);
+    SqlTransaction transaction{scope.session()};
+    auto result = scope.agent_report_service().accept_task_run_report(request);
+    if (result.status.ok) {
+        transaction.commit();
+    }
+    return result;
 }
 
 }  // namespace labbridge::server

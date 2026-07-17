@@ -119,6 +119,7 @@ RawFileManifestRequest parse_raw_file_manifest(const Json::Value& body) {
     RawFileManifestRequest request;
     request.task_run_id = required_string(body, "task_run_id", "");
     request.node_code = required_string(body, "node_code", "");
+    request.idempotency_key = required_string(body, "idempotency_key", "");
 
     const auto& files = optional_array(body, "files", "");
     request.files.reserve(files.size());
@@ -147,6 +148,7 @@ TaskRunReportRequest parse_task_run_report(const Json::Value& body) {
     TaskRunReportRequest request;
     request.task_run_id = required_string(body, "task_run_id", "");
     request.node_code = required_string(body, "node_code", "");
+    request.idempotency_key = required_string(body, "idempotency_key", "");
     request.status = parse_task_run_status(required_string(body, "status", ""));
     request.finished_at = optional_string(body, "finished_at", {}, "");
     request.items_total = optional_int(body, "items_total", 0, "");
@@ -321,6 +323,7 @@ void AgentReportHttpController::post_raw_file_manifest(
 
         Json::Value data;
         data["raw_file_ids"] = string_array(result.raw_file_ids);
+        data["replayed"] = result.replayed;
         callback(success_response(drogon::k201Created, std::move(data)));
     } catch (const RequestValidationError& error) {
         callback(error_response(drogon::k400BadRequest, "invalid_argument", error.what()));
@@ -350,6 +353,7 @@ void AgentReportHttpController::post_task_run_report(
         data["parsed_record_ids"] = string_array(result.parsed_record_ids);
         data["qc_result_ids"] = string_array(result.qc_result_ids);
         data["alert_ids"] = string_array(result.alert_ids);
+        data["replayed"] = result.replayed;
         callback(success_response(drogon::k200OK, std::move(data)));
     } catch (const RequestValidationError& error) {
         callback(error_response(drogon::k400BadRequest, "invalid_argument", error.what()));
