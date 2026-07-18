@@ -30,6 +30,7 @@ target_include_directories(labbridge_core
 target_compile_features(labbridge_core PUBLIC cxx_std_20)
 
 add_library(labbridge_server_domain
+    server/src/agent_control_service.cpp
     server/src/agent_report_receipt_repository.cpp
     server/src/agent_report_service.cpp
     server/src/alert_repository.cpp
@@ -60,6 +61,7 @@ target_include_directories(labbridge_server_domain
 
 add_library(labbridge_server_postgres
     server/src/libpq_sql_session.cpp
+    server/src/postgres_agent_control_executor.cpp
     server/src/postgres_agent_report_executor.cpp
     server/src/postgres_agent_report_receipt_repository.cpp
     server/src/postgres_alert_repository.cpp
@@ -94,7 +96,9 @@ target_include_directories(labbridge_agent_domain
 )
 
 add_library(labbridge_server_http
+    server/src/agent_control_http_controller.cpp
     server/src/agent_report_http_controller.cpp
+    server/src/http_json_response.cpp
 )
 
 target_link_libraries(labbridge_server_http
@@ -153,4 +157,6 @@ add_labbridge_smoke(labbridge_phase17_http_agent_report_smoke tests/integration/
 add_labbridge_smoke(labbridge_phase17_real_postgres_http_agent_report_smoke tests/integration/phase17_real_postgres_http_agent_report_smoke.cpp HTTP POSTGRES)
 add_labbridge_smoke(labbridge_phase18_agent_report_reliability_smoke tests/integration/phase18_agent_report_reliability_smoke.cpp POSTGRES)
 add_labbridge_smoke(labbridge_phase18_real_postgres_agent_report_reliability_smoke tests/integration/phase18_real_postgres_agent_report_reliability_smoke.cpp POSTGRES)
+add_labbridge_smoke(labbridge_phase19_http_agent_control_smoke tests/integration/phase19_http_agent_control_smoke.cpp HTTP)
+add_labbridge_smoke(labbridge_phase19_real_postgres_http_agent_control_smoke tests/integration/phase19_real_postgres_http_agent_control_smoke.cpp HTTP POSTGRES)
 add_labbridge_smoke(labbridge_code_quality_smoke tests/integration/phase16_review_code_quality_smoke.cpp AGENT)

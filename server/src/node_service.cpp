@@ -20,9 +20,18 @@ labbridge::core::Status NodeService::register_node(const labbridge::core::NodeIn
 }
 
 labbridge::core::Status NodeService::accept_heartbeat(const labbridge::core::NodeHeartbeat& heartbeat) {
+    if (heartbeat.node_code.empty()) {
+        return labbridge::core::Status::failure("node_code is required");
+    }
+    if (heartbeat.reported_at.empty()) {
+        return labbridge::core::Status::failure("reported_at is required");
+    }
+
     auto node = repository_.find_by_code(heartbeat.node_code);
     if (!node.has_value()) {
-        return labbridge::core::Status::failure("node is not registered");
+        return labbridge::core::Status::failure(
+            labbridge::core::StatusCode::NotFound,
+            "node is not registered");
     }
 
     node->status = labbridge::core::NodeStatus::Online;

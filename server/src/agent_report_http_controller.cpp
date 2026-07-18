@@ -1,7 +1,5 @@
 #include "labbridge/server/agent_report_http_controller.h"
 
-#include "labbridge/core/logging.h"
-
 #include <json/reader.h>
 
 #include <stdexcept>
@@ -206,76 +204,12 @@ Json::Value string_array(const std::vector<std::string>& values) {
     return array;
 }
 
-drogon::HttpResponsePtr json_response(drogon::HttpStatusCode status, Json::Value body) {
-    auto response = drogon::HttpResponse::newHttpJsonResponse(std::move(body));
-    response->setStatusCode(status);
-    return response;
-}
-
-drogon::HttpResponsePtr success_response(drogon::HttpStatusCode status,
-                                         Json::Value data) {
-    Json::Value body;
-    body["ok"] = true;
-    body["data"] = std::move(data);
-    return json_response(status, std::move(body));
-}
-
-drogon::HttpResponsePtr error_response(drogon::HttpStatusCode status,
-                                       const std::string& code,
-                                       const std::string& message) {
-    Json::Value body;
-    body["ok"] = false;
-    body["error"]["code"] = code;
-    body["error"]["message"] = message;
-    return json_response(status, std::move(body));
-}
-
-drogon::HttpResponsePtr status_error_response(const labbridge::core::Status& status) {
-    switch (status.code) {
-        case labbridge::core::StatusCode::InvalidArgument:
-            return error_response(
-                drogon::k400BadRequest, "invalid_argument", status.message);
-        case labbridge::core::StatusCode::NotFound:
-            return error_response(drogon::k404NotFound, "not_found", status.message);
-        case labbridge::core::StatusCode::Conflict:
-            return error_response(drogon::k409Conflict, "conflict", status.message);
-        case labbridge::core::StatusCode::Ok:
-            break;
-    }
-    return error_response(
-        drogon::k500InternalServerError, "internal_error", "internal server error");
-}
-
-bool validate_content_type(const drogon::HttpRequestPtr& request,
-                           AgentReportHttpController::ResponseCallback& callback) {
-    if (request->contentType() == drogon::CT_APPLICATION_JSON) {
-        return true;
-    }
-    callback(error_response(drogon::k415UnsupportedMediaType,
-                            "unsupported_media_type",
-                            "content type must be application/json"));
-    return false;
-}
-
 const Json::Value& parse_json_body(const drogon::HttpRequestPtr& request) {
     const auto& body = request->getJsonObject();
     if (!body) {
         throw RequestValidationError("request body must contain valid JSON");
     }
     return *body;
-}
-
-void handle_unexpected_exception(const std::exception& error,
-                                 AgentReportHttpController::ResponseCallback& callback) {
-    labbridge::core::log_error(kComponent, error.what());
-    callback(error_response(
-        drogon::k500InternalServerError, "internal_error", "internal server error"));
-}
-
-void handle_unknown_exception(AgentReportHttpController::ResponseCallback& callback) {
-    labbridge::core::log_error(kComponent, "unknown exception");
-    callback(error_response(
-        drogon::k500InternalServerError, "internal_error", "internal server error"));
 }
 
 }  // namespace
@@ -309,7 +243,7 @@ void AgentReportHttpController::register_routes(drogon::HttpAppFramework& app) {
 void AgentReportHttpController::post_raw_file_manifest(
     const drogon::HttpRequestPtr& request,
     ResponseCallback&& callback) const {
-    if (!validate_content_type(request, callback)) {
+    if (!http::require_json_content_type(request, callback)) {
         return;
     }
 
@@ -317,27 +251,28 @@ void AgentReportHttpController::post_raw_file_manifest(
         const auto parsed = parse_raw_file_manifest(parse_json_body(request));
         const auto result = raw_file_manifest_handler_(parsed);
         if (!result.status.ok) {
-            callback(status_error_response(result.status));
+            callback(http::status_error_response(result.status));
             return;
         }
 
         Json::Value data;
         data["raw_file_ids"] = string_array(result.raw_file_ids);
         data["replayed"] = result.replayed;
-        callback(success_response(drogon::k201Created, std::move(data)));
+        callback(http::success_response(drogon::k201Created, std::move(data)));
     } catch (const RequestValidationError& error) {
-        callback(error_response(drogon::k400BadRequest, "invalid_argument", error.what()));
+        callback(http::error_response(
+            drogon::k400BadRequest, "invalid_argument", error.what()));
     } catch (const std::exception& error) {
-        handle_unexpected_exception(error, callback);
+        http::handle_unexpected_exception(kComponent, error, callback);
     } catch (...) {
-        handle_unknown_exception(callback);
+        http::handle_unknown_exception(kComponent, callback);
     }
 }
 
 void AgentReportHttpController::post_task_run_report(
     const drogon::HttpRequestPtr& request,
     ResponseCallback&& callback) const {
-    if (!validate_content_type(request, callback)) {
+    if (!http::require_json_content_type(request, callback)) {
         return;
     }
 
@@ -345,7 +280,7 @@ void AgentReportHttpController::post_task_run_report(
         const auto parsed = parse_task_run_report(parse_json_body(request));
         const auto result = task_run_report_handler_(parsed);
         if (!result.status.ok) {
-            callback(status_error_response(result.status));
+            callback(http::status_error_response(result.status));
             return;
         }
 
@@ -354,13 +289,14 @@ void AgentReportHttpController::post_task_run_report(
         data["qc_result_ids"] = string_array(result.qc_result_ids);
         data["alert_ids"] = string_array(result.alert_ids);
         data["replayed"] = result.replayed;
-        callback(success_response(drogon::k200OK, std::move(data)));
+        callback(http::success_response(drogon::k200OK, std::move(data)));
     } catch (const RequestValidationError& error) {
-        callback(error_response(drogon::k400BadRequest, "invalid_argument", error.what()));
+        callback(http::error_response(
+            drogon::k400BadRequest, "invalid_argument", error.what()));
     } catch (const std::exception& error) {
-        handle_unexpected_exception(error, callback);
+        http::handle_unexpected_exception(kComponent, error, callback);
     } catch (...) {
-        handle_unknown_exception(callback);
+        http::handle_unknown_exception(kComponent, callback);
     }
 }
 

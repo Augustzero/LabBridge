@@ -1,6 +1,8 @@
 #include "labbridge/core/logging.h"
 #include "labbridge/core/version.h"
+#include "labbridge/server/agent_control_http_controller.h"
 #include "labbridge/server/agent_report_http_controller.h"
+#include "labbridge/server/postgres_agent_control_executor.h"
 #include "labbridge/server/postgres_agent_report_executor.h"
 
 #include <drogon/drogon.h>
@@ -53,17 +55,35 @@ int main(int argc, char* argv[]) {
         auto& app = drogon::app();
         app.loadConfigFile(config_path);
 
-        auto executor = std::make_shared<labbridge::server::PostgresAgentReportExecutor>(
-            database_connection_info(app));
+        const auto connection_info = database_connection_info(app);
+        auto report_executor =
+            std::make_shared<labbridge::server::PostgresAgentReportExecutor>(
+                connection_info);
         auto controller =
             std::make_shared<labbridge::server::AgentReportHttpController>(
-                [executor](const labbridge::server::RawFileManifestRequest& request) {
-                    return executor->accept_raw_file_manifest(request);
+                [report_executor](const labbridge::server::RawFileManifestRequest& request) {
+                    return report_executor->accept_raw_file_manifest(request);
                 },
-                [executor](const labbridge::server::TaskRunReportRequest& request) {
-                    return executor->accept_task_run_report(request);
+                [report_executor](const labbridge::server::TaskRunReportRequest& request) {
+                    return report_executor->accept_task_run_report(request);
                 });
         controller->register_routes(app);
+
+        auto control_executor =
+            std::make_shared<labbridge::server::PostgresAgentControlExecutor>(
+                connection_info);
+        auto control_controller =
+            std::make_shared<labbridge::server::AgentControlHttpController>(
+                [control_executor](const labbridge::core::NodeInfo& node) {
+                    return control_executor->register_node(node);
+                },
+                [control_executor](const labbridge::core::NodeHeartbeat& heartbeat) {
+                    return control_executor->accept_heartbeat(heartbeat);
+                },
+                [control_executor](const std::string& node_code) {
+                    return control_executor->find_config(node_code);
+                });
+        control_controller->register_routes(app);
 
         labbridge::core::log_info(kComponent, "control plane HTTP service is ready");
         app.run();

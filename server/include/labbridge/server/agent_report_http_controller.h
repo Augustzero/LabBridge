@@ -1,6 +1,7 @@
 #pragma once
 
 #include "labbridge/server/agent_report_service.h"
+#include "labbridge/server/http_json_response.h"
 
 #include <drogon/HttpAppFramework.h>
 #include <drogon/HttpRequest.h>
@@ -18,7 +19,7 @@ public:
         std::function<RawFileManifestResult(const RawFileManifestRequest&)>;
     using TaskRunReportHandler =
         std::function<TaskRunReportResult(const TaskRunReportRequest&)>;
-    using ResponseCallback = std::function<void(const drogon::HttpResponsePtr&)>;
+    using ResponseCallback = http::ResponseCallback;
 
     AgentReportHttpController(RawFileManifestHandler raw_file_manifest_handler,
                               TaskRunReportHandler task_run_report_handler);
