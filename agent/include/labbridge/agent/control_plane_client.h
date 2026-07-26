@@ -1,0 +1,72 @@
+#pragma once
+
+#include "labbridge/core/models.h"
+
+#include <chrono>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <vector>
+
+namespace labbridge::agent {
+
+enum class ControlPlaneErrorKind {
+    Network,
+    HttpStatus,
+    InvalidJson,
+    InvalidResponse,
+    ServerError,
+};
+
+class ControlPlaneClientError final : public std::runtime_error {
+public:
+    ControlPlaneClientError(ControlPlaneErrorKind kind,
+                            std::string message,
+                            unsigned int http_status = 0,
+                            std::string server_code = {});
+
+    ControlPlaneErrorKind kind() const noexcept;
+    unsigned int http_status() const noexcept;
+    const std::string& server_code() const noexcept;
+
+private:
+    ControlPlaneErrorKind kind_;
+    unsigned int http_status_;
+    std::string server_code_;
+};
+
+struct PulledAgentConfig {
+    labbridge::core::NodeInfo node;
+    labbridge::core::NodeStatus status{labbridge::core::NodeStatus::Offline};
+    std::string last_heartbeat_at;
+    std::vector<labbridge::core::TaskConfig> tasks;
+};
+
+void validate_control_plane_url(std::string_view server_url);
+
+class ControlPlaneClient {
+public:
+    ControlPlaneClient(std::string server_url,
+                       std::chrono::milliseconds request_timeout);
+
+    void register_node(const labbridge::core::NodeInfo& node) const;
+    void send_heartbeat(const labbridge::core::NodeHeartbeat& heartbeat) const;
+    PulledAgentConfig fetch_config(const std::string& node_code) const;
+
+private:
+    struct HttpResponse {
+        unsigned int status;
+        std::string body;
+    };
+
+    HttpResponse request(std::string_view method,
+                         const std::string& target,
+                         std::string body = {}) const;
+
+    std::string host_;
+    std::string port_;
+    std::string host_header_;
+    std::chrono::milliseconds request_timeout_;
+};
+
+}  // namespace labbridge::agent

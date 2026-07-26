@@ -2,6 +2,7 @@ agent:
   node_code: lab-node-001
   name: default-lab-node
   server_url: http://127.0.0.1:18080
+  request_timeout_seconds: 5
   heartbeat_interval_seconds: 15
 
 storage:

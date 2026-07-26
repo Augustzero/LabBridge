@@ -57,8 +57,11 @@ struct TaskConfig {
     std::string node_code;
     std::string data_source_id;
     std::string name;
+    std::string task_type;
     std::string schedule_expr;
     std::string parser_type;
+    std::string qc_profile;
+    bool enabled{true};
     std::vector<std::string> qc_rules;
 };
 

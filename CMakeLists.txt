@@ -8,6 +8,10 @@ project(LabBridge
 
 find_package(PostgreSQL REQUIRED)
 find_package(OpenSSL REQUIRED COMPONENTS Crypto)
+find_package(Boost REQUIRED COMPONENTS system)
+find_package(nlohmann_json REQUIRED)
+find_package(Threads REQUIRED)
+find_package(yaml-cpp REQUIRED)
 cmake_policy(PUSH)
 cmake_policy(SET CMP0153 OLD)
 find_package(Drogon REQUIRED)
@@ -95,6 +99,25 @@ target_include_directories(labbridge_agent_domain
         ${CMAKE_CURRENT_SOURCE_DIR}/agent/include
 )
 
+add_library(labbridge_agent_bootstrap
+    agent/src/agent_config.cpp
+    agent/src/control_plane_client.cpp
+    agent/src/startup_handshake.cpp
+)
+
+target_link_libraries(labbridge_agent_bootstrap
+    PUBLIC
+        labbridge_core
+        Boost::system
+        nlohmann_json::nlohmann_json
+        yaml-cpp
+)
+
+target_include_directories(labbridge_agent_bootstrap
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/agent/include
+)
+
 add_library(labbridge_server_http
     server/src/agent_control_http_controller.cpp
     server/src/agent_report_http_controller.cpp
@@ -111,13 +134,21 @@ add_executable(labbridge_server server/src/main.cpp)
 target_link_libraries(labbridge_server PRIVATE labbridge_server_http labbridge_server_postgres)
 
 add_executable(labbridge_agent agent/src/main.cpp)
-target_link_libraries(labbridge_agent PRIVATE labbridge_agent_domain)
+target_link_libraries(labbridge_agent
+    PRIVATE
+        labbridge_agent_bootstrap
+        labbridge_agent_domain
+)
 
 function(add_labbridge_smoke target source)
-    cmake_parse_arguments(ARG "AGENT;POSTGRES;HTTP" "" "" ${ARGN})
+    cmake_parse_arguments(ARG "AGENT;AGENT_BOOTSTRAP;POSTGRES;HTTP" "" "" ${ARGN})
 
     add_executable(${target} ${source})
-    target_link_libraries(${target} PRIVATE labbridge_server_domain)
+    if(ARG_AGENT_BOOTSTRAP)
+        target_link_libraries(${target} PRIVATE labbridge_agent_bootstrap)
+    else()
+        target_link_libraries(${target} PRIVATE labbridge_server_domain)
+    endif()
 
     if(ARG_AGENT)
         target_link_libraries(${target} PRIVATE labbridge_agent_domain)
@@ -159,4 +190,9 @@ add_labbridge_smoke(labbridge_phase18_agent_report_reliability_smoke tests/integ
 add_labbridge_smoke(labbridge_phase18_real_postgres_agent_report_reliability_smoke tests/integration/phase18_real_postgres_agent_report_reliability_smoke.cpp POSTGRES)
 add_labbridge_smoke(labbridge_phase19_http_agent_control_smoke tests/integration/phase19_http_agent_control_smoke.cpp HTTP)
 add_labbridge_smoke(labbridge_phase19_real_postgres_http_agent_control_smoke tests/integration/phase19_real_postgres_http_agent_control_smoke.cpp HTTP POSTGRES)
+add_labbridge_smoke(
+    labbridge_phase20_agent_startup_handshake_smoke
+    tests/integration/phase20_agent_startup_handshake_smoke.cpp
+    AGENT_BOOTSTRAP)
+target_link_libraries(labbridge_phase20_agent_startup_handshake_smoke PRIVATE Threads::Threads)
 add_labbridge_smoke(labbridge_code_quality_smoke tests/integration/phase16_review_code_quality_smoke.cpp AGENT)
