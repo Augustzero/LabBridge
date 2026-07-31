@@ -67,7 +67,7 @@ int main() {
     const char* connection_info = std::getenv("LABBRIDGE_DATABASE_URL");
     if (connection_info == nullptr || std::string(connection_info).empty()) {
         std::cout << "LABBRIDGE_DATABASE_URL is not set; skipping real PostgreSQL HTTP agent report smoke test\n";
-        return 0;
+        return 77;
     }
 
     labbridge::server::LibpqSqlSession session{connection_info};
@@ -150,7 +150,8 @@ int main() {
     Json::Value manifest;
     manifest["task_run_id"] = started.id;
     manifest["node_code"] = node_code;
-    manifest["idempotency_key"] = "phase17-real-http-manifest";
+    manifest["idempotency_key"] =
+        "phase17-real-http-manifest-" + started.id;
     Json::Value file;
     file["original_name"] = "phase17_real_http_observation.csv";
     file["file_hash"] = "phase17-real-http-hash";
@@ -172,7 +173,8 @@ int main() {
     Json::Value report;
     report["task_run_id"] = started.id;
     report["node_code"] = node_code;
-    report["idempotency_key"] = "phase17-real-http-report";
+    report["idempotency_key"] =
+        "phase17-real-http-report-" + started.id;
     report["status"] = "failed";
     report["finished_at"] = "2026-07-16 11:03:00+08";
     report["items_total"] = 1;

@@ -92,7 +92,7 @@ int main() {
     if (connection_info == nullptr || std::string{connection_info}.empty()) {
         std::cout << "LABBRIDGE_DATABASE_URL is not set; skipping real PostgreSQL "
                      "agent report reliability smoke test\n";
-        return 0;
+        return 77;
     }
 
     labbridge::server::LibpqSqlSession session{connection_info};

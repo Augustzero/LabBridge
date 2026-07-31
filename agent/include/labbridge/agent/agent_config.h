@@ -5,6 +5,7 @@
 #include <chrono>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 
 namespace labbridge::agent {
 
@@ -19,6 +20,7 @@ public:
     using std::runtime_error::runtime_error;
 };
 
+AgentStartupConfig parse_agent_config(std::string_view yaml_content);
 AgentStartupConfig load_agent_config(const std::string& path);
 
 }  // namespace labbridge::agent

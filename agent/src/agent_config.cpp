@@ -66,27 +66,44 @@ int required_positive_integer(const YAML::Node& object,
     }
 }
 
+AgentStartupConfig parse_agent_config_node(const YAML::Node& root) {
+    const auto agent = root["agent"];
+    if (!agent || !agent.IsMap()) {
+        throw AgentConfigError("agent configuration section is required");
+    }
+
+    AgentStartupConfig config;
+    config.node.node_code = required_string(agent, "node_code", "agent");
+    config.node.name = required_string(agent, "name", "agent");
+    config.node.agent_version = labbridge::core::kVersion;
+    config.server_url = required_string(agent, "server_url", "agent");
+    validate_control_plane_url(config.server_url);
+
+    const auto timeout_seconds = required_positive_integer(
+        agent, "request_timeout_seconds", "agent");
+    config.request_timeout = std::chrono::seconds{timeout_seconds};
+    return config;
+}
+
 }  // namespace
+
+AgentStartupConfig parse_agent_config(std::string_view yaml_content) {
+    try {
+        return parse_agent_config_node(YAML::Load(std::string{yaml_content}));
+    } catch (const AgentConfigError&) {
+        throw;
+    } catch (const YAML::Exception& error) {
+        throw AgentConfigError(
+            "failed to parse agent configuration: " + std::string{error.what()});
+    } catch (const std::invalid_argument& error) {
+        throw AgentConfigError(
+            "invalid agent.server_url: " + std::string{error.what()});
+    }
+}
 
 AgentStartupConfig load_agent_config(const std::string& path) {
     try {
-        const auto root = YAML::LoadFile(path);
-        const auto agent = root["agent"];
-        if (!agent || !agent.IsMap()) {
-            throw AgentConfigError("agent configuration section is required");
-        }
-
-        AgentStartupConfig config;
-        config.node.node_code = required_string(agent, "node_code", "agent");
-        config.node.name = required_string(agent, "name", "agent");
-        config.node.agent_version = labbridge::core::kVersion;
-        config.server_url = required_string(agent, "server_url", "agent");
-        validate_control_plane_url(config.server_url);
-
-        const auto timeout_seconds = required_positive_integer(
-            agent, "request_timeout_seconds", "agent");
-        config.request_timeout = std::chrono::seconds{timeout_seconds};
-        return config;
+        return parse_agent_config_node(YAML::LoadFile(path));
     } catch (const AgentConfigError&) {
         throw;
     } catch (const YAML::Exception& error) {

@@ -17,7 +17,7 @@ int main() {
     const char* connection_info = std::getenv("LABBRIDGE_DATABASE_URL");
     if (connection_info == nullptr || std::string(connection_info).empty()) {
         std::cout << "LABBRIDGE_DATABASE_URL is not set; skipping real PostgreSQL control flow smoke test\n";
-        return 0;
+        return 77;
     }
 
     labbridge::server::LibpqSqlSession session{connection_info};
