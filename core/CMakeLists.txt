@@ -7,4 +7,4 @@ target_include_directories(labbridge_core
         ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
-target_compile_features(labbridge_core PUBLIC cxx_std_20)
+target_compile_features(labbridge_core PUBLIC cxx_std_17)
