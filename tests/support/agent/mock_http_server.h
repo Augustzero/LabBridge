@@ -5,9 +5,10 @@
 #include <boost/beast/http.hpp>
 
 #include <atomic>
-#include <chrono>
 #include <exception>
+#include <functional>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -18,7 +19,8 @@ namespace http = boost::beast::http;
 struct PlannedHttpResponse {
     http::status status;
     std::string body;
-    std::chrono::milliseconds delay{0};
+    bool wait_for_disconnect{false};
+    std::function<std::string(std::string_view)> body_factory;
 };
 
 struct CapturedHttpRequest {

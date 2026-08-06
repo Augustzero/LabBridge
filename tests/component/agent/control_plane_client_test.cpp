@@ -1,4 +1,4 @@
-#include "labbridge/agent/control_plane_client.h"
+#include "labbridge/agent/bootstrap/control_plane_client.h"
 #include "support/agent/mock_http_server.h"
 
 #include <gtest/gtest.h>
@@ -92,7 +92,7 @@ TEST(ControlPlaneClientTest, SendsHeartbeatContract) {
     MockHttpServer server{{
         {
             http::status::ok,
-            R"({"ok":true,"data":{"node_code":"phase20-node","status":"online"}})",
+            R"({"ok":true,"data":{"node_code":"phase20-node","status":"online","reported_at":"2026-07-18T10:00:00Z"}})",
         },
     }};
     labbridge::agent::ControlPlaneClient client{
@@ -115,6 +115,68 @@ TEST(ControlPlaneClientTest, SendsHeartbeatContract) {
     EXPECT_EQ(body["node_code"], "phase20-node");
     EXPECT_EQ(body["agent_version"], "0.1.0");
     EXPECT_EQ(body["reported_at"], "2026-07-18T10:00:00Z");
+}
+
+TEST(ControlPlaneClientTest, RejectsRegistrationStatusOutsideContract) {
+    MockHttpServer server{{
+        {
+            http::status::created,
+            R"({"ok":true,"data":{"node_code":"phase20-node","status":"online"}})",
+        },
+    }};
+    labbridge::agent::ControlPlaneClient client{
+        local_server_url(server.port()),
+        2s};
+
+    expect_client_error(
+        labbridge::agent::ControlPlaneErrorKind::InvalidResponse,
+        [&] {
+            client.register_node(
+                {"phase20-node", "phase20 agent", "0.1.0"});
+        },
+        201);
+    ASSERT_NO_THROW(server.join());
+}
+
+TEST(ControlPlaneClientTest, RejectsHeartbeatResponseWithMismatchedTimestamp) {
+    MockHttpServer server{{
+        {
+            http::status::ok,
+            R"({"ok":true,"data":{"node_code":"phase20-node","status":"online","reported_at":"2026-07-18T10:00:01Z"}})",
+        },
+    }};
+    labbridge::agent::ControlPlaneClient client{
+        local_server_url(server.port()),
+        2s};
+
+    expect_client_error(
+        labbridge::agent::ControlPlaneErrorKind::InvalidResponse,
+        [&] {
+            client.send_heartbeat({
+                "phase20-node",
+                "0.1.0",
+                "2026-07-18T10:00:00Z",
+            });
+        },
+        200);
+    ASSERT_NO_THROW(server.join());
+}
+
+TEST(ControlPlaneClientTest, PreservesHttpStatusForInvalidConfigField) {
+    auto body = Json::parse(config_response("phase20-node"));
+    body["data"]["node"].erase("name");
+    MockHttpServer server{{
+        {http::status::ok, body.dump()},
+    }};
+    labbridge::agent::ControlPlaneClient client{
+        local_server_url(server.port()),
+        2s};
+
+    expect_client_error(
+        labbridge::agent::ControlPlaneErrorKind::InvalidResponse,
+        [&] { static_cast<void>(client.fetch_config("phase20-node")); },
+        200);
+    ASSERT_NO_THROW(server.join());
 }
 
 TEST(ControlPlaneClientTest, EncodesConfigPathAndMapsEnabledTasks) {
@@ -272,7 +334,7 @@ TEST(ControlPlaneClientTest, EnforcesOverallRequestTimeout) {
         {
             http::status::created,
             R"({"ok":true,"data":{"node_code":"phase20-node","status":"offline"}})",
-            250ms,
+            true,
         },
     }};
     labbridge::agent::ControlPlaneClient client{

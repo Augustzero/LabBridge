@@ -1,4 +1,4 @@
-#include "labbridge/agent/agent_config.h"
+#include "labbridge/agent/bootstrap/agent_config.h"
 #include "labbridge/core/version.h"
 
 #include <gtest/gtest.h>

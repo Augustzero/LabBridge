@@ -1,9 +1,9 @@
 #include "support/agent/mock_http_server.h"
 
-#include <boost/asio/error.hpp>
+#include <boost/asio/buffer.hpp>
 #include <boost/beast/core.hpp>
 
-#include <chrono>
+#include <array>
 #include <system_error>
 #include <utility>
 
@@ -12,7 +12,6 @@ namespace labbridge::test::support {
 namespace asio = boost::asio;
 namespace beast = boost::beast;
 using tcp = asio::ip::tcp;
-using namespace std::chrono_literals;
 
 MockHttpServer::MockHttpServer(std::vector<PlannedHttpResponse> responses)
     : acceptor_(context_, {tcp::v4(), 0}),
@@ -20,8 +19,13 @@ MockHttpServer::MockHttpServer(std::vector<PlannedHttpResponse> responses)
       thread_([this] { serve(); }) {}
 
 MockHttpServer::~MockHttpServer() {
-    stop_requested_.store(true);
     if (thread_.joinable()) {
+        stop_requested_.store(true);
+        asio::io_context wake_context;
+        tcp::socket wake_socket{wake_context};
+        boost::system::error_code ignored;
+        wake_socket.connect(
+            {asio::ip::address_v4::loopback(), port()}, ignored);
         thread_.join();
     }
 }
@@ -45,24 +49,15 @@ const std::vector<CapturedHttpRequest>& MockHttpServer::requests() const {
 
 void MockHttpServer::serve() {
     try {
-        acceptor_.non_blocking(true);
         for (const auto& planned : responses_) {
             tcp::socket socket{context_};
-            while (!stop_requested_.load()) {
-                boost::system::error_code accept_error;
-                acceptor_.accept(socket, accept_error);
-                if (!accept_error) {
-                    break;
-                }
-                if (accept_error == asio::error::would_block ||
-                    accept_error == asio::error::try_again) {
-                    std::this_thread::sleep_for(1ms);
-                    continue;
-                }
-                throw boost::system::system_error{accept_error};
-            }
+            boost::system::error_code accept_error;
+            acceptor_.accept(socket, accept_error);
             if (stop_requested_.load()) {
                 return;
+            }
+            if (accept_error) {
+                throw boost::system::system_error{accept_error};
             }
 
             beast::flat_buffer buffer;
@@ -75,8 +70,13 @@ void MockHttpServer::serve() {
                 request.body(),
             });
 
-            if (planned.delay.count() > 0) {
-                std::this_thread::sleep_for(planned.delay);
+            if (planned.wait_for_disconnect) {
+                std::array<char, 1> probe{};
+                boost::system::error_code disconnect_error;
+                while (!disconnect_error) {
+                    socket.read_some(asio::buffer(probe), disconnect_error);
+                }
+                continue;
             }
 
             http::response<http::string_body> response{
@@ -84,7 +84,9 @@ void MockHttpServer::serve() {
                 request.version()};
             response.set(http::field::content_type, "application/json");
             response.keep_alive(false);
-            response.body() = planned.body;
+            response.body() = planned.body_factory
+                                  ? planned.body_factory(request.body())
+                                  : planned.body;
             response.prepare_payload();
 
             boost::system::error_code ignored;

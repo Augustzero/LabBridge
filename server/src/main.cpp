@@ -1,9 +1,9 @@
 #include "labbridge/core/logging.h"
 #include "labbridge/core/version.h"
-#include "labbridge/server/agent_control_http_controller.h"
-#include "labbridge/server/agent_report_http_controller.h"
-#include "labbridge/server/postgres_agent_control_executor.h"
-#include "labbridge/server/postgres_agent_report_executor.h"
+#include "labbridge/server/http/agent_control_http_controller.h"
+#include "labbridge/server/http/agent_report_http_controller.h"
+#include "labbridge/server/postgres/agent_control_executor.h"
+#include "labbridge/server/postgres/agent_report_executor.h"
 
 #include <drogon/drogon.h>
 

@@ -1,4 +1,4 @@
-#include "labbridge/agent/startup_handshake.h"
+#include "labbridge/agent/bootstrap/startup_handshake.h"
 #include "labbridge/core/version.h"
 #include "support/agent/mock_http_server.h"
 
@@ -18,6 +18,19 @@ using labbridge::test::support::MockHttpServer;
 using labbridge::test::support::local_server_url;
 using namespace std::chrono_literals;
 
+std::string heartbeat_response(std::string_view request_body) {
+    const auto request = Json::parse(request_body);
+    return Json{
+        {"ok", true},
+        {"data",
+         {
+             {"node_code", request.at("node_code")},
+             {"status", "online"},
+             {"reported_at", request.at("reported_at")},
+         }},
+    }.dump();
+}
+
 TEST(StartupHandshakeTest, RegistersHeartbeatsAndFetchesConfigInOrder) {
     MockHttpServer server{{
         {
@@ -26,7 +39,9 @@ TEST(StartupHandshakeTest, RegistersHeartbeatsAndFetchesConfigInOrder) {
         },
         {
             http::status::ok,
-            R"({"ok":true,"data":{"node_code":"phase20-node","status":"online"}})",
+            {},
+            false,
+            heartbeat_response,
         },
         {
             http::status::ok,

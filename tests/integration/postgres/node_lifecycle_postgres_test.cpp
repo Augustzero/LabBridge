@@ -1,8 +1,8 @@
 #include "labbridge/core/version.h"
-#include "labbridge/server/libpq_sql_session.h"
-#include "labbridge/server/node_service.h"
-#include "labbridge/server/postgres_node_repository.h"
-#include "labbridge/server/storage_mapping.h"
+#include "labbridge/server/postgres/libpq_sql_session.h"
+#include "labbridge/server/application/node_service.h"
+#include "labbridge/server/postgres/node_repository.h"
+#include "labbridge/server/postgres/storage_mapping.h"
 
 #include <gtest/gtest.h>
 

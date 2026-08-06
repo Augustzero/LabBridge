@@ -1,6 +1,6 @@
-#include "labbridge/agent/agent_config.h"
-#include "labbridge/agent/control_plane_client.h"
-#include "labbridge/agent/startup_handshake.h"
+#include "labbridge/agent/bootstrap/agent_config.h"
+#include "labbridge/agent/bootstrap/control_plane_client.h"
+#include "labbridge/agent/bootstrap/startup_handshake.h"
 #include "labbridge/core/logging.h"
 #include "labbridge/core/version.h"
 
