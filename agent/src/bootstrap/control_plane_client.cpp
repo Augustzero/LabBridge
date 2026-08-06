@@ -60,7 +60,7 @@ void validate_port(std::string_view port) {
 }
 
 ParsedServerUrl parse_server_url(std::string_view server_url) {
-    if (!server_url.starts_with(kHttpPrefix)) {
+    if (server_url.compare(0, kHttpPrefix.size(), kHttpPrefix) != 0) {
         throw std::invalid_argument(
             "only an http:// control plane URL is supported");
     }
@@ -69,7 +69,7 @@ ParsedServerUrl parse_server_url(std::string_view server_url) {
     }
 
     auto authority = server_url.substr(kHttpPrefix.size());
-    if (authority.ends_with('/')) {
+    if (!authority.empty() && authority.back() == '/') {
         authority.remove_suffix(1);
     }
     if (authority.empty()) {
@@ -93,7 +93,7 @@ ParsedServerUrl parse_server_url(std::string_view server_url) {
         if (suffix.empty()) {
             result.port = "80";
         } else {
-            if (!suffix.starts_with(':')) {
+            if (suffix.front() != ':') {
                 throw std::invalid_argument("invalid bracketed IPv6 port");
             }
             result.port = std::string{suffix.substr(1)};
