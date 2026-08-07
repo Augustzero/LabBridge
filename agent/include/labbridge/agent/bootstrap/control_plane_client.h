@@ -44,14 +44,26 @@ struct PulledAgentConfig {
 
 void validate_control_plane_url(std::string_view server_url);
 
-class ControlPlaneClient {
+class IRuntimeControlClient {
+public:
+    virtual ~IRuntimeControlClient() = default;
+
+    virtual void send_heartbeat(
+        const labbridge::core::NodeHeartbeat& heartbeat) const = 0;
+    virtual PulledAgentConfig fetch_config(
+        const std::string& node_code) const = 0;
+};
+
+class ControlPlaneClient final : public IRuntimeControlClient {
 public:
     ControlPlaneClient(std::string server_url,
                        std::chrono::milliseconds request_timeout);
 
     void register_node(const labbridge::core::NodeInfo& node) const;
-    void send_heartbeat(const labbridge::core::NodeHeartbeat& heartbeat) const;
-    PulledAgentConfig fetch_config(const std::string& node_code) const;
+    void send_heartbeat(
+        const labbridge::core::NodeHeartbeat& heartbeat) const override;
+    PulledAgentConfig fetch_config(
+        const std::string& node_code) const override;
 
 private:
     struct HttpResponse {

@@ -3,3 +3,7 @@ agent:
   name: phase20 agent
   server_url: http://127.0.0.1:18080/
   request_timeout_seconds: 7
+  heartbeat_interval_seconds: 15
+
+tasks:
+  poll_interval_seconds: 10

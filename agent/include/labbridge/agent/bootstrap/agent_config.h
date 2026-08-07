@@ -13,6 +13,8 @@ struct AgentStartupConfig {
     labbridge::core::NodeInfo node;
     std::string server_url;
     std::chrono::milliseconds request_timeout;
+    std::chrono::milliseconds heartbeat_interval;
+    std::chrono::milliseconds config_poll_interval;
 };
 
 class AgentConfigError final : public std::runtime_error {

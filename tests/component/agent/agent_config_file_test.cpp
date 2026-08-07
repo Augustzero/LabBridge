@@ -19,6 +19,8 @@ TEST(AgentConfigFileTest, LoadsConfigurationFromFile) {
     EXPECT_EQ(config.node.agent_version, labbridge::core::kVersion);
     EXPECT_EQ(config.server_url, "http://127.0.0.1:18080/");
     EXPECT_EQ(config.request_timeout, 7s);
+    EXPECT_EQ(config.heartbeat_interval, 15s);
+    EXPECT_EQ(config.config_poll_interval, 10s);
 }
 
 TEST(AgentConfigFileTest, ReportsMissingFilePath) {

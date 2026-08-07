@@ -9,6 +9,7 @@
 
 #include <chrono>
 #include <string>
+#include <type_traits>
 
 namespace {
 
@@ -17,6 +18,9 @@ using Json = nlohmann::json;
 using labbridge::test::support::MockHttpServer;
 using labbridge::test::support::local_server_url;
 using namespace std::chrono_literals;
+
+static_assert(std::is_base_of_v<labbridge::agent::IRuntimeControlClient,
+                                labbridge::agent::ControlPlaneClient>);
 
 std::string heartbeat_response(std::string_view request_body) {
     const auto request = Json::parse(request_body);
@@ -64,13 +68,15 @@ TEST(StartupHandshakeTest, RegistersHeartbeatsAndFetchesConfigInOrder) {
         local_server_url(server.port()),
         2s};
 
+    const auto fixed_reported_at = std::chrono::system_clock::from_time_t(0);
     const auto result = labbridge::agent::perform_startup_handshake(
         client,
         {
             "phase20-node",
             "phase20 agent",
             labbridge::core::kVersion,
-        });
+        },
+        fixed_reported_at);
     ASSERT_NO_THROW(server.join());
 
     EXPECT_EQ(result.node.node_code, "phase20-node");
@@ -94,10 +100,8 @@ TEST(StartupHandshakeTest, RegistersHeartbeatsAndFetchesConfigInOrder) {
     const auto heartbeat_body = Json::parse(heartbeat.body);
     EXPECT_EQ(heartbeat_body["node_code"], "phase20-node");
     EXPECT_EQ(heartbeat_body["agent_version"], labbridge::core::kVersion);
-    const auto reported_at = heartbeat_body["reported_at"].get<std::string>();
-    ASSERT_FALSE(reported_at.empty());
-    EXPECT_EQ(reported_at.size(), 20U);
-    EXPECT_EQ(reported_at.back(), 'Z');
+    EXPECT_EQ(heartbeat_body["reported_at"].get<std::string>(),
+              "1970-01-01T00:00:00Z");
 
     const auto& config = server.requests()[2];
     EXPECT_EQ(config.method, http::verb::get);

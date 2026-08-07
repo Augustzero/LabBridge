@@ -13,7 +13,8 @@
 namespace labbridge::agent {
 namespace {
 
-constexpr int kMaximumTimeoutSeconds = 300;
+constexpr int kMaximumRequestTimeoutSeconds = 300;
+constexpr int kMaximumIntervalSeconds = 86400;
 
 bool is_blank(const std::string& value) {
     for (const unsigned char ch : value) {
@@ -45,7 +46,8 @@ std::string required_string(const YAML::Node& object,
 
 int required_positive_integer(const YAML::Node& object,
                               const std::string& field,
-                              const std::string& path) {
+                              const std::string& path,
+                              int maximum) {
     const auto value = object[field];
     if (!value || !value.IsScalar()) {
         throw AgentConfigError(path + "." + field + " must be an integer");
@@ -53,10 +55,10 @@ int required_positive_integer(const YAML::Node& object,
 
     try {
         const auto result = value.as<int>();
-        if (result <= 0 || result > kMaximumTimeoutSeconds) {
+        if (result <= 0 || result > maximum) {
             throw AgentConfigError(
                 path + "." + field + " must be between 1 and " +
-                std::to_string(kMaximumTimeoutSeconds));
+                std::to_string(maximum));
         }
         return result;
     } catch (const AgentConfigError&) {
@@ -80,8 +82,31 @@ AgentStartupConfig parse_agent_config_node(const YAML::Node& root) {
     validate_control_plane_url(config.server_url);
 
     const auto timeout_seconds = required_positive_integer(
-        agent, "request_timeout_seconds", "agent");
+        agent,
+        "request_timeout_seconds",
+        "agent",
+        kMaximumRequestTimeoutSeconds);
     config.request_timeout = std::chrono::seconds{timeout_seconds};
+
+    const auto heartbeat_interval_seconds = required_positive_integer(
+        agent,
+        "heartbeat_interval_seconds",
+        "agent",
+        kMaximumIntervalSeconds);
+    config.heartbeat_interval =
+        std::chrono::seconds{heartbeat_interval_seconds};
+
+    const auto tasks = root["tasks"];
+    if (!tasks || !tasks.IsMap()) {
+        throw AgentConfigError("tasks configuration section is required");
+    }
+    const auto config_poll_interval_seconds = required_positive_integer(
+        tasks,
+        "poll_interval_seconds",
+        "tasks",
+        kMaximumIntervalSeconds);
+    config.config_poll_interval =
+        std::chrono::seconds{config_poll_interval_seconds};
     return config;
 }
 

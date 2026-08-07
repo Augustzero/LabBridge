@@ -18,6 +18,7 @@ add_library(labbridge_agent_bootstrap
     src/bootstrap/agent_config.cpp
     src/bootstrap/control_plane_client.cpp
     src/bootstrap/startup_handshake.cpp
+    src/bootstrap/utc_time.cpp
 )
 
 target_link_libraries(labbridge_agent_bootstrap
