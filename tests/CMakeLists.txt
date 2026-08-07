@@ -60,6 +60,14 @@ add_labbridge_test(
 )
 
 add_labbridge_test(
+    agent_runtime_test
+    SOURCES unit/agent/agent_runtime_test.cpp
+    LINK_LIBRARIES GTest::gtest_main labbridge_agent_runtime Threads::Threads
+    LABELS unit
+    TIMEOUT 10
+)
+
+add_labbridge_test(
     csv_parser_test
     SOURCES component/agent/csv_parser_test.cpp
     LINK_LIBRARIES

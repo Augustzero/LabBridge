@@ -35,6 +35,20 @@ target_include_directories(labbridge_agent_bootstrap
         ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
+add_library(labbridge_agent_runtime
+    src/runtime/agent_runtime.cpp
+)
+
+target_link_libraries(labbridge_agent_runtime
+    PUBLIC
+        labbridge_agent_bootstrap
+)
+
+target_include_directories(labbridge_agent_runtime
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
 add_executable(labbridge_agent src/main.cpp)
 target_link_libraries(labbridge_agent
     PRIVATE
