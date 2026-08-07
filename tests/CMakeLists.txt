@@ -114,6 +114,17 @@ add_labbridge_test(
 )
 
 add_labbridge_test(
+    process_signal_monitor_test
+    SOURCES component/agent/process_signal_monitor_test.cpp
+    LINK_LIBRARIES
+        GTest::gtest_main
+        labbridge_agent_bootstrap
+        Threads::Threads
+    LABELS component
+    TIMEOUT 10
+)
+
+add_labbridge_test(
     storage_mapping_test
     SOURCES unit/server/storage_mapping_test.cpp
     LINK_LIBRARIES GTest::gtest_main labbridge_server_postgres

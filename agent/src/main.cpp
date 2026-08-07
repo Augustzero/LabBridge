@@ -1,6 +1,8 @@
 #include "labbridge/agent/bootstrap/agent_config.h"
 #include "labbridge/agent/bootstrap/control_plane_client.h"
+#include "labbridge/agent/bootstrap/process_signal_monitor.h"
 #include "labbridge/agent/bootstrap/startup_handshake.h"
+#include "labbridge/agent/runtime/agent_runtime.h"
 #include "labbridge/core/logging.h"
 #include "labbridge/core/version.h"
 
@@ -32,6 +34,26 @@ int main(int argc, char* argv[]) {
             kComponent,
             "startup handshake completed; enabled tasks: " +
                 std::to_string(remote_config.tasks.size()));
+
+        labbridge::agent::SystemRuntimeTimeSource time_source;
+        labbridge::agent::AgentRuntime runtime{
+            config.node,
+            config.heartbeat_interval,
+            config.config_poll_interval,
+            client,
+            remote_config,
+            time_source};
+        labbridge::agent::ProcessSignalMonitor signal_monitor{[&runtime] {
+            labbridge::core::log_info(kComponent, "stop requested");
+            runtime.request_stop();
+        }};
+
+        labbridge::core::log_info(kComponent, "runtime control loop started");
+        const auto final_config = runtime.run();
+        labbridge::core::log_info(
+            kComponent,
+            "runtime control loop stopped; enabled tasks: " +
+                std::to_string(final_config.tasks.size()));
         return 0;
     } catch (const std::exception& error) {
         labbridge::core::log_error(kComponent, error.what());

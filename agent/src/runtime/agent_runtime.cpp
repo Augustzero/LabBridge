@@ -149,6 +149,10 @@ void AgentRuntime::refresh_config() {
     try {
         auto pulled_config = client_.fetch_config(node_.node_code);
         current_config_ = std::move(pulled_config);
+        labbridge::core::log_info(
+            kComponent,
+            "config updated; enabled_tasks=" +
+                std::to_string(current_config_.tasks.size()));
     } catch (const ControlPlaneClientError& error) {
         // 拉取失败时保留最后一次成功快照，下一周期再尝试替换。
         log_control_plane_failure("config fetch", error);

@@ -17,6 +17,7 @@ target_include_directories(labbridge_agent_domain
 add_library(labbridge_agent_bootstrap
     src/bootstrap/agent_config.cpp
     src/bootstrap/control_plane_client.cpp
+    src/bootstrap/process_signal_monitor.cpp
     src/bootstrap/startup_handshake.cpp
     src/bootstrap/utc_time.cpp
 )
@@ -27,6 +28,7 @@ target_link_libraries(labbridge_agent_bootstrap
     PRIVATE
         Boost::system
         nlohmann_json::nlohmann_json
+        Threads::Threads
         yaml-cpp
 )
 
@@ -54,6 +56,7 @@ target_link_libraries(labbridge_agent
     PRIVATE
         labbridge_agent_bootstrap
         labbridge_agent_domain
+        labbridge_agent_runtime
 )
 set_target_properties(
     labbridge_agent
