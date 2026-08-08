@@ -64,7 +64,7 @@ int main() {
         data_source.id,
         "phase7 collect local csv",
         "collect_parse_qc",
-        "manual",
+        "* * * * *",
         "csv_observation",
         "basic",
         true,

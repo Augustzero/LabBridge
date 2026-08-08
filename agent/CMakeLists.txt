@@ -68,6 +68,22 @@ target_include_directories(labbridge_agent_runtime
         ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
+add_library(labbridge_agent_scheduler
+    src/scheduler/task_scheduler.cpp
+)
+
+target_link_libraries(labbridge_agent_scheduler
+    PUBLIC
+        labbridge_agent_runtime
+        labbridge_core
+        Threads::Threads
+)
+
+target_include_directories(labbridge_agent_scheduler
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
 add_executable(labbridge_agent src/main.cpp)
 target_link_libraries(labbridge_agent
     PRIVATE

@@ -214,7 +214,7 @@ int main() {
         data_source.id,
         "phase19 disabled task",
         "collect_parse_qc",
-        "manual",
+        "* * * * *",
         "csv_observation",
         "basic",
         false,

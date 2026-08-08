@@ -115,7 +115,7 @@ TEST(Phase016AgentReportServiceTest, ProcessesManifestAndTaskRunReport) {
         data_source.id,
         "phase16 agent reported csv",
         "collect_parse_qc",
-        "manual",
+        "* * * * *",
         "csv_observation",
         "basic",
         true,

@@ -1,4 +1,5 @@
 add_library(labbridge_core
+    src/cron_schedule.cpp
     src/logging.cpp
 )
 

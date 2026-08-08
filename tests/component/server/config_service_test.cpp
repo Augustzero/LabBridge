@@ -127,6 +127,20 @@ TEST_F(ConfigServiceTest, RejectsMissingTaskFields) {
     }
 }
 
+TEST_F(ConfigServiceTest, RejectsCronSyntaxUnsupportedByAgentScheduler) {
+    const auto source = service_.create_data_source(data_source_request());
+    ASSERT_TRUE(source.status.ok) << source.status.message;
+    auto request = task_request(source.id);
+    request.schedule_expr = "0,30 * * * *";
+
+    const auto result = service_.create_task(request);
+
+    EXPECT_FALSE(result.status.ok);
+    EXPECT_TRUE(result.id.empty());
+    EXPECT_EQ(result.status.message,
+              "cron minute must be '*', '*/N', or an integer");
+}
+
 TEST_F(ConfigServiceTest, RejectsMissingAndCrossNodeDataSources) {
     auto missing_source = task_request("missing");
     const auto missing_result = service_.create_task(missing_source);

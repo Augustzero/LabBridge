@@ -109,6 +109,16 @@ public:
     std::vector<labbridge::agent::PulledAgentConfig> configs;
 };
 
+class RecordingConfigSink final : public labbridge::agent::IRuntimeConfigSink {
+public:
+    void replace_config(
+        std::vector<labbridge::core::TaskConfig> tasks) override {
+        snapshots.push_back(std::move(tasks));
+    }
+
+    std::vector<std::vector<labbridge::core::TaskConfig>> snapshots;
+};
+
 class RuntimeScenario {
 public:
     RuntimeScenario(
@@ -149,6 +159,31 @@ TEST(AgentRuntimeTest, StartsBothDeadlinesAfterHandshakeCompletion) {
     EXPECT_EQ(scenario.time_source.wait_deadlines.front(),
               SteadyTimePoint{47s});
     EXPECT_TRUE(scenario.client.calls.empty());
+}
+
+TEST(AgentRuntimeTest, PublishesInitialAndSuccessfulRefreshToConfigSink) {
+    FakeRuntimeClient client;
+    FakeRuntimeTimeSource time_source;
+    RecordingConfigSink sink;
+    client.configs.push_back(config_with_task("updated"));
+    auto initial = config_with_task("initial");
+    labbridge::agent::AgentRuntime runtime{
+        test_node(), 1h, 10s, client, std::move(initial), time_source, &sink};
+    time_source.on_wait = [&](SteadyTimePoint deadline) {
+        if (time_source.wait_deadlines.size() == 2U) {
+            runtime.request_stop();
+        } else {
+            time_source.advance_to(deadline);
+        }
+    };
+
+    static_cast<void>(runtime.run());
+
+    ASSERT_EQ(sink.snapshots.size(), 2U);
+    ASSERT_EQ(sink.snapshots[0].size(), 1U);
+    ASSERT_EQ(sink.snapshots[1].size(), 1U);
+    EXPECT_EQ(sink.snapshots[0][0].id, "initial");
+    EXPECT_EQ(sink.snapshots[1][0].id, "updated");
 }
 
 TEST(AgentRuntimeTest, UsesIndependentDeadlinesAndUtcHeartbeatTime) {

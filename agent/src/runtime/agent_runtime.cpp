@@ -69,13 +69,15 @@ AgentRuntime::AgentRuntime(labbridge::core::NodeInfo node,
                            std::chrono::milliseconds config_poll_interval,
                            IRuntimeControlClient& client,
                            PulledAgentConfig initial_config,
-                           IRuntimeTimeSource& time_source)
+                           IRuntimeTimeSource& time_source,
+                           IRuntimeConfigSink* config_sink)
     : node_(std::move(node)),
       heartbeat_interval_(heartbeat_interval),
       config_poll_interval_(config_poll_interval),
       client_(client),
       current_config_(std::move(initial_config)),
-      time_source_(time_source) {
+      time_source_(time_source),
+      config_sink_(config_sink) {
     if (heartbeat_interval_ <= std::chrono::milliseconds::zero() ||
         config_poll_interval_ <= std::chrono::milliseconds::zero()) {
         throw std::invalid_argument("runtime intervals must be positive");
@@ -83,6 +85,9 @@ AgentRuntime::AgentRuntime(labbridge::core::NodeInfo node,
 }
 
 PulledAgentConfig AgentRuntime::run() {
+    if (config_sink_ != nullptr) {
+        config_sink_->replace_config(current_config_.tasks);
+    }
     const auto started_at = time_source_.steady_now();
     auto next_heartbeat = started_at + heartbeat_interval_;
     auto next_config_poll = started_at + config_poll_interval_;
@@ -149,6 +154,9 @@ void AgentRuntime::refresh_config() {
     try {
         auto pulled_config = client_.fetch_config(node_.node_code);
         current_config_ = std::move(pulled_config);
+        if (config_sink_ != nullptr) {
+            config_sink_->replace_config(current_config_.tasks);
+        }
         labbridge::core::log_info(
             kComponent,
             "config updated; enabled_tasks=" +

@@ -1,7 +1,9 @@
 #include "labbridge/server/application/config_service.h"
 
+#include "labbridge/core/cron_schedule.h"
 #include "labbridge/core/logging.h"
 
+#include <stdexcept>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -52,6 +54,12 @@ ConfigCreateResult ConfigService::create_task(const CreateTaskRequest& request) 
     }
     if (request.schedule_expr.empty()) {
         return {labbridge::core::Status::failure("schedule_expr is required"), {}};
+    }
+    try {
+        static_cast<void>(
+            labbridge::core::CronSchedule::parse(request.schedule_expr));
+    } catch (const std::invalid_argument& error) {
+        return {labbridge::core::Status::failure(error.what()), {}};
     }
     if (request.parser_type.empty()) {
         return {labbridge::core::Status::failure("parser_type is required"), {}};

@@ -133,7 +133,7 @@ int main() {
         data_source.id,
         "phase18 reliable real report",
         "collect_parse_qc",
-        "manual",
+        "* * * * *",
         "csv_observation",
         "basic",
         true,

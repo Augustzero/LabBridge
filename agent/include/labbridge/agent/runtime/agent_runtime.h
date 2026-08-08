@@ -1,6 +1,7 @@
 #pragma once
 
 #include "labbridge/agent/bootstrap/control_plane_client.h"
+#include "labbridge/agent/runtime/runtime_config_sink.h"
 #include "labbridge/core/models.h"
 
 #include <atomic>
@@ -46,7 +47,8 @@ public:
                  std::chrono::milliseconds config_poll_interval,
                  IRuntimeControlClient& client,
                  PulledAgentConfig initial_config,
-                 IRuntimeTimeSource& time_source);
+                 IRuntimeTimeSource& time_source,
+                 IRuntimeConfigSink* config_sink = nullptr);
 
     PulledAgentConfig run();
     void request_stop() noexcept;
@@ -62,6 +64,7 @@ private:
     IRuntimeControlClient& client_;
     PulledAgentConfig current_config_;
     IRuntimeTimeSource& time_source_;
+    IRuntimeConfigSink* config_sink_;
     std::atomic<bool> stop_requested_{false};
 };
 

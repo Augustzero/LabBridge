@@ -105,7 +105,7 @@ TEST(Phase018AgentReportReliabilityTest, PreservesTransactionAndIdempotencyBehav
         data_source.id,
         "phase18 reliable report",
         "collect_parse_qc",
-        "manual",
+        "* * * * *",
         "csv_observation",
         "basic",
         true,

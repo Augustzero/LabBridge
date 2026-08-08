@@ -44,6 +44,14 @@ target_link_libraries(
 )
 
 add_labbridge_test(
+    cron_schedule_test
+    SOURCES unit/core/cron_schedule_test.cpp
+    LINK_LIBRARIES GTest::gtest_main labbridge_core
+    LABELS unit
+    TIMEOUT 10
+)
+
+add_labbridge_test(
     agent_config_test
     SOURCES unit/agent/agent_config_test.cpp
     LINK_LIBRARIES GTest::gtest_main labbridge_agent_bootstrap
@@ -63,6 +71,14 @@ add_labbridge_test(
     agent_runtime_test
     SOURCES unit/agent/agent_runtime_test.cpp
     LINK_LIBRARIES GTest::gtest_main labbridge_agent_runtime Threads::Threads
+    LABELS unit
+    TIMEOUT 10
+)
+
+add_labbridge_test(
+    task_scheduler_test
+    SOURCES unit/agent/task_scheduler_test.cpp
+    LINK_LIBRARIES GTest::gtest_main labbridge_agent_scheduler
     LABELS unit
     TIMEOUT 10
 )
@@ -128,6 +144,15 @@ add_labbridge_test(
         GTest::gtest_main
         labbridge_agent_bootstrap
         Threads::Threads
+    LABELS component
+    TIMEOUT 10
+)
+
+add_labbridge_test(
+    task_scheduler_lifecycle_test
+    SOURCES component/agent/task_scheduler_lifecycle_test.cpp
+    LINK_LIBRARIES
+        GTest::gtest_main labbridge_agent_scheduler Threads::Threads
     LABELS component
     TIMEOUT 10
 )
