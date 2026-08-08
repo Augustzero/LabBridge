@@ -2,8 +2,10 @@
 #include "labbridge/core/version.h"
 #include "labbridge/server/http/agent_control_http_controller.h"
 #include "labbridge/server/http/agent_report_http_controller.h"
+#include "labbridge/server/http/task_run_http_controller.h"
 #include "labbridge/server/postgres/agent_control_executor.h"
 #include "labbridge/server/postgres/agent_report_executor.h"
+#include "labbridge/server/postgres/task_run_executor.h"
 
 #include <drogon/drogon.h>
 
@@ -68,6 +70,16 @@ int main(int argc, char* argv[]) {
                     return report_executor->accept_task_run_report(request);
                 });
         controller->register_routes(app);
+
+        auto task_run_executor =
+            std::make_shared<labbridge::server::PostgresTaskRunExecutor>(
+                connection_info);
+        auto task_run_controller =
+            std::make_shared<labbridge::server::TaskRunHttpController>(
+                [task_run_executor](const labbridge::server::StartTaskRunRequest& request) {
+                    return task_run_executor->start(request);
+                });
+        task_run_controller->register_routes(app);
 
         auto control_executor =
             std::make_shared<labbridge::server::PostgresAgentControlExecutor>(

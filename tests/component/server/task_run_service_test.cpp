@@ -77,6 +77,80 @@ TEST_F(TaskRunServiceTest, StartsRunAndDefaultsEmptyTriggerToScheduled) {
     EXPECT_EQ(stored->trigger_type, "scheduled");
 }
 
+TEST_F(TaskRunServiceTest, CreatesAndReplaysScheduledRunByStableKey) {
+    const auto task_id = create_task();
+    labbridge::server::StartTaskRunRequest request;
+    request.node_code = "node-a";
+    request.task_id = task_id;
+    request.started_at = "2026-08-08T10:00:01Z";
+    request.trigger_type = "scheduled";
+    request.execution_key = "scheduled-key";
+    request.scheduled_for = "2026-08-08T10:00:00Z";
+
+    const auto created = service_.start(request);
+    const auto replayed = service_.start(request);
+
+    ASSERT_TRUE(created.status.ok) << created.status.message;
+    ASSERT_TRUE(replayed.status.ok) << replayed.status.message;
+    EXPECT_FALSE(created.replayed);
+    EXPECT_TRUE(replayed.replayed);
+    EXPECT_EQ(replayed.id, created.id);
+    const auto stored = service_.find_run(created.id);
+    ASSERT_TRUE(stored.has_value());
+    EXPECT_EQ(stored->execution_key, request.execution_key);
+    EXPECT_EQ(stored->scheduled_for, request.scheduled_for);
+}
+
+TEST_F(TaskRunServiceTest, RejectsScheduledKeyReusedForDifferentIdentity) {
+    const auto first_task_id = create_task();
+    const auto second_task_id = create_task();
+    labbridge::server::StartTaskRunRequest request;
+    request.node_code = "node-a";
+    request.task_id = first_task_id;
+    request.started_at = "2026-08-08T10:00:01Z";
+    request.trigger_type = "scheduled";
+    request.execution_key = "conflicting-key";
+    request.scheduled_for = "2026-08-08T10:00:00Z";
+    ASSERT_TRUE(service_.start(request).status.ok);
+
+    request.task_id = second_task_id;
+    const auto different_task = service_.start(request);
+    request.task_id = first_task_id;
+    request.scheduled_for = "2026-08-08T10:05:00Z";
+    const auto different_slot = service_.start(request);
+
+    EXPECT_FALSE(different_task.status.ok);
+    EXPECT_EQ(
+        different_task.status.code,
+        labbridge::core::StatusCode::Conflict);
+    EXPECT_FALSE(different_slot.status.ok);
+    EXPECT_EQ(
+        different_slot.status.code,
+        labbridge::core::StatusCode::Conflict);
+}
+
+TEST_F(TaskRunServiceTest, ValidatesScheduledStartContract) {
+    const auto task_id = create_task();
+    labbridge::server::StartTaskRunRequest request;
+    request.node_code = "node-a";
+    request.task_id = task_id;
+    request.started_at = "2026-08-08T10:00:01Z";
+    request.trigger_type = "scheduled";
+    request.execution_key = "key";
+    request.scheduled_for = "2026-02-29T10:00:00Z";
+
+    EXPECT_FALSE(service_.start(request).status.ok);
+    request.scheduled_for = "2026-08-08T10:00:00Z";
+    request.started_at = "2026-08-08 10:00:01";
+    EXPECT_FALSE(service_.start(request).status.ok);
+    request.started_at = "2026-08-08T10:00:01Z";
+    request.trigger_type = "manual";
+    EXPECT_FALSE(service_.start(request).status.ok);
+    request.trigger_type = "scheduled";
+    request.execution_key.assign(129, 'x');
+    EXPECT_FALSE(service_.start(request).status.ok);
+}
+
 TEST_F(TaskRunServiceTest, RejectsInvalidFinishRequests) {
     const auto missing_id = service_.finish({});
     labbridge::server::FinishTaskRunRequest invalid_status;

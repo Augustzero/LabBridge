@@ -1,5 +1,6 @@
 #pragma once
 
+#include "labbridge/agent/execution/task_execution_client.h"
 #include "labbridge/core/models.h"
 
 #include <chrono>
@@ -54,7 +55,8 @@ public:
         const std::string& node_code) const = 0;
 };
 
-class ControlPlaneClient final : public IRuntimeControlClient {
+class ControlPlaneClient final : public IRuntimeControlClient,
+                                 public ITaskExecutionClient {
 public:
     ControlPlaneClient(std::string server_url,
                        std::chrono::milliseconds request_timeout);
@@ -64,6 +66,12 @@ public:
         const labbridge::core::NodeHeartbeat& heartbeat) const override;
     PulledAgentConfig fetch_config(
         const std::string& node_code) const override;
+    StartTaskRunResult start_task_run(
+        const StartTaskRunRequest& request) const override;
+    RawFileManifestResult report_raw_file_manifest(
+        const RawFileManifestRequest& request) const override;
+    TaskRunReportResult report_task_run(
+        const TaskRunReportRequest& request) const override;
 
 private:
     struct HttpResponse {

@@ -1,8 +1,53 @@
 #include "labbridge/server/application/task_run_service.h"
 
+#include <cctype>
+#include <string_view>
 #include <utility>
 
 namespace labbridge::server {
+namespace {
+
+int decimal_component(std::string_view value, std::size_t offset, std::size_t length) {
+    int result = 0;
+    for (std::size_t index = offset; index < offset + length; ++index) {
+        if (!std::isdigit(static_cast<unsigned char>(value[index]))) {
+            return -1;
+        }
+        result = (result * 10) + (value[index] - '0');
+    }
+    return result;
+}
+
+bool is_leap_year(int year) {
+    return (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+}
+
+bool is_rfc3339_utc(std::string_view value) {
+    if (value.size() != 20 || value[4] != '-' || value[7] != '-' ||
+        value[10] != 'T' || value[13] != ':' || value[16] != ':' ||
+        value[19] != 'Z') {
+        return false;
+    }
+
+    const int year = decimal_component(value, 0, 4);
+    const int month = decimal_component(value, 5, 2);
+    const int day = decimal_component(value, 8, 2);
+    const int hour = decimal_component(value, 11, 2);
+    const int minute = decimal_component(value, 14, 2);
+    const int second = decimal_component(value, 17, 2);
+    if (year < 1 || month < 1 || month > 12 || hour < 0 || hour > 23 ||
+        minute < 0 || minute > 59 || second < 0 || second > 59) {
+        return false;
+    }
+    constexpr int kDaysByMonth[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    int maximum_day = kDaysByMonth[month - 1];
+    if (month == 2 && is_leap_year(year)) {
+        maximum_day = 29;
+    }
+    return day >= 1 && day <= maximum_day;
+}
+
+}  // namespace
 
 TaskRunService::TaskRunService(IConfigRepository& config_repository,
                                ITaskRunRepository& task_run_repository)
@@ -14,6 +59,33 @@ TaskRunCreateResult TaskRunService::start(const StartTaskRunRequest& request) {
     }
     if (request.task_id.empty()) {
         return {labbridge::core::Status::failure("task_id is required"), {}};
+    }
+    const bool scheduled_start =
+        !request.execution_key.empty() || !request.scheduled_for.empty();
+    if (scheduled_start) {
+        if (request.execution_key.empty()) {
+            return {labbridge::core::Status::failure("execution_key is required"), {}};
+        }
+        if (request.execution_key.size() > 128) {
+            return {labbridge::core::Status::failure(
+                        "execution_key must not exceed 128 characters"),
+                    {}};
+        }
+        if (request.trigger_type != "scheduled") {
+            return {labbridge::core::Status::failure(
+                        "trigger_type must be scheduled"),
+                    {}};
+        }
+        if (!is_rfc3339_utc(request.scheduled_for)) {
+            return {labbridge::core::Status::failure(
+                        "scheduled_for must be an RFC 3339 UTC timestamp"),
+                    {}};
+        }
+        if (!is_rfc3339_utc(request.started_at)) {
+            return {labbridge::core::Status::failure(
+                        "started_at must be an RFC 3339 UTC timestamp"),
+                    {}};
+        }
     }
 
     const auto task = config_repository_.find_task(request.task_id);
@@ -36,9 +108,33 @@ TaskRunCreateResult TaskRunService::start(const StartTaskRunRequest& request) {
     record.status = labbridge::core::TaskRunStatus::Running;
     record.started_at = request.started_at;
     record.trigger_type = request.trigger_type.empty() ? "scheduled" : request.trigger_type;
+    record.execution_key = request.execution_key;
+    record.scheduled_for = request.scheduled_for;
 
-    const auto id = task_run_repository_.create(std::move(record));
-    return {labbridge::core::Status::success(), id};
+    if (!scheduled_start) {
+        const auto id = task_run_repository_.create(std::move(record));
+        return {labbridge::core::Status::success(), id, false};
+    }
+
+    // 数据库唯一约束决定首次创建者；服务层只比较稳定的计划身份。
+    const auto started = task_run_repository_.create_or_find_scheduled(
+        std::move(record));
+    if (!started.created &&
+        (started.task_run.task_id != request.task_id ||
+         started.task_run.scheduled_for != request.scheduled_for)) {
+        return {
+            labbridge::core::Status::failure(
+                labbridge::core::StatusCode::Conflict,
+                "execution_key was already used for a different scheduled run"),
+            {},
+            false,
+        };
+    }
+    return {
+        labbridge::core::Status::success(),
+        started.task_run.id,
+        !started.created,
+    };
 }
 
 labbridge::core::Status TaskRunService::finish(const FinishTaskRunRequest& request) {

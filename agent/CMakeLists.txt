@@ -14,6 +14,22 @@ target_include_directories(labbridge_agent_domain
         ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
+add_library(labbridge_agent_execution
+    src/execution/task_execution_client.cpp
+)
+
+target_link_libraries(labbridge_agent_execution
+    PUBLIC
+        labbridge_core
+    PRIVATE
+        OpenSSL::Crypto
+)
+
+target_include_directories(labbridge_agent_execution
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
 add_library(labbridge_agent_bootstrap
     src/bootstrap/agent_config.cpp
     src/bootstrap/control_plane_client.cpp
@@ -25,6 +41,7 @@ add_library(labbridge_agent_bootstrap
 target_link_libraries(labbridge_agent_bootstrap
     PUBLIC
         labbridge_core
+        labbridge_agent_execution
     PRIVATE
         Boost::system
         nlohmann_json::nlohmann_json

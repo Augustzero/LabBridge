@@ -54,6 +54,8 @@ private:
 class InMemoryTaskRunRepository final : public ITaskRunRepository {
 public:
     std::string create(TaskRunRecord task_run) override;
+    ScheduledTaskRunStart create_or_find_scheduled(
+        TaskRunRecord task_run) override;
     std::optional<TaskRunRecord> find_by_id(
         const std::string& task_run_id) const override;
     void finish(TaskRunRecord task_run) override;
@@ -61,6 +63,7 @@ public:
 private:
     int next_task_run_id_{1};
     std::unordered_map<std::string, TaskRunRecord> task_runs_;
+    std::unordered_map<std::string, std::string> scheduled_runs_;
 };
 
 class InMemoryResultRepository final : public IResultRepository {

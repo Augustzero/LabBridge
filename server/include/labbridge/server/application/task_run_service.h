@@ -14,6 +14,8 @@ struct StartTaskRunRequest {
     std::string task_id;
     std::string started_at;
     std::string trigger_type{"scheduled"};
+    std::string execution_key;
+    std::string scheduled_for;
 };
 
 struct FinishTaskRunRequest {
@@ -29,6 +31,7 @@ struct FinishTaskRunRequest {
 struct TaskRunCreateResult {
     labbridge::core::Status status;
     std::string id;
+    bool replayed{false};
 };
 
 class TaskRunService {

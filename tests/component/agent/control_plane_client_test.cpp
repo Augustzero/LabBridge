@@ -423,4 +423,123 @@ TEST(ControlPlaneClientTest, RejectsResponseBodyAboveOneMebibyte) {
     ASSERT_NO_THROW(server.join());
 }
 
+TEST(ControlPlaneClientTest, SendsCompleteTaskExecutionContracts) {
+    MockHttpServer server{{
+        {
+            http::status::created,
+            R"({"ok":true,"data":{"task_run_id":"42","replayed":false}})",
+        },
+        {
+            http::status::created,
+            R"({"ok":true,"data":{"raw_file_ids":["51"],"replayed":false}})",
+        },
+        {
+            http::status::ok,
+            R"({"ok":true,"data":{"parsed_record_ids":["61"],"qc_result_ids":["71"],"alert_ids":["81"],"replayed":false}})",
+        },
+    }};
+    labbridge::agent::ControlPlaneClient client{
+        local_server_url(server.port()),
+        2s};
+
+    const auto execution_key =
+        labbridge::agent::make_scheduled_execution_key(
+            "node-a", "30", "2026-08-08T10:00:00Z");
+    const auto started = client.start_task_run({
+        "node-a",
+        "30",
+        execution_key,
+        "2026-08-08T10:00:00Z",
+        "2026-08-08T10:00:01Z",
+        "scheduled",
+    });
+    const auto manifest_key =
+        labbridge::agent::make_manifest_idempotency_key(
+            "node-a", started.task_run_id);
+    const auto manifest = client.report_raw_file_manifest({
+        started.task_run_id,
+        "node-a",
+        manifest_key,
+        {
+            {
+                "observations.csv",
+                "abc123",
+                "/work/archive/30/42/0-observations.csv",
+                128,
+                "2026-08-08T09:59:00Z",
+                "archived_local",
+            },
+        },
+    });
+    const auto report_key =
+        labbridge::agent::make_report_idempotency_key(
+            "node-a", started.task_run_id);
+    const auto report = client.report_task_run({
+        started.task_run_id,
+        "node-a",
+        report_key,
+        labbridge::core::TaskRunStatus::Failed,
+        "2026-08-08T10:00:02Z",
+        1,
+        1,
+        0,
+        "required field failed",
+        {
+            {
+                manifest.raw_file_ids.front(),
+                {
+                    "station-a",
+                    "device-a",
+                    "2026-08-08T09:59:00Z",
+                    R"({"temperature":42})",
+                },
+                "parsed",
+                {
+                    {"21", "failed", "failed", "station code is required"},
+                },
+            },
+        },
+    });
+    ASSERT_NO_THROW(server.join());
+
+    EXPECT_EQ(started.task_run_id, "42");
+    EXPECT_FALSE(started.replayed);
+    EXPECT_EQ(manifest.raw_file_ids, std::vector<std::string>{"51"});
+    EXPECT_EQ(report.parsed_record_ids, std::vector<std::string>{"61"});
+    EXPECT_EQ(report.qc_result_ids, std::vector<std::string>{"71"});
+    EXPECT_EQ(report.alert_ids, std::vector<std::string>{"81"});
+
+    ASSERT_EQ(server.requests().size(), 3U);
+    EXPECT_EQ(server.requests()[0].target, "/api/v1/task-runs/start");
+    EXPECT_EQ(server.requests()[1].target, "/api/v1/raw-files/manifest");
+    EXPECT_EQ(server.requests()[2].target, "/api/v1/task-runs/report");
+
+    const auto start_body = Json::parse(server.requests()[0].body);
+    EXPECT_EQ(start_body["execution_key"], execution_key);
+    EXPECT_EQ(start_body["scheduled_for"], "2026-08-08T10:00:00Z");
+    EXPECT_EQ(start_body["trigger_type"], "scheduled");
+
+    const auto manifest_body = Json::parse(server.requests()[1].body);
+    EXPECT_EQ(manifest_body["idempotency_key"], manifest_key);
+    ASSERT_EQ(manifest_body["files"].size(), 1U);
+    EXPECT_EQ(manifest_body["files"][0]["storage_path"],
+              "/work/archive/30/42/0-observations.csv");
+    EXPECT_EQ(manifest_body["files"][0]["size_bytes"], 128);
+
+    const auto report_body = Json::parse(server.requests()[2].body);
+    EXPECT_EQ(report_body["idempotency_key"], report_key);
+    EXPECT_EQ(report_body["status"], "failed");
+    ASSERT_EQ(report_body["parsed_records"].size(), 1U);
+    EXPECT_EQ(report_body["parsed_records"][0]["raw_file_id"], "51");
+    EXPECT_EQ(
+        report_body["parsed_records"][0]["payload_json"],
+        R"({"temperature":42})");
+    ASSERT_EQ(
+        report_body["parsed_records"][0]["qc_results"].size(),
+        1U);
+    EXPECT_EQ(
+        report_body["parsed_records"][0]["qc_results"][0]["qc_rule_id"],
+        "21");
+}
+
 }  // namespace

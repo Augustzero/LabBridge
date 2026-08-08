@@ -68,6 +68,14 @@ add_labbridge_test(
 )
 
 add_labbridge_test(
+    task_execution_client_test
+    SOURCES unit/agent/task_execution_client_test.cpp
+    LINK_LIBRARIES GTest::gtest_main labbridge_agent_execution
+    LABELS unit
+    TIMEOUT 10
+)
+
+add_labbridge_test(
     csv_parser_test
     SOURCES component/agent/csv_parser_test.cpp
     LINK_LIBRARIES
@@ -180,6 +188,16 @@ add_labbridge_test(
 )
 
 add_labbridge_test(
+    task_run_http_controller_test
+    SOURCES component/server/task_run_http_controller_test.cpp
+    LINK_LIBRARIES
+        GTest::gtest_main
+        labbridge_server_http
+        labbridge_server_test_support
+    LABELS component contract
+)
+
+add_labbridge_test(
     alert_service_test
     SOURCES component/server/alert_service_test.cpp
     LINK_LIBRARIES GTest::gtest_main labbridge_server_test_support
@@ -196,6 +214,12 @@ add_labbridge_postgres_test(
     executable_config_postgres_test
     SOURCES integration/postgres/executable_config_postgres_test.cpp
     LINK_LIBRARIES GTest::gtest labbridge_server_postgres
+)
+
+add_labbridge_postgres_test(
+    task_run_start_postgres_test
+    SOURCES integration/postgres/task_run_start_postgres_test.cpp
+    LINK_LIBRARIES GTest::gtest labbridge_server_postgres Threads::Threads
 )
 
 

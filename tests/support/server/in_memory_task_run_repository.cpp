@@ -14,6 +14,19 @@ std::string InMemoryTaskRunRepository::create(TaskRunRecord task_run) {
     return id;
 }
 
+ScheduledTaskRunStart InMemoryTaskRunRepository::create_or_find_scheduled(
+    TaskRunRecord task_run) {
+    const auto key = task_run.node_code + "\n" + task_run.execution_key;
+    const auto existing = scheduled_runs_.find(key);
+    if (existing != scheduled_runs_.end()) {
+        return {task_runs_.at(existing->second), false};
+    }
+
+    const auto id = create(std::move(task_run));
+    scheduled_runs_[key] = id;
+    return {task_runs_.at(id), true};
+}
+
 std::optional<TaskRunRecord> InMemoryTaskRunRepository::find_by_id(
     const std::string& task_run_id) const {
     const auto iter = task_runs_.find(task_run_id);

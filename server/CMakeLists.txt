@@ -33,6 +33,7 @@ add_library(labbridge_server_postgres
     src/postgres/qc_repository.cpp
     src/postgres/result_repository.cpp
     src/postgres/sql_transaction.cpp
+    src/postgres/task_run_executor.cpp
     src/postgres/task_run_repository.cpp
 )
 
@@ -46,6 +47,7 @@ add_library(labbridge_server_http
     src/http/agent_control_http_controller.cpp
     src/http/agent_report_http_controller.cpp
     src/http/http_json_response.cpp
+    src/http/task_run_http_controller.cpp
 )
 
 target_link_libraries(labbridge_server_http

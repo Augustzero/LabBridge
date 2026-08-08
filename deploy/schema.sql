@@ -48,8 +48,14 @@ CREATE TABLE IF NOT EXISTS task_runs (
     items_success INTEGER NOT NULL DEFAULT 0,
     items_failed INTEGER NOT NULL DEFAULT 0,
     error_summary TEXT,
-    trigger_type VARCHAR(32) NOT NULL DEFAULT 'scheduled'
+    trigger_type VARCHAR(32) NOT NULL DEFAULT 'scheduled',
+    execution_key VARCHAR(128),
+    scheduled_for TIMESTAMPTZ
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS task_runs_node_execution_key_uidx
+    ON task_runs (node_id, execution_key)
+    WHERE execution_key IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS raw_files (
     id BIGSERIAL PRIMARY KEY,
@@ -82,6 +88,9 @@ CREATE TABLE IF NOT EXISTS qc_rules (
     rule_type VARCHAR(64) NOT NULL,
     rule_config_json JSONB NOT NULL,
     enabled BOOLEAN NOT NULL DEFAULT true,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS task_qc_rules (
     task_id BIGINT NOT NULL REFERENCES tasks(id),
     qc_rule_id BIGINT NOT NULL REFERENCES qc_rules(id),
@@ -91,9 +100,6 @@ CREATE TABLE IF NOT EXISTS task_qc_rules (
 
 CREATE INDEX IF NOT EXISTS task_qc_rules_task_sort_idx
     ON task_qc_rules (task_id, sort_order, qc_rule_id);
-
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
 
 CREATE TABLE IF NOT EXISTS qc_results (
     id BIGSERIAL PRIMARY KEY,
