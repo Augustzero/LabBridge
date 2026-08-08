@@ -32,6 +32,19 @@ TaskRecord to_task_record(const SqlRow& row) {
     return record;
 }
 
+TaskQcRuleBinding to_task_qc_rule_binding(const SqlRow& row) {
+    TaskQcRuleBinding binding;
+    binding.task_id = storage::value_or_empty(row, "task_id");
+    binding.qc_rule_id = storage::value_or_empty(row, "qc_rule_id");
+    binding.rule_type = storage::value_or_empty(row, "rule_type");
+    binding.name = storage::value_or_empty(row, "name");
+    binding.rule_config_json =
+        storage::value_or_empty(row, "rule_config_json");
+    binding.sort_order = storage::int_or_zero(row, "sort_order");
+    return binding;
+}
+
+
 }  // namespace
 
 PostgresConfigRepository::PostgresConfigRepository(ISqlSession& session) : session_(session) {}
@@ -139,4 +152,69 @@ std::vector<TaskRecord> PostgresConfigRepository::find_enabled_tasks_by_node(
     return tasks;
 }
 
+std::vector<DataSourceRecord>
+PostgresConfigRepository::find_enabled_data_sources_by_node(
+    const std::string& node_code) const {
+    static const std::string sql =
+        "SELECT ds.id::text AS id, n.node_code, ds.source_type, ds.name, "
+        "ds.config_json::text AS config_json, "
+        "CASE WHEN ds.enabled THEN 'true' ELSE 'false' END AS enabled "
+        "FROM data_sources ds "
+        "JOIN nodes n ON n.id = ds.node_id "
+        "WHERE n.node_code = $1 AND ds.enabled = true "
+        "AND EXISTS ("
+        "  SELECT 1 FROM tasks t "
+        "  WHERE t.data_source_id = ds.id AND t.node_id = ds.node_id "
+        "    AND t.enabled = true"
+        ") "
+        "ORDER BY ds.id";
+
+    std::vector<DataSourceRecord> data_sources;
+    for (const auto& row : session_.query_all(sql, {node_code})) {
+        data_sources.push_back(to_data_source_record(row));
+    }
+    return data_sources;
+}
+
+std::vector<TaskQcRuleBinding>
+PostgresConfigRepository::find_enabled_task_qc_rules_by_node(
+    const std::string& node_code) const {
+    static const std::string sql =
+        "SELECT tqr.task_id::text AS task_id, "
+        "tqr.qc_rule_id::text AS qc_rule_id, "
+        "qr.rule_type, qr.name, "
+        "qr.rule_config_json::text AS rule_config_json, "
+        "tqr.sort_order::text AS sort_order "
+        "FROM task_qc_rules tqr "
+        "JOIN tasks t ON t.id = tqr.task_id "
+        "JOIN nodes n ON n.id = t.node_id "
+        "JOIN data_sources ds "
+        "  ON ds.id = t.data_source_id AND ds.node_id = t.node_id "
+        "JOIN qc_rules qr ON qr.id = tqr.qc_rule_id "
+        "WHERE n.node_code = $1 "
+        "  AND t.enabled = true "
+        "  AND ds.enabled = true "
+        "  AND qr.enabled = true "
+        "ORDER BY t.id, tqr.sort_order, qr.id";
+
+    std::vector<TaskQcRuleBinding> bindings;
+    for (const auto& row : session_.query_all(sql, {node_code})) {
+        bindings.push_back(to_task_qc_rule_binding(row));
+    }
+    return bindings;
+}
+
+void PostgresConfigRepository::bind_task_qc_rule(
+    const std::string& task_id,
+    const std::string& qc_rule_id,
+    int sort_order) {
+    static const std::string sql =
+        "INSERT INTO task_qc_rules (task_id, qc_rule_id, sort_order) "
+        "VALUES ($1::bigint, $2::bigint, $3::integer) "
+        "ON CONFLICT (task_id, qc_rule_id) DO UPDATE "
+        "SET sort_order = EXCLUDED.sort_order";
+    session_.execute(
+        sql,
+        {task_id, qc_rule_id, std::to_string(sort_order)});
+}
 }  // namespace labbridge::server

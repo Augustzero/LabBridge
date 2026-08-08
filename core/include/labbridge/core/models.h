@@ -47,7 +47,15 @@ struct TaskRunSummary {
 
 struct DataSourceConfig {
     std::string id;
+    std::string node_code;
     SourceType type{SourceType::LocalDirectory};
+    std::string name;
+    std::string config_json;
+};
+
+struct QcRuleConfig {
+    std::string id;
+    std::string rule_type;
     std::string name;
     std::string config_json;
 };
@@ -62,7 +70,8 @@ struct TaskConfig {
     std::string parser_type;
     std::string qc_profile;
     bool enabled{true};
-    std::vector<std::string> qc_rules;
+    DataSourceConfig data_source;
+    std::vector<QcRuleConfig> qc_rules;
 };
 
 struct ParsedRecord {

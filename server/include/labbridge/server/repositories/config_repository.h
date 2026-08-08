@@ -27,6 +27,16 @@ struct TaskRecord {
     std::string parser_type;
     std::string qc_profile;
     bool enabled{true};
+    std::vector<std::string> qc_rule_ids;
+};
+
+struct TaskQcRuleBinding {
+    std::string task_id;
+    std::string qc_rule_id;
+    std::string rule_type;
+    std::string name;
+    std::string rule_config_json;
+    int sort_order{0};
 };
 
 class IConfigRepository {
@@ -38,6 +48,13 @@ public:
     virtual std::string create_task(TaskRecord task) = 0;
     virtual std::optional<TaskRecord> find_task(const std::string& task_id) const = 0;
     virtual std::vector<TaskRecord> find_enabled_tasks_by_node(const std::string& node_code) const = 0;
+    virtual std::vector<DataSourceRecord> find_enabled_data_sources_by_node(
+        const std::string& node_code) const = 0;
+    virtual std::vector<TaskQcRuleBinding> find_enabled_task_qc_rules_by_node(
+        const std::string& node_code) const = 0;
+    virtual void bind_task_qc_rule(const std::string& task_id,
+                                   const std::string& qc_rule_id,
+                                   int sort_order) = 0;
 };
 
 }  // namespace labbridge::server

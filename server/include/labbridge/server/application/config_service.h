@@ -33,6 +33,12 @@ struct ConfigCreateResult {
     labbridge::core::Status status;
     std::string id;
 };
+struct ExecutableConfigProjection {
+    std::vector<TaskRecord> tasks;
+    std::vector<DataSourceRecord> data_sources;
+    std::vector<TaskQcRuleBinding> task_qc_rules;
+};
+
 
 class ConfigService {
 public:
@@ -41,6 +47,8 @@ public:
     ConfigCreateResult create_data_source(const CreateDataSourceRequest& request);
     ConfigCreateResult create_task(const CreateTaskRequest& request);
     std::vector<TaskRecord> find_enabled_tasks(const std::string& node_code) const;
+    ExecutableConfigProjection find_executable_config(
+        const std::string& node_code) const;
 
 private:
     INodeRepository& node_repository_;

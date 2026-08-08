@@ -23,7 +23,9 @@ using labbridge::test::support::local_server_url;
 using namespace std::chrono_literals;
 
 std::string config_response(const std::string& node_code,
-                            Json tasks = Json::array()) {
+                            Json tasks = Json::array(),
+                            Json data_sources = Json::array(),
+                            Json qc_rules = Json::array()) {
     Json data;
     data["node"] = {
         {"node_code", node_code},
@@ -32,6 +34,8 @@ std::string config_response(const std::string& node_code,
         {"status", "online"},
         {"last_heartbeat_at", "2026-07-18T10:00:00Z"},
     };
+    data["data_sources"] = std::move(data_sources);
+    data["qc_rules"] = std::move(qc_rules);
     data["tasks"] = std::move(tasks);
     return Json{{"ok", true}, {"data", std::move(data)}}.dump();
 }
@@ -179,7 +183,7 @@ TEST(ControlPlaneClientTest, PreservesHttpStatusForInvalidConfigField) {
     ASSERT_NO_THROW(server.join());
 }
 
-TEST(ControlPlaneClientTest, EncodesConfigPathAndMapsEnabledTasks) {
+TEST(ControlPlaneClientTest, MapsExecutableTaskAndIsolatesUnknownType) {
     const std::string node_code = "phase20 node/a";
     Json tasks = Json::array({
         {
@@ -187,15 +191,58 @@ TEST(ControlPlaneClientTest, EncodesConfigPathAndMapsEnabledTasks) {
             {"node_code", node_code},
             {"data_source_id", "source-20"},
             {"name", "phase20 task"},
-            {"task_type", "collect_parse_qc"},
+            {"task_type", "local_file_import"},
             {"schedule_expr", "*/5 * * * *"},
             {"parser_type", "csv_observation"},
             {"qc_profile", "basic"},
             {"enabled", true},
+            {"qc_rule_ids", Json::array({"rule-1", "rule-2"})},
+        },
+        {
+            {"id", "task-unsupported"},
+            {"node_code", node_code},
+            {"data_source_id", "source-20"},
+            {"name", "unsupported task"},
+            {"task_type", "ftp_import"},
+            {"schedule_expr", "*/5 * * * *"},
+            {"parser_type", "csv_observation"},
+            {"qc_profile", "basic"},
+            {"enabled", true},
+            {"qc_rule_ids", Json::array()},
+        },
+    });
+    Json data_sources = Json::array({
+        {
+            {"id", "source-20"},
+            {"node_code", node_code},
+            {"source_type", "local_directory"},
+            {"name", "phase22 source"},
+            {"config", {{"root_path", "/data/incoming"}, {"extension", ".csv"}}},
+        },
+    });
+    Json qc_rules = Json::array({
+        {
+            {"id", "rule-1"},
+            {"task_id", "task-20"},
+            {"rule_type", "required_fields"},
+            {"name", "required"},
+            {"config", Json::object()},
+        },
+        {
+            {"id", "rule-2"},
+            {"task_id", "task-20"},
+            {"rule_type", "basic_timestamp_format"},
+            {"name", "timestamp"},
+            {"config", Json::object()},
         },
     });
     MockHttpServer server{{
-        {http::status::ok, config_response(node_code, std::move(tasks))},
+        {http::status::ok,
+         config_response(
+             node_code,
+             std::move(tasks),
+             std::move(data_sources),
+             std::move(qc_rules))},
     }};
     labbridge::agent::ControlPlaneClient client{
         local_server_url(server.port()),
@@ -211,9 +258,15 @@ TEST(ControlPlaneClientTest, EncodesConfigPathAndMapsEnabledTasks) {
     const auto& task = config.tasks.front();
     EXPECT_EQ(task.id, "task-20");
     EXPECT_EQ(task.data_source_id, "source-20");
-    EXPECT_EQ(task.task_type, "collect_parse_qc");
-    EXPECT_EQ(task.qc_profile, "basic");
-    EXPECT_TRUE(task.enabled);
+    EXPECT_EQ(task.task_type, "local_file_import");
+    EXPECT_EQ(task.data_source.node_code, node_code);
+    EXPECT_EQ(task.data_source.name, "phase22 source");
+    EXPECT_EQ(
+        Json::parse(task.data_source.config_json)["extension"],
+        ".csv");
+    ASSERT_EQ(task.qc_rules.size(), 2U);
+    EXPECT_EQ(task.qc_rules[0].id, "rule-1");
+    EXPECT_EQ(task.qc_rules[1].id, "rule-2");
 
     ASSERT_EQ(server.requests().size(), 1U);
     EXPECT_EQ(server.requests().front().method, http::verb::get);

@@ -1,5 +1,7 @@
 #include "support/server/in_memory_repositories.h"
 
+#include <algorithm>
+
 #include <utility>
 
 namespace labbridge::server {
@@ -50,6 +52,75 @@ std::vector<TaskRecord> InMemoryConfigRepository::find_enabled_tasks_by_node(
         }
     }
     return tasks;
+}
+
+std::vector<DataSourceRecord>
+InMemoryConfigRepository::find_enabled_data_sources_by_node(
+    const std::string& node_code) const {
+    std::vector<DataSourceRecord> data_sources;
+    for (const auto& [id, data_source] : data_sources_) {
+        if (data_source.node_code == node_code && data_source.enabled) {
+            data_sources.push_back(data_source);
+        }
+    }
+    return data_sources;
+}
+
+std::vector<TaskQcRuleBinding>
+InMemoryConfigRepository::find_enabled_task_qc_rules_by_node(
+    const std::string& node_code) const {
+    std::vector<TaskQcRuleBinding> bindings;
+    for (const auto& binding : task_qc_rules_) {
+        const auto task = tasks_.find(binding.task_id);
+        if (task != tasks_.end() && task->second.node_code == node_code &&
+            task->second.enabled) {
+            bindings.push_back(binding);
+        }
+    }
+    std::sort(
+        bindings.begin(),
+        bindings.end(),
+        [](const TaskQcRuleBinding& left,
+           const TaskQcRuleBinding& right) {
+            if (left.task_id != right.task_id) {
+                return left.task_id < right.task_id;
+            }
+            if (left.sort_order != right.sort_order) {
+                return left.sort_order < right.sort_order;
+            }
+            return left.qc_rule_id < right.qc_rule_id;
+        });
+    return bindings;
+}
+
+void InMemoryConfigRepository::bind_task_qc_rule(
+    const std::string& task_id,
+    const std::string& qc_rule_id,
+    int sort_order) {
+    task_qc_rules_.push_back({
+        task_id,
+        qc_rule_id,
+        {},
+        {},
+        {},
+        sort_order,
+    });
+}
+
+void InMemoryConfigRepository::add_task_qc_rule_projection(
+    TaskQcRuleBinding binding) {
+    const auto existing = std::find_if(
+        task_qc_rules_.begin(),
+        task_qc_rules_.end(),
+        [&binding](const TaskQcRuleBinding& candidate) {
+            return candidate.task_id == binding.task_id &&
+                   candidate.qc_rule_id == binding.qc_rule_id;
+        });
+    if (existing == task_qc_rules_.end()) {
+        task_qc_rules_.push_back(std::move(binding));
+        return;
+    }
+    *existing = std::move(binding);
 }
 
 }  // namespace labbridge::server

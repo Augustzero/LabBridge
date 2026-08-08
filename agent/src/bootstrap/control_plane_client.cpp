@@ -1,5 +1,7 @@
 #include "labbridge/agent/bootstrap/control_plane_client.h"
 
+#include "labbridge/core/logging.h"
+
 #include <utility>
 
 #include <boost/asio/connect.hpp>
@@ -19,6 +21,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <unordered_map>
 
 namespace labbridge::agent {
 namespace {
@@ -482,10 +485,14 @@ PulledAgentConfig ControlPlaneClient::fetch_config(
         "/api/v1/agents/" + encode_path_segment(node_code) + "/config");
     const auto data = success_data(response.status, response.body);
     if (!data.contains("node") || !data["node"].is_object() ||
+        !data.contains("data_sources") ||
+        !data["data_sources"].is_array() ||
+        !data.contains("qc_rules") || !data["qc_rules"].is_array() ||
         !data.contains("tasks") || !data["tasks"].is_array()) {
         throw ControlPlaneClientError{
             ControlPlaneErrorKind::InvalidResponse,
-            "control plane config must contain node and tasks",
+            "control plane config must contain node, data_sources, "
+            "qc_rules and tasks",
             response.status};
     }
 
@@ -513,30 +520,171 @@ PulledAgentConfig ControlPlaneClient::fetch_config(
             response.status};
     }
 
-    for (const auto& task_value : data["tasks"]) {
-        if (!task_value.is_object()) {
-            throw ControlPlaneClientError{
-                ControlPlaneErrorKind::InvalidResponse,
-                "control plane config task must be an object",
-                response.status};
+    struct SourceProjection {
+        std::string id;
+        std::string node_code;
+        std::string source_type;
+        std::string name;
+        std::string config_json;
+    };
+    struct QcProjection {
+        std::string id;
+        std::string task_id;
+        std::string rule_type;
+        std::string name;
+        std::string config_json;
+    };
+
+    std::unordered_map<std::string, SourceProjection> sources;
+    for (const auto& value : data["data_sources"]) {
+        if (!value.is_object() || !value.contains("config") ||
+            !value["config"].is_object()) {
+            labbridge::core::log_warn(
+                "control-plane-client",
+                "ignoring invalid data source projection");
+            continue;
         }
-        labbridge::core::TaskConfig task;
-        task.id = required_string(task_value, "id", response.status);
-        task.node_code = required_string(task_value, "node_code", response.status);
-        task.data_source_id = required_string(task_value, "data_source_id", response.status);
-        task.name = required_string(task_value, "name", response.status);
-        task.task_type = required_string(task_value, "task_type", response.status);
-        task.schedule_expr = required_string(task_value, "schedule_expr", response.status);
-        task.parser_type = required_string(task_value, "parser_type", response.status);
-        task.qc_profile = required_string(task_value, "qc_profile", response.status);
-        task.enabled = required_boolean(task_value, "enabled", response.status);
-        if (task.node_code != node_code || !task.enabled) {
-            throw ControlPlaneClientError{
-                ControlPlaneErrorKind::InvalidResponse,
-                "control plane returned a task outside the requested enabled set",
-                response.status};
+        try {
+            SourceProjection source;
+            source.id = required_string(value, "id", response.status);
+            source.node_code =
+                required_string(value, "node_code", response.status);
+            source.source_type =
+                required_string(value, "source_type", response.status);
+            source.name = required_string(value, "name", response.status);
+            source.config_json = value["config"].dump();
+            sources[source.id] = std::move(source);
+        } catch (const ControlPlaneClientError& error) {
+            labbridge::core::log_warn(
+                "control-plane-client",
+                std::string{"ignoring invalid data source projection; reason="} +
+                    error.what());
         }
-        result.tasks.push_back(std::move(task));
+    }
+
+    std::unordered_map<std::string, QcProjection> rules;
+    for (const auto& value : data["qc_rules"]) {
+        if (!value.is_object() || !value.contains("config") ||
+            !value["config"].is_object()) {
+            labbridge::core::log_warn(
+                "control-plane-client",
+                "ignoring invalid QC rule projection");
+            continue;
+        }
+        try {
+            QcProjection rule;
+            rule.id = required_string(value, "id", response.status);
+            rule.task_id =
+                required_string(value, "task_id", response.status);
+            rule.rule_type =
+                required_string(value, "rule_type", response.status);
+            rule.name = required_string(value, "name", response.status);
+            rule.config_json = value["config"].dump();
+            rules[rule.task_id + "\n" + rule.id] = std::move(rule);
+        } catch (const ControlPlaneClientError& error) {
+            labbridge::core::log_warn(
+                "control-plane-client",
+                std::string{"ignoring invalid QC rule projection; reason="} +
+                    error.what());
+        }
+    }
+
+    for (const auto& value : data["tasks"]) {
+        std::string task_id{"<unknown>"};
+        try {
+            if (!value.is_object()) {
+                throw ControlPlaneClientError{
+                    ControlPlaneErrorKind::InvalidResponse,
+                    "control plane config task must be an object",
+                    response.status};
+            }
+
+            labbridge::core::TaskConfig task;
+            task.id = required_string(value, "id", response.status);
+            task_id = task.id;
+            task.node_code =
+                required_string(value, "node_code", response.status);
+            task.data_source_id =
+                required_string(value, "data_source_id", response.status);
+            task.name = required_string(value, "name", response.status);
+            task.task_type =
+                required_string(value, "task_type", response.status);
+            task.schedule_expr =
+                required_string(value, "schedule_expr", response.status);
+            task.parser_type =
+                required_string(value, "parser_type", response.status);
+            task.qc_profile =
+                required_string(value, "qc_profile", response.status);
+            task.enabled =
+                required_boolean(value, "enabled", response.status);
+            if (!value.contains("qc_rule_ids") ||
+                !value["qc_rule_ids"].is_array()) {
+                throw ControlPlaneClientError{
+                    ControlPlaneErrorKind::InvalidResponse,
+                    "control plane task qc_rule_ids must be an array",
+                    response.status};
+            }
+            if (task.node_code != node_code || !task.enabled) {
+                throw ControlPlaneClientError{
+                    ControlPlaneErrorKind::InvalidResponse,
+                    "task is outside the requested enabled set",
+                    response.status};
+            }
+            if (task.task_type != "local_file_import" ||
+                task.parser_type != "csv_observation") {
+                throw ControlPlaneClientError{
+                    ControlPlaneErrorKind::InvalidResponse,
+                    "task uses an unsupported task or parser type",
+                    response.status};
+            }
+
+            const auto source = sources.find(task.data_source_id);
+            if (source == sources.end() ||
+                source->second.node_code != node_code ||
+                source->second.source_type != "local_directory") {
+                throw ControlPlaneClientError{
+                    ControlPlaneErrorKind::InvalidResponse,
+                    "task references an unavailable or unsupported data source",
+                    response.status};
+            }
+            task.data_source = {
+                source->second.id,
+                source->second.node_code,
+                labbridge::core::SourceType::LocalDirectory,
+                source->second.name,
+                source->second.config_json,
+            };
+
+            for (const auto& rule_id_value : value["qc_rule_ids"]) {
+                if (!rule_id_value.is_string()) {
+                    throw ControlPlaneClientError{
+                        ControlPlaneErrorKind::InvalidResponse,
+                        "task qc_rule_ids entries must be strings",
+                        response.status};
+                }
+                const auto rule_id = rule_id_value.get<std::string>();
+                const auto rule = rules.find(task.id + "\n" + rule_id);
+                if (rule == rules.end() ||
+                    (rule->second.rule_type != "required_fields" &&
+                     rule->second.rule_type != "basic_timestamp_format")) {
+                    throw ControlPlaneClientError{
+                        ControlPlaneErrorKind::InvalidResponse,
+                        "task references an unavailable or unsupported QC rule",
+                        response.status};
+                }
+                task.qc_rules.push_back({
+                    rule->second.id,
+                    rule->second.rule_type,
+                    rule->second.name,
+                    rule->second.config_json,
+                });
+            }
+            result.tasks.push_back(std::move(task));
+        } catch (const ControlPlaneClientError& error) {
+            labbridge::core::log_warn(
+                "control-plane-client",
+                "skipping task_id=" + task_id + "; reason=" + error.what());
+        }
     }
     return result;
 }

@@ -33,12 +33,22 @@ public:
         const std::string& task_id) const override;
     std::vector<TaskRecord> find_enabled_tasks_by_node(
         const std::string& node_code) const override;
+    std::vector<DataSourceRecord> find_enabled_data_sources_by_node(
+        const std::string& node_code) const override;
+    std::vector<TaskQcRuleBinding> find_enabled_task_qc_rules_by_node(
+        const std::string& node_code) const override;
+    void bind_task_qc_rule(const std::string& task_id,
+                           const std::string& qc_rule_id,
+                           int sort_order) override;
+    void add_task_qc_rule_projection(TaskQcRuleBinding binding);
+
 
 private:
     int next_data_source_id_{1};
     int next_task_id_{1};
     std::unordered_map<std::string, DataSourceRecord> data_sources_;
     std::unordered_map<std::string, TaskRecord> tasks_;
+    std::vector<TaskQcRuleBinding> task_qc_rules_;
 };
 
 class InMemoryTaskRunRepository final : public ITaskRunRepository {

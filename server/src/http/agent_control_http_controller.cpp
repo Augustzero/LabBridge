@@ -1,5 +1,6 @@
 #include "labbridge/server/http/agent_control_http_controller.h"
 
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -60,6 +61,43 @@ labbridge::core::NodeHeartbeat parse_heartbeat(const Json::Value& body) {
 std::string node_status(labbridge::core::NodeStatus status) {
     return status == labbridge::core::NodeStatus::Online ? "online" : "offline";
 }
+std::string source_type(labbridge::core::SourceType type) {
+    switch (type) {
+        case labbridge::core::SourceType::LocalDirectory:
+            return "local_directory";
+        case labbridge::core::SourceType::Ftp:
+            return "ftp";
+        case labbridge::core::SourceType::Oracle:
+            return "oracle";
+    }
+    throw std::runtime_error("unsupported data source type");
+}
+
+Json::Value stored_json_object(const std::string& text,
+                               const std::string& field) {
+    Json::CharReaderBuilder builder;
+    auto reader = std::unique_ptr<Json::CharReader>{builder.newCharReader()};
+    Json::Value value;
+    std::string errors;
+    if (!reader->parse(
+            text.data(), text.data() + text.size(), &value, &errors) ||
+        !value.isObject()) {
+        throw std::runtime_error(field + " must contain a JSON object");
+    }
+    return value;
+}
+
+Json::Value data_source_json(const DataSourceRecord& data_source) {
+    Json::Value value;
+    value["id"] = data_source.id;
+    value["node_code"] = data_source.node_code;
+    value["source_type"] = source_type(data_source.source_type);
+    value["name"] = data_source.name;
+    value["config"] =
+        stored_json_object(data_source.config_json, "data source config");
+    return value;
+}
+
 
 Json::Value task_json(const TaskRecord& task) {
     Json::Value value;
@@ -72,8 +110,23 @@ Json::Value task_json(const TaskRecord& task) {
     value["parser_type"] = task.parser_type;
     value["qc_profile"] = task.qc_profile;
     value["enabled"] = task.enabled;
+    value["qc_rule_ids"] = Json::Value{Json::arrayValue};
+    for (const auto& qc_rule_id : task.qc_rule_ids) {
+        value["qc_rule_ids"].append(qc_rule_id);
+    }
     return value;
 }
+Json::Value qc_rule_json(const TaskQcRuleBinding& binding) {
+    Json::Value value;
+    value["id"] = binding.qc_rule_id;
+    value["task_id"] = binding.task_id;
+    value["rule_type"] = binding.rule_type;
+    value["name"] = binding.name;
+    value["config"] =
+        stored_json_object(binding.rule_config_json, "QC rule config");
+    return value;
+}
+
 
 Json::Value config_json(const AgentConfigResult& result) {
     Json::Value data;
@@ -83,6 +136,16 @@ Json::Value config_json(const AgentConfigResult& result) {
     data["node"]["agent_version"] = node.info.agent_version;
     data["node"]["status"] = node_status(node.status);
     data["node"]["last_heartbeat_at"] = node.last_heartbeat_at;
+
+    data["data_sources"] = Json::Value{Json::arrayValue};
+    for (const auto& data_source : result.data_sources) {
+        data["data_sources"].append(data_source_json(data_source));
+    }
+
+    data["qc_rules"] = Json::Value{Json::arrayValue};
+    for (const auto& binding : result.task_qc_rules) {
+        data["qc_rules"].append(qc_rule_json(binding));
+    }
 
     data["tasks"] = Json::Value{Json::arrayValue};
     for (const auto& task : result.enabled_tasks) {

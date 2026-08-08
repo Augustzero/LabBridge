@@ -14,6 +14,13 @@ public:
     std::string create_task(TaskRecord task) override;
     std::optional<TaskRecord> find_task(const std::string& task_id) const override;
     std::vector<TaskRecord> find_enabled_tasks_by_node(const std::string& node_code) const override;
+    std::vector<DataSourceRecord> find_enabled_data_sources_by_node(
+        const std::string& node_code) const override;
+    std::vector<TaskQcRuleBinding> find_enabled_task_qc_rules_by_node(
+        const std::string& node_code) const override;
+    void bind_task_qc_rule(const std::string& task_id,
+                           const std::string& qc_rule_id,
+                           int sort_order) override;
 
 private:
     ISqlSession& session_;

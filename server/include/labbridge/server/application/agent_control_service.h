@@ -15,6 +15,8 @@ struct AgentConfigResult {
     labbridge::core::Status status;
     std::optional<NodeRecord> node;
     std::vector<TaskRecord> enabled_tasks;
+    std::vector<DataSourceRecord> data_sources;
+    std::vector<TaskQcRuleBinding> task_qc_rules;
 };
 
 class AgentControlService {

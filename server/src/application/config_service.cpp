@@ -1,5 +1,10 @@
 #include "labbridge/server/application/config_service.h"
 
+#include "labbridge/core/logging.h"
+
+#include <unordered_map>
+#include <unordered_set>
+
 #include <utility>
 
 namespace labbridge::server {
@@ -83,6 +88,61 @@ std::vector<TaskRecord> ConfigService::find_enabled_tasks(const std::string& nod
         return {};
     }
     return config_repository_.find_enabled_tasks_by_node(node_code);
+}
+
+ExecutableConfigProjection ConfigService::find_executable_config(
+    const std::string& node_code) const {
+    ExecutableConfigProjection result;
+    if (node_code.empty()) {
+        return result;
+    }
+
+    const auto tasks =
+        config_repository_.find_enabled_tasks_by_node(node_code);
+    const auto data_sources =
+        config_repository_.find_enabled_data_sources_by_node(node_code);
+    const auto bindings =
+        config_repository_.find_enabled_task_qc_rules_by_node(node_code);
+
+    std::unordered_map<std::string, DataSourceRecord> sources_by_id;
+    for (const auto& source : data_sources) {
+        sources_by_id.emplace(source.id, source);
+    }
+
+    std::unordered_map<std::string, std::vector<TaskQcRuleBinding>>
+        bindings_by_task;
+    for (const auto& binding : bindings) {
+        bindings_by_task[binding.task_id].push_back(binding);
+    }
+
+    std::unordered_set<std::string> referenced_source_ids;
+    for (auto task : tasks) {
+        const auto source = sources_by_id.find(task.data_source_id);
+        if (source == sources_by_id.end()) {
+            labbridge::core::log_error(
+                "config-service",
+                "skipping task_id=" + task.id +
+                    "; enabled same-node data source is unavailable");
+            continue;
+        }
+
+        const auto task_bindings = bindings_by_task.find(task.id);
+        if (task_bindings != bindings_by_task.end()) {
+            for (const auto& binding : task_bindings->second) {
+                task.qc_rule_ids.push_back(binding.qc_rule_id);
+                result.task_qc_rules.push_back(binding);
+            }
+        }
+        referenced_source_ids.insert(source->first);
+        result.tasks.push_back(std::move(task));
+    }
+
+    for (const auto& source : data_sources) {
+        if (referenced_source_ids.count(source.id) != 0U) {
+            result.data_sources.push_back(source);
+        }
+    }
+    return result;
 }
 
 }  // namespace labbridge::server

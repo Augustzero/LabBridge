@@ -35,10 +35,13 @@ AgentConfigResult AgentControlService::find_config(
                 {}};
     }
 
+    auto projection = config_service_.find_executable_config(node_code);
     AgentConfigResult result;
     result.status = labbridge::core::Status::success();
     result.node = std::move(node);
-    result.enabled_tasks = config_service_.find_enabled_tasks(node_code);
+    result.enabled_tasks = std::move(projection.tasks);
+    result.data_sources = std::move(projection.data_sources);
+    result.task_qc_rules = std::move(projection.task_qc_rules);
     return result;
 }
 

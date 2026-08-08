@@ -59,6 +59,8 @@ TEST(StartupHandshakeTest, RegistersHeartbeatsAndFetchesConfigInOrder) {
                         "status": "online",
                         "last_heartbeat_at": "2026-07-18T10:00:00Z"
                     },
+                    "data_sources": [],
+                    "qc_rules": [],
                     "tasks": []
                 }
             })",

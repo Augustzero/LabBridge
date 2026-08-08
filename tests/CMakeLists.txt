@@ -163,6 +163,16 @@ add_labbridge_test(
 )
 
 add_labbridge_test(
+    agent_config_projection_test
+    SOURCES component/server/agent_config_projection_test.cpp
+    LINK_LIBRARIES
+        GTest::gtest_main
+        labbridge_server_http
+        labbridge_server_test_support
+    LABELS component contract
+)
+
+add_labbridge_test(
     task_run_service_test
     SOURCES component/server/task_run_service_test.cpp
     LINK_LIBRARIES GTest::gtest_main labbridge_server_test_support
@@ -181,6 +191,13 @@ add_labbridge_postgres_test(
     SOURCES integration/postgres/node_lifecycle_postgres_test.cpp
     LINK_LIBRARIES GTest::gtest labbridge_server_postgres
 )
+
+add_labbridge_postgres_test(
+    executable_config_postgres_test
+    SOURCES integration/postgres/executable_config_postgres_test.cpp
+    LINK_LIBRARIES GTest::gtest labbridge_server_postgres
+)
+
 
 add_labbridge_smoke(
     labbridge_phase1_smoke
