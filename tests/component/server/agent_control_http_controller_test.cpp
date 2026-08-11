@@ -9,7 +9,7 @@
 #include <drogon/HttpResponse.h>
 #include <json/writer.h>
 
-#include <cassert>
+#include <gtest/gtest.h>
 #include <stdexcept>
 #include <string>
 
@@ -38,7 +38,10 @@ drogon::HttpResponsePtr invoke_register(
         [&response](const drogon::HttpResponsePtr& current) {
             response = current;
         });
-    assert(response != nullptr);
+    if (response == nullptr) {
+        ADD_FAILURE() << "controller did not invoke response callback";
+        return drogon::HttpResponse::newHttpResponse();
+    }
     return response;
 }
 
@@ -56,7 +59,10 @@ drogon::HttpResponsePtr invoke_heartbeat(
         [&response](const drogon::HttpResponsePtr& current) {
             response = current;
         });
-    assert(response != nullptr);
+    if (response == nullptr) {
+        ADD_FAILURE() << "controller did not invoke response callback";
+        return drogon::HttpResponse::newHttpResponse();
+    }
     return response;
 }
 
@@ -69,24 +75,34 @@ drogon::HttpResponsePtr invoke_config(
         [&response](const drogon::HttpResponsePtr& current) {
             response = current;
         });
-    assert(response != nullptr);
+    if (response == nullptr) {
+        ADD_FAILURE() << "controller did not invoke response callback";
+        return drogon::HttpResponse::newHttpResponse();
+    }
     return response;
 }
 
-const Json::Value& response_json(const drogon::HttpResponsePtr& response) {
+Json::Value response_json(const drogon::HttpResponsePtr& response) {
+    if (response == nullptr) {
+        ADD_FAILURE() << "response is null";
+        return {};
+    }
     const auto& json = response->getJsonObject();
-    assert(json != nullptr);
+    if (json == nullptr) {
+        ADD_FAILURE() << "response body is not JSON";
+        return {};
+    }
     return *json;
 }
 
 void assert_error(const drogon::HttpResponsePtr& response,
                   drogon::HttpStatusCode expected_status,
                   const std::string& expected_code) {
-    assert(response->statusCode() == expected_status);
+    ASSERT_EQ(response->statusCode(), expected_status);
     const auto& json = response_json(response);
-    assert(!json["ok"].asBool());
-    assert(json["error"]["code"].asString() == expected_code);
-    assert(!json["error"]["message"].asString().empty());
+    EXPECT_FALSE(json["ok"].asBool());
+    EXPECT_EQ(json["error"]["code"].asString(), expected_code);
+    EXPECT_FALSE(json["error"]["message"].asString().empty());
 }
 
 Json::Value registration_body(const std::string& node_code,
@@ -108,7 +124,7 @@ Json::Value heartbeat_body(const std::string& node_code) {
 
 }  // namespace
 
-int main() {
+TEST(AgentControlHttpControllerTest, MapsRegistrationHeartbeatConfigAndErrors) {
     labbridge::server::InMemoryNodeRepository node_repository;
     labbridge::server::InMemoryConfigRepository config_repository;
     labbridge::server::NodeService node_service{node_repository};
@@ -156,11 +172,11 @@ int main() {
     const auto register_response = invoke_register(
         controller,
         write_json(registration_body(node_code, "phase19 HTTP node")));
-    assert(register_response->statusCode() == drogon::k201Created);
-    assert(response_json(register_response)["ok"].asBool());
-    assert(response_json(register_response)["data"]["node_code"].asString() ==
+    EXPECT_TRUE(register_response->statusCode() == drogon::k201Created);
+    EXPECT_TRUE(response_json(register_response)["ok"].asBool());
+    EXPECT_TRUE(response_json(register_response)["data"]["node_code"].asString() ==
            node_code);
-    assert(response_json(register_response)["data"]["status"].asString() ==
+    EXPECT_TRUE(response_json(register_response)["data"]["status"].asString() ==
            "offline");
 
     auto missing_reported_at = heartbeat_body(node_code);
@@ -184,8 +200,8 @@ int main() {
 
     const auto heartbeat_response =
         invoke_heartbeat(controller, heartbeat_body(node_code));
-    assert(heartbeat_response->statusCode() == drogon::k200OK);
-    assert(response_json(heartbeat_response)["data"]["status"].asString() ==
+    EXPECT_TRUE(heartbeat_response->statusCode() == drogon::k200OK);
+    EXPECT_TRUE(response_json(heartbeat_response)["data"]["status"].asString() ==
            "online");
 
     const auto data_source = config_service.create_data_source({
@@ -195,7 +211,7 @@ int main() {
         R"({"path":"tests/fixtures/agent","pattern":"*.csv"})",
         true,
     });
-    assert(data_source.status.ok);
+    EXPECT_TRUE(data_source.status.ok);
 
     const auto enabled_task = config_service.create_task({
         node_code,
@@ -207,7 +223,7 @@ int main() {
         "basic",
         true,
     });
-    assert(enabled_task.status.ok);
+    EXPECT_TRUE(enabled_task.status.ok);
 
     const auto disabled_task = config_service.create_task({
         node_code,
@@ -219,7 +235,7 @@ int main() {
         "basic",
         false,
     });
-    assert(disabled_task.status.ok);
+    EXPECT_TRUE(disabled_task.status.ok);
 
     assert_error(
         invoke_config(controller, ""),
@@ -231,19 +247,20 @@ int main() {
         "not_found");
 
     const auto config_response = invoke_config(controller, node_code);
-    assert(config_response->statusCode() == drogon::k200OK);
-    const auto& config = response_json(config_response)["data"];
-    assert(config["node"]["node_code"].asString() == node_code);
-    assert(config["node"]["status"].asString() == "online");
-    assert(config["node"]["agent_version"].asString() ==
+    EXPECT_TRUE(config_response->statusCode() == drogon::k200OK);
+    const auto config_response_json = response_json(config_response);
+    const auto& config = config_response_json["data"];
+    EXPECT_TRUE(config["node"]["node_code"].asString() == node_code);
+    EXPECT_TRUE(config["node"]["status"].asString() == "online");
+    EXPECT_TRUE(config["node"]["agent_version"].asString() ==
            labbridge::core::kVersion);
-    assert(config["tasks"].isArray());
-    assert(config["tasks"].size() == 1);
-    assert(config["tasks"][Json::ArrayIndex{0}]["id"].asString() ==
+    EXPECT_TRUE(config["tasks"].isArray());
+    EXPECT_TRUE(config["tasks"].size() == 1);
+    EXPECT_TRUE(config["tasks"][Json::ArrayIndex{0}]["id"].asString() ==
            enabled_task.id);
-    assert(config["tasks"][Json::ArrayIndex{0}]["data_source_id"].asString() ==
+    EXPECT_TRUE(config["tasks"][Json::ArrayIndex{0}]["data_source_id"].asString() ==
            data_source.id);
-    assert(config["tasks"][Json::ArrayIndex{0}]["enabled"].asBool());
+    EXPECT_TRUE(config["tasks"][Json::ArrayIndex{0}]["enabled"].asBool());
 
     labbridge::server::AgentControlHttpController throwing_controller{
         [](const labbridge::core::NodeInfo&) -> labbridge::core::Status {
@@ -263,11 +280,10 @@ int main() {
         internal_response,
         drogon::k500InternalServerError,
         "internal_error");
-    assert(response_json(internal_response)["error"]["message"].asString() ==
+    EXPECT_TRUE(response_json(internal_response)["error"]["message"].asString() ==
            "internal server error");
-    assert(response_json(internal_response)["error"]["message"]
+    EXPECT_TRUE(response_json(internal_response)["error"]["message"]
                .asString()
                .find("password") == std::string::npos);
 
-    return 0;
 }

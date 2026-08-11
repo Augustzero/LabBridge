@@ -7,7 +7,7 @@
 #include "labbridge/server/application/result_service.h"
 #include "labbridge/server/repositories/task_run_repository.h"
 
-#include <cassert>
+#include <gtest/gtest.h>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -182,7 +182,7 @@ private:
 
 }  // namespace
 
-int main() {
+TEST(AlertServiceFlowTest, CreatesAlertsOnlyForNonPassingQc) {
     RecordingSqlSession session;
     labbridge::server::InMemoryTaskRunRepository task_run_repository;
     labbridge::server::PostgresResultRepository result_repository(session);
@@ -213,7 +213,7 @@ int main() {
         "2026-05-28 09:59:00+08",
         "collected",
     });
-    assert(raw_file.status.ok);
+    EXPECT_TRUE(raw_file.status.ok);
 
     const auto parsed_record = result_service.record_parsed_record({
         task_run_id,
@@ -226,7 +226,7 @@ int main() {
         },
         "parsed",
     });
-    assert(parsed_record.status.ok);
+    EXPECT_TRUE(parsed_record.status.ok);
 
     const auto rule = qc_service.create_rule({
         "temperature range",
@@ -234,8 +234,8 @@ int main() {
         R"({"field":"temperature","min":0,"max":40})",
         true,
     });
-    assert(rule.status.ok);
-    assert(rule.id == "1201");
+    EXPECT_TRUE(rule.status.ok);
+    EXPECT_TRUE(rule.id == "1201");
 
     const auto pass_result = qc_service.record_result({
         parsed_record.id,
@@ -244,13 +244,13 @@ int main() {
         "passed",
         "temperature is in range",
     });
-    assert(pass_result.status.ok);
+    EXPECT_TRUE(pass_result.status.ok);
 
     const auto pass_alert = alert_service.create_from_qc_result({pass_result.id});
-    assert(!pass_alert.status.ok);
+    EXPECT_TRUE(!pass_alert.status.ok);
 
     const auto missing_alert = alert_service.create_from_qc_result({"999999"});
-    assert(!missing_alert.status.ok);
+    EXPECT_TRUE(!missing_alert.status.ok);
 
     const auto warning_result = qc_service.record_result({
         parsed_record.id,
@@ -259,18 +259,18 @@ int main() {
         "warning",
         "temperature is near upper limit",
     });
-    assert(warning_result.status.ok);
+    EXPECT_TRUE(warning_result.status.ok);
 
     const auto warning_alert = alert_service.create_from_qc_result({warning_result.id});
-    assert(warning_alert.status.ok);
-    assert(warning_alert.id == "1401");
-    assert(session.queried.back().sql.find("INSERT INTO alerts") != std::string::npos);
-    assert(session.queried.back().params[0] == "lab-node-alert-013");
-    assert(session.queried.back().params[1] == task_run_id);
-    assert(session.queried.back().params[2] == "qc_result");
-    assert(session.queried.back().params[3] == "warning");
-    assert(session.queried.back().params[4] == "temperature is near upper limit");
-    assert(session.queried.back().params[5] == "open");
+    EXPECT_TRUE(warning_alert.status.ok);
+    EXPECT_TRUE(warning_alert.id == "1401");
+    EXPECT_TRUE(session.queried.back().sql.find("INSERT INTO alerts") != std::string::npos);
+    EXPECT_TRUE(session.queried.back().params[0] == "lab-node-alert-013");
+    EXPECT_TRUE(session.queried.back().params[1] == task_run_id);
+    EXPECT_TRUE(session.queried.back().params[2] == "qc_result");
+    EXPECT_TRUE(session.queried.back().params[3] == "warning");
+    EXPECT_TRUE(session.queried.back().params[4] == "temperature is near upper limit");
+    EXPECT_TRUE(session.queried.back().params[5] == "open");
 
     const auto failed_result = qc_service.record_result({
         parsed_record.id,
@@ -279,23 +279,22 @@ int main() {
         "failed",
         "",
     });
-    assert(failed_result.status.ok);
+    EXPECT_TRUE(failed_result.status.ok);
 
     const auto failed_alert = alert_service.create_from_qc_result({failed_result.id});
-    assert(failed_alert.status.ok);
-    assert(failed_alert.id == "1402");
+    EXPECT_TRUE(failed_alert.status.ok);
+    EXPECT_TRUE(failed_alert.id == "1402");
 
     const auto persisted_failed_alert = alert_repository.find_by_id(failed_alert.id);
-    assert(persisted_failed_alert.has_value());
-    assert(persisted_failed_alert->severity == "failed");
-    assert(persisted_failed_alert->message == "qc result 1303 is failed");
-    assert(persisted_failed_alert->status == "open");
+    EXPECT_TRUE(persisted_failed_alert.has_value());
+    EXPECT_TRUE(persisted_failed_alert->severity == "failed");
+    EXPECT_TRUE(persisted_failed_alert->message == "qc result 1303 is failed");
+    EXPECT_TRUE(persisted_failed_alert->status == "open");
 
     const auto node_alerts = alert_service.find_alerts_by_node("lab-node-alert-013");
-    assert(node_alerts.size() == 2);
+    EXPECT_TRUE(node_alerts.size() == 2);
 
     const auto run_alerts = alert_service.find_alerts_by_task_run(task_run_id);
-    assert(run_alerts.size() == 2);
+    EXPECT_TRUE(run_alerts.size() == 2);
 
-    return 0;
 }

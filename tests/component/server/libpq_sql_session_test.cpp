@@ -1,12 +1,12 @@
 #include "labbridge/server/postgres/libpq_sql_session.h"
 
-#include <cassert>
+#include <gtest/gtest.h>
 #include <stdexcept>
 #include <string>
 
-int main() {
+TEST(LibpqSqlSessionTest, ReportsClientVersionAndConnectionFailure) {
     const int version = labbridge::server::LibpqSqlSession::client_version();
-    assert(version >= 160000);
+    EXPECT_TRUE(version >= 160000);
 
     bool failed_to_connect = false;
     try {
@@ -17,6 +17,5 @@ int main() {
                             std::string::npos;
     }
 
-    assert(failed_to_connect);
-    return 0;
+    EXPECT_TRUE(failed_to_connect);
 }

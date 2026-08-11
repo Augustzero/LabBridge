@@ -57,7 +57,7 @@ const labbridge::server::RawFileRecord* find_raw_file(
 
 }  // namespace
 
-TEST(Phase016AgentReportServiceTest, ProcessesManifestAndTaskRunReport) {
+TEST(AgentReportServiceTest, ProcessesManifestAndTaskRunReport) {
     labbridge::server::InMemoryNodeRepository node_repository;
     labbridge::server::InMemoryConfigRepository config_repository;
     labbridge::server::InMemoryTaskRunRepository task_run_repository;

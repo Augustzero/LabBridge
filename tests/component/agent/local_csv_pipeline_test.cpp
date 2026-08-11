@@ -5,12 +5,12 @@
 #include "labbridge/core/version.h"
 #include "labbridge/server/application/node_service.h"
 
-#include <cassert>
+#include <gtest/gtest.h>
 #include <algorithm>
 #include <string>
 #include <vector>
 
-int main() {
+TEST(LocalCsvPipelineTest, CollectsParsesAndChecksSampleCsv) {
     labbridge::server::InMemoryNodeRepository repository;
     labbridge::server::NodeService node_service(repository);
 
@@ -19,18 +19,18 @@ int main() {
         "default-lab-node",
         labbridge::core::kVersion,
     });
-    assert(register_status.ok);
+    EXPECT_TRUE(register_status.ok);
 
     const auto heartbeat_status = node_service.accept_heartbeat({
         "lab-node-001",
         labbridge::core::kVersion,
         "2026-05-09 10:00:00",
     });
-    assert(heartbeat_status.ok);
+    EXPECT_TRUE(heartbeat_status.ok);
 
     const auto node = node_service.find_node("lab-node-001");
-    assert(node.has_value());
-    assert(node->status == labbridge::core::NodeStatus::Online);
+    EXPECT_TRUE(node.has_value());
+    EXPECT_TRUE(node->status == labbridge::core::NodeStatus::Online);
 
     labbridge::agent::LocalDirCollector collector{"tests/fixtures/agent", ".csv"};
     const auto collect_result = collector.collect({
@@ -38,14 +38,14 @@ int main() {
         "lab-node-001",
         "{}",
     });
-    assert(collect_result.status.ok);
+    EXPECT_TRUE(collect_result.status.ok);
     const auto sample = std::find_if(
         collect_result.items.begin(), collect_result.items.end(),
         [](const auto& item) {
             return item.original_name == "sample_observation.csv";
         });
-    assert(sample != collect_result.items.end());
-    assert(!collect_result.items.empty());
+    EXPECT_TRUE(sample != collect_result.items.end());
+    EXPECT_TRUE(!collect_result.items.empty());
 
     labbridge::agent::CsvObservationParser parser;
     const auto parse_result = parser.parse({
@@ -53,8 +53,8 @@ int main() {
         "raw-001",
         sample->local_path,
     });
-    assert(parse_result.status.ok);
-    assert(parse_result.records.size() == 2);
+    EXPECT_TRUE(parse_result.status.ok);
+    EXPECT_TRUE(parse_result.records.size() == 2);
 
     labbridge::agent::RequiredFieldsRule required_fields_rule;
     labbridge::agent::BasicTimestampRule timestamp_rule;
@@ -62,10 +62,8 @@ int main() {
     for (const auto& record : parse_result.records) {
         const auto required_result = required_fields_rule.check(record);
         const auto timestamp_result = timestamp_rule.check(record);
-        assert(required_result.level == labbridge::agent::QcLevel::Pass);
-        assert(timestamp_result.level == labbridge::agent::QcLevel::Pass);
+        EXPECT_TRUE(required_result.level == labbridge::agent::QcLevel::Pass);
+        EXPECT_TRUE(timestamp_result.level == labbridge::agent::QcLevel::Pass);
     }
 
-    return 0;
 }
-

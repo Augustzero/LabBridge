@@ -43,6 +43,16 @@ target_link_libraries(
     PUBLIC labbridge_server_domain
 )
 
+add_library(labbridge_server_sql_test_support INTERFACE)
+target_include_directories(
+    labbridge_server_sql_test_support
+    INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_link_libraries(
+    labbridge_server_sql_test_support
+    INTERFACE labbridge_server_postgres
+)
+
 add_labbridge_test(
     cron_schedule_test
     SOURCES unit/core/cron_schedule_test.cpp
@@ -175,6 +185,54 @@ add_labbridge_test(
 )
 
 add_labbridge_test(
+    node_repository_test
+    SOURCES unit/server/node_repository_test.cpp
+    LINK_LIBRARIES GTest::gtest_main labbridge_server_sql_test_support
+    LABELS unit
+    TIMEOUT 10
+)
+
+add_labbridge_test(
+    config_repository_test
+    SOURCES unit/server/config_repository_test.cpp
+    LINK_LIBRARIES GTest::gtest_main labbridge_server_sql_test_support
+    LABELS unit
+    TIMEOUT 10
+)
+
+add_labbridge_test(
+    task_run_repository_test
+    SOURCES unit/server/task_run_repository_test.cpp
+    LINK_LIBRARIES GTest::gtest_main labbridge_server_sql_test_support
+    LABELS unit
+    TIMEOUT 10
+)
+
+add_labbridge_test(
+    result_repository_test
+    SOURCES unit/server/result_repository_test.cpp
+    LINK_LIBRARIES GTest::gtest_main labbridge_server_sql_test_support
+    LABELS unit
+    TIMEOUT 10
+)
+
+add_labbridge_test(
+    qc_repository_test
+    SOURCES unit/server/qc_repository_test.cpp
+    LINK_LIBRARIES GTest::gtest_main labbridge_server_sql_test_support
+    LABELS unit
+    TIMEOUT 10
+)
+
+add_labbridge_test(
+    alert_repository_test
+    SOURCES unit/server/alert_repository_test.cpp
+    LINK_LIBRARIES GTest::gtest_main labbridge_server_sql_test_support
+    LABELS unit
+    TIMEOUT 10
+)
+
+add_labbridge_test(
     storage_mapping_test
     SOURCES unit/server/storage_mapping_test.cpp
     LINK_LIBRARIES GTest::gtest_main labbridge_server_postgres
@@ -265,40 +323,87 @@ add_labbridge_postgres_test(
 )
 
 
-add_labbridge_smoke(
-    labbridge_phase1_smoke
-    component/agent/phase1_smoke.cpp
-    AGENT SERVER_SUPPORT
+add_labbridge_test(
+    result_service_test
+    SOURCES component/server/result_service_test.cpp
+    LINK_LIBRARIES GTest::gtest_main labbridge_server_postgres labbridge_server_test_support
+    LABELS component
 )
-add_labbridge_smoke(
-    labbridge_phase2_postgres_repository_smoke
-    component/server/phase2_postgres_repository_smoke.cpp
-    POSTGRES
+
+add_labbridge_test(
+    qc_service_test
+    SOURCES component/server/qc_service_test.cpp
+    LINK_LIBRARIES GTest::gtest_main labbridge_server_postgres labbridge_server_test_support
+    LABELS component
 )
-add_labbridge_smoke(
-    labbridge_phase3_libpq_session_smoke
-    component/server/phase3_libpq_session_smoke.cpp
-    POSTGRES
+
+add_labbridge_test(
+    alert_service_flow_test
+    SOURCES component/server/alert_service_flow_test.cpp
+    LINK_LIBRARIES GTest::gtest_main labbridge_server_postgres labbridge_server_test_support
+    LABELS component
 )
-add_labbridge_smoke(
-    labbridge_phase5_config_repository_smoke
-    component/server/phase5_config_repository_smoke.cpp
-    POSTGRES
+
+add_labbridge_test(
+    local_csv_pipeline_test
+    SOURCES component/agent/local_csv_pipeline_test.cpp
+    LINK_LIBRARIES GTest::gtest_main labbridge_agent_domain labbridge_server_test_support
+    LABELS component
 )
-add_labbridge_smoke(
-    labbridge_phase6_task_run_repository_smoke
-    component/server/phase6_task_run_repository_smoke.cpp
-    POSTGRES
+
+add_labbridge_test(
+    libpq_sql_session_test
+    SOURCES component/server/libpq_sql_session_test.cpp
+    LINK_LIBRARIES GTest::gtest_main labbridge_server_postgres
+    LABELS component
 )
+
+add_labbridge_test(
+    control_plane_query_test
+    SOURCES component/server/control_plane_query_test.cpp
+    LINK_LIBRARIES GTest::gtest_main labbridge_server_test_support
+    LABELS component
+)
+
+add_labbridge_test(
+    archive_trace_query_test
+    SOURCES component/server/archive_trace_query_test.cpp
+    LINK_LIBRARIES GTest::gtest_main labbridge_server_test_support
+    LABELS component
+)
+
+add_labbridge_test(
+    agent_report_service_test
+    SOURCES component/server/agent_report_service_test.cpp
+    LINK_LIBRARIES GTest::gtest_main labbridge_server_test_support
+    LABELS component
+)
+
+add_labbridge_test(
+    agent_report_http_controller_test
+    SOURCES component/server/agent_report_http_controller_test.cpp
+    LINK_LIBRARIES GTest::gtest_main labbridge_server_http labbridge_server_test_support
+    LABELS component contract
+)
+
+add_labbridge_test(
+    agent_report_reliability_test
+    SOURCES component/server/agent_report_reliability_test.cpp
+    LINK_LIBRARIES GTest::gtest_main labbridge_server_postgres labbridge_server_test_support
+    LABELS component
+)
+
+add_labbridge_test(
+    agent_control_http_controller_test
+    SOURCES component/server/agent_control_http_controller_test.cpp
+    LINK_LIBRARIES GTest::gtest_main labbridge_server_http labbridge_server_test_support
+    LABELS component contract
+)
+
 add_labbridge_smoke(
     labbridge_phase7_real_postgres_control_flow_smoke
     integration/postgres/phase7_real_postgres_control_flow_smoke.cpp
     POSTGRES REAL_POSTGRES
-)
-add_labbridge_smoke(
-    labbridge_phase8_result_repository_smoke
-    component/server/phase8_result_repository_smoke.cpp
-    POSTGRES SERVER_SUPPORT
 )
 add_labbridge_smoke(
     labbridge_phase9_real_postgres_result_flow_smoke
@@ -306,19 +411,9 @@ add_labbridge_smoke(
     POSTGRES REAL_POSTGRES
 )
 add_labbridge_smoke(
-    labbridge_phase10_qc_repository_smoke
-    component/server/phase10_qc_repository_smoke.cpp
-    POSTGRES SERVER_SUPPORT
-)
-add_labbridge_smoke(
     labbridge_phase11_real_postgres_qc_flow_smoke
     integration/postgres/phase11_real_postgres_qc_flow_smoke.cpp
     POSTGRES REAL_POSTGRES
-)
-add_labbridge_smoke(
-    labbridge_phase13_alert_repository_smoke
-    component/server/phase13_alert_repository_smoke.cpp
-    POSTGRES SERVER_SUPPORT
 )
 add_labbridge_smoke(
     labbridge_phase13_real_postgres_alert_flow_smoke
@@ -326,19 +421,9 @@ add_labbridge_smoke(
     POSTGRES REAL_POSTGRES
 )
 add_labbridge_smoke(
-    labbridge_phase14_control_plane_query_smoke
-    component/server/phase14_control_plane_query_smoke.cpp
-    SERVER_SUPPORT
-)
-add_labbridge_smoke(
     labbridge_phase14_real_postgres_query_flow_smoke
     integration/postgres/phase14_real_postgres_query_flow_smoke.cpp
     POSTGRES REAL_POSTGRES
-)
-add_labbridge_smoke(
-    labbridge_phase15_control_plane_archive_trace_smoke
-    component/server/phase15_control_plane_archive_trace_smoke.cpp
-    SERVER_SUPPORT
 )
 add_labbridge_smoke(
     labbridge_phase15_real_postgres_archive_trace_smoke
@@ -346,19 +431,9 @@ add_labbridge_smoke(
     POSTGRES REAL_POSTGRES
 )
 add_labbridge_smoke(
-    labbridge_phase16_agent_report_service_smoke
-    component/server/phase16_agent_report_service_smoke.cpp
-    GTEST SERVER_SUPPORT
-)
-add_labbridge_smoke(
     labbridge_phase16_real_postgres_agent_report_service_smoke
     integration/postgres/phase16_real_postgres_agent_report_service_smoke.cpp
     POSTGRES REAL_POSTGRES SERVER_SUPPORT
-)
-add_labbridge_smoke(
-    labbridge_phase17_http_agent_report_smoke
-    component/server/phase17_http_agent_report_smoke.cpp
-    HTTP CONTRACT SERVER_SUPPORT
 )
 add_labbridge_smoke(
     labbridge_phase17_real_postgres_http_agent_report_smoke
@@ -366,19 +441,9 @@ add_labbridge_smoke(
     HTTP POSTGRES REAL_POSTGRES
 )
 add_labbridge_smoke(
-    labbridge_phase18_agent_report_reliability_smoke
-    component/server/phase18_agent_report_reliability_smoke.cpp
-    GTEST POSTGRES SERVER_SUPPORT
-)
-add_labbridge_smoke(
     labbridge_phase18_real_postgres_agent_report_reliability_smoke
     integration/postgres/phase18_real_postgres_agent_report_reliability_smoke.cpp
     POSTGRES REAL_POSTGRES
-)
-add_labbridge_smoke(
-    labbridge_phase19_http_agent_control_smoke
-    component/server/phase19_http_agent_control_smoke.cpp
-    HTTP CONTRACT SERVER_SUPPORT
 )
 add_labbridge_smoke(
     labbridge_phase19_real_postgres_http_agent_control_smoke

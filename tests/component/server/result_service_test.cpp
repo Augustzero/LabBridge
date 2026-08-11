@@ -3,7 +3,7 @@
 #include "labbridge/server/application/result_service.h"
 #include "labbridge/server/repositories/task_run_repository.h"
 
-#include <cassert>
+#include <gtest/gtest.h>
 #include <optional>
 #include <string>
 #include <utility>
@@ -83,7 +83,7 @@ public:
 
 }  // namespace
 
-int main() {
+TEST(ResultServiceTest, PersistsAndReadsRawAndParsedResults) {
     RecordingSqlSession session;
     labbridge::server::InMemoryTaskRunRepository task_run_repository;
     labbridge::server::PostgresResultRepository result_repository(session);
@@ -106,7 +106,7 @@ int main() {
         "2026-05-26 09:59:00+08",
         "collected",
     });
-    assert(!wrong_node_raw_file.status.ok);
+    EXPECT_TRUE(!wrong_node_raw_file.status.ok);
 
     const auto raw_file = result_service.record_raw_file({
         task_run_id,
@@ -118,10 +118,10 @@ int main() {
         "2026-05-26 09:59:00+08",
         "collected",
     });
-    assert(raw_file.status.ok);
-    assert(raw_file.id == "801");
-    assert(session.queried.back().sql.find("INSERT INTO raw_files") != std::string::npos);
-    assert(session.queried.back().params[1] == "lab-node-result-008");
+    EXPECT_TRUE(raw_file.status.ok);
+    EXPECT_TRUE(raw_file.id == "801");
+    EXPECT_TRUE(session.queried.back().sql.find("INSERT INTO raw_files") != std::string::npos);
+    EXPECT_TRUE(session.queried.back().params[1] == "lab-node-result-008");
 
     const auto missing_raw_file_record = result_service.record_parsed_record({
         task_run_id,
@@ -134,7 +134,7 @@ int main() {
         },
         "parsed",
     });
-    assert(!missing_raw_file_record.status.ok);
+    EXPECT_TRUE(!missing_raw_file_record.status.ok);
 
     const auto parsed_record = result_service.record_parsed_record({
         task_run_id,
@@ -147,16 +147,15 @@ int main() {
         },
         "parsed",
     });
-    assert(parsed_record.status.ok);
-    assert(parsed_record.id == "901");
-    assert(session.queried.back().sql.find("INSERT INTO parsed_records") != std::string::npos);
-    assert(session.queried.back().params[5] == R"({"temperature":21.5})");
+    EXPECT_TRUE(parsed_record.status.ok);
+    EXPECT_TRUE(parsed_record.id == "901");
+    EXPECT_TRUE(session.queried.back().sql.find("INSERT INTO parsed_records") != std::string::npos);
+    EXPECT_TRUE(session.queried.back().params[5] == R"({"temperature":21.5})");
 
     const auto parsed_records = result_service.find_parsed_records(task_run_id);
-    assert(parsed_records.size() == 1);
-    assert(parsed_records.front().raw_file_id == raw_file.id);
-    assert(parsed_records.front().record.station_code == "station-a");
-    assert(parsed_records.front().record.payload_json == R"({"temperature":21.5})");
+    EXPECT_TRUE(parsed_records.size() == 1);
+    EXPECT_TRUE(parsed_records.front().raw_file_id == raw_file.id);
+    EXPECT_TRUE(parsed_records.front().record.station_code == "station-a");
+    EXPECT_TRUE(parsed_records.front().record.payload_json == R"({"temperature":21.5})");
 
-    return 0;
 }

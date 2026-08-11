@@ -13,7 +13,7 @@
 #include <drogon/HttpResponse.h>
 #include <json/writer.h>
 
-#include <cassert>
+#include <gtest/gtest.h>
 #include <stdexcept>
 #include <string>
 
@@ -42,7 +42,10 @@ drogon::HttpResponsePtr invoke_manifest(
         [&response](const drogon::HttpResponsePtr& current) {
             response = current;
         });
-    assert(response != nullptr);
+    if (response == nullptr) {
+        ADD_FAILURE() << "controller did not invoke response callback";
+        return drogon::HttpResponse::newHttpResponse();
+    }
     return response;
 }
 
@@ -60,24 +63,34 @@ drogon::HttpResponsePtr invoke_report(
         [&response](const drogon::HttpResponsePtr& current) {
             response = current;
         });
-    assert(response != nullptr);
+    if (response == nullptr) {
+        ADD_FAILURE() << "controller did not invoke response callback";
+        return drogon::HttpResponse::newHttpResponse();
+    }
     return response;
 }
 
-const Json::Value& response_json(const drogon::HttpResponsePtr& response) {
+Json::Value response_json(const drogon::HttpResponsePtr& response) {
+    if (response == nullptr) {
+        ADD_FAILURE() << "response is null";
+        return {};
+    }
     const auto& json = response->getJsonObject();
-    assert(json != nullptr);
+    if (json == nullptr) {
+        ADD_FAILURE() << "response body is not JSON";
+        return {};
+    }
     return *json;
 }
 
 void assert_error(const drogon::HttpResponsePtr& response,
                   drogon::HttpStatusCode expected_status,
                   const std::string& expected_code) {
-    assert(response->statusCode() == expected_status);
+    ASSERT_EQ(response->statusCode(), expected_status);
     const auto& json = response_json(response);
-    assert(!json["ok"].asBool());
-    assert(json["error"]["code"].asString() == expected_code);
-    assert(!json["error"]["message"].asString().empty());
+    EXPECT_FALSE(json["ok"].asBool());
+    EXPECT_EQ(json["error"]["code"].asString(), expected_code);
+    EXPECT_FALSE(json["error"]["message"].asString().empty());
 }
 
 Json::Value manifest_body(const std::string& task_run_id,
@@ -141,7 +154,7 @@ Json::Value report_body(const std::string& task_run_id,
 
 }  // namespace
 
-int main() {
+TEST(AgentReportHttpControllerTest, MapsManifestReportReplayAndErrors) {
     labbridge::server::InMemoryNodeRepository node_repository;
     labbridge::server::InMemoryConfigRepository config_repository;
     labbridge::server::InMemoryTaskRunRepository task_run_repository;
@@ -214,10 +227,10 @@ int main() {
 
     const std::string node_code = "lab-node-http-report-017";
     const std::string other_node_code = "lab-node-http-report-017-other";
-    assert(node_service.register_node(
+    EXPECT_TRUE(node_service.register_node(
                {node_code, "phase17-http-node", labbridge::core::kVersion})
                .ok);
-    assert(node_service.register_node(
+    EXPECT_TRUE(node_service.register_node(
                {other_node_code, "phase17-http-other-node", labbridge::core::kVersion})
                .ok);
 
@@ -228,7 +241,7 @@ int main() {
         "{}",
         true,
     });
-    assert(data_source.status.ok);
+    EXPECT_TRUE(data_source.status.ok);
 
     const auto task = config_service.create_task({
         node_code,
@@ -240,7 +253,7 @@ int main() {
         "basic",
         true,
     });
-    assert(task.status.ok);
+    EXPECT_TRUE(task.status.ok);
 
     const auto started = task_run_service.start({
         node_code,
@@ -248,7 +261,7 @@ int main() {
         "2026-07-16 10:01:00+08",
         "http_report",
     });
-    assert(started.status.ok);
+    EXPECT_TRUE(started.status.ok);
 
     assert_error(
         invoke_manifest(controller, write_json(manifest_body("missing-run", node_code))),
@@ -263,20 +276,20 @@ int main() {
 
     const auto manifest_response =
         invoke_manifest(controller, write_json(manifest_body(started.id, node_code)));
-    assert(manifest_response->statusCode() == drogon::k201Created);
+    EXPECT_TRUE(manifest_response->statusCode() == drogon::k201Created);
     const auto& manifest_json = response_json(manifest_response);
-    assert(manifest_json["ok"].asBool());
-    assert(!manifest_json["data"]["replayed"].asBool());
-    assert(manifest_json["data"]["raw_file_ids"].size() == 1);
+    EXPECT_TRUE(manifest_json["ok"].asBool());
+    EXPECT_TRUE(!manifest_json["data"]["replayed"].asBool());
+    EXPECT_TRUE(manifest_json["data"]["raw_file_ids"].size() == 1);
     const auto raw_file_id =
         manifest_json["data"]["raw_file_ids"][Json::ArrayIndex{0}].asString();
-    assert(!raw_file_id.empty());
+    EXPECT_TRUE(!raw_file_id.empty());
 
     const auto manifest_replay =
         invoke_manifest(controller, write_json(manifest_body(started.id, node_code)));
-    assert(manifest_replay->statusCode() == drogon::k201Created);
-    assert(response_json(manifest_replay)["data"]["replayed"].asBool());
-    assert(response_json(manifest_replay)["data"]["raw_file_ids"][Json::ArrayIndex{0}]
+    EXPECT_TRUE(manifest_replay->statusCode() == drogon::k201Created);
+    EXPECT_TRUE(response_json(manifest_replay)["data"]["replayed"].asBool());
+    EXPECT_TRUE(response_json(manifest_replay)["data"]["raw_file_ids"][Json::ArrayIndex{0}]
                .asString() == raw_file_id);
 
     const auto rule = qc_service.create_rule({
@@ -285,7 +298,7 @@ int main() {
         "{}",
         true,
     });
-    assert(rule.status.ok);
+    EXPECT_TRUE(rule.status.ok);
 
     auto invalid_status =
         report_body(started.id, node_code, raw_file_id, rule.id);
@@ -306,33 +319,33 @@ int main() {
     const auto report_response = invoke_report(
         controller,
         write_json(report_body(started.id, node_code, raw_file_id, rule.id)));
-    assert(report_response->statusCode() == drogon::k200OK);
+    EXPECT_TRUE(report_response->statusCode() == drogon::k200OK);
     const auto& report_json = response_json(report_response);
-    assert(report_json["ok"].asBool());
-    assert(!report_json["data"]["replayed"].asBool());
-    assert(report_json["data"]["parsed_record_ids"].size() == 1);
-    assert(report_json["data"]["qc_result_ids"].size() == 2);
-    assert(report_json["data"]["alert_ids"].size() == 1);
+    EXPECT_TRUE(report_json["ok"].asBool());
+    EXPECT_TRUE(!report_json["data"]["replayed"].asBool());
+    EXPECT_TRUE(report_json["data"]["parsed_record_ids"].size() == 1);
+    EXPECT_TRUE(report_json["data"]["qc_result_ids"].size() == 2);
+    EXPECT_TRUE(report_json["data"]["alert_ids"].size() == 1);
 
     const auto report_replay = invoke_report(
         controller,
         write_json(report_body(started.id, node_code, raw_file_id, rule.id)));
-    assert(report_replay->statusCode() == drogon::k200OK);
+    EXPECT_TRUE(report_replay->statusCode() == drogon::k200OK);
     const auto& report_replay_json = response_json(report_replay);
-    assert(report_replay_json["data"]["replayed"].asBool());
-    assert(report_replay_json["data"]["parsed_record_ids"] ==
+    EXPECT_TRUE(report_replay_json["data"]["replayed"].asBool());
+    EXPECT_TRUE(report_replay_json["data"]["parsed_record_ids"] ==
            report_json["data"]["parsed_record_ids"]);
 
     const auto detail = query_service.find_task_run_detail(node_code, started.id);
-    assert(detail.status.ok);
-    assert(detail.task_run.has_value());
-    assert(detail.task_run->status == labbridge::core::TaskRunStatus::Failed);
-    assert(detail.raw_files.size() == 1);
-    assert(detail.parsed_records.size() == 1);
-    assert(detail.qc_results.size() == 2);
-    assert(detail.alerts.size() == 1);
-    assert(detail.raw_files.front().id == raw_file_id);
-    assert(detail.parsed_records.front().raw_file_id == raw_file_id);
+    EXPECT_TRUE(detail.status.ok);
+    EXPECT_TRUE(detail.task_run.has_value());
+    EXPECT_TRUE(detail.task_run->status == labbridge::core::TaskRunStatus::Failed);
+    EXPECT_TRUE(detail.raw_files.size() == 1);
+    EXPECT_TRUE(detail.parsed_records.size() == 1);
+    EXPECT_TRUE(detail.qc_results.size() == 2);
+    EXPECT_TRUE(detail.alerts.size() == 1);
+    EXPECT_TRUE(detail.raw_files.front().id == raw_file_id);
+    EXPECT_TRUE(detail.parsed_records.front().raw_file_id == raw_file_id);
 
     labbridge::server::AgentReportHttpController throwing_controller{
         [](const labbridge::server::RawFileManifestRequest&)
@@ -350,11 +363,10 @@ int main() {
         internal_response,
         drogon::k500InternalServerError,
         "internal_error");
-    assert(response_json(internal_response)["error"]["message"].asString() ==
+    EXPECT_TRUE(response_json(internal_response)["error"]["message"].asString() ==
            "internal server error");
-    assert(response_json(internal_response)["error"]["message"]
+    EXPECT_TRUE(response_json(internal_response)["error"]["message"]
                .asString()
                .find("password") == std::string::npos);
 
-    return 0;
 }

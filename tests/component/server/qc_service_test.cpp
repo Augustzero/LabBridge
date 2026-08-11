@@ -5,7 +5,7 @@
 #include "labbridge/server/application/result_service.h"
 #include "labbridge/server/repositories/task_run_repository.h"
 
-#include <cassert>
+#include <gtest/gtest.h>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -136,7 +136,7 @@ public:
 
 }  // namespace
 
-int main() {
+TEST(QcServiceTest, PersistsOnlyEnabledRuleResults) {
     RecordingSqlSession session;
     labbridge::server::InMemoryTaskRunRepository task_run_repository;
     labbridge::server::PostgresResultRepository result_repository(session);
@@ -161,7 +161,7 @@ int main() {
         "2026-05-27 09:59:00+08",
         "collected",
     });
-    assert(raw_file.status.ok);
+    EXPECT_TRUE(raw_file.status.ok);
 
     const auto parsed_record = result_service.record_parsed_record({
         task_run_id,
@@ -174,7 +174,7 @@ int main() {
         },
         "parsed",
     });
-    assert(parsed_record.status.ok);
+    EXPECT_TRUE(parsed_record.status.ok);
 
     const auto disabled_rule = qc_service.create_rule({
         "disabled required fields",
@@ -182,7 +182,7 @@ int main() {
         R"({"required":["station_code","device_code","record_time"]})",
         false,
     });
-    assert(disabled_rule.status.ok);
+    EXPECT_TRUE(disabled_rule.status.ok);
 
     const auto disabled_result = qc_service.record_result({
         parsed_record.id,
@@ -191,7 +191,7 @@ int main() {
         "failed",
         "disabled rule should not record",
     });
-    assert(!disabled_result.status.ok);
+    EXPECT_TRUE(!disabled_result.status.ok);
 
     const auto rule = qc_service.create_rule({
         "required fields",
@@ -199,8 +199,8 @@ int main() {
         R"({"required":["station_code","device_code","record_time"]})",
         true,
     });
-    assert(rule.status.ok);
-    assert(rule.id == "1201");
+    EXPECT_TRUE(rule.status.ok);
+    EXPECT_TRUE(rule.id == "1201");
 
     const auto missing_record_result = qc_service.record_result({
         "999999",
@@ -209,7 +209,7 @@ int main() {
         "failed",
         "missing parsed record",
     });
-    assert(!missing_record_result.status.ok);
+    EXPECT_TRUE(!missing_record_result.status.ok);
 
     const auto qc_result = qc_service.record_result({
         parsed_record.id,
@@ -218,17 +218,16 @@ int main() {
         "passed",
         "required fields are present",
     });
-    assert(qc_result.status.ok);
-    assert(qc_result.id == "1301");
-    assert(session.queried.back().sql.find("INSERT INTO qc_results") != std::string::npos);
-    assert(session.queried.back().params[2] == "pass");
+    EXPECT_TRUE(qc_result.status.ok);
+    EXPECT_TRUE(qc_result.id == "1301");
+    EXPECT_TRUE(session.queried.back().sql.find("INSERT INTO qc_results") != std::string::npos);
+    EXPECT_TRUE(session.queried.back().params[2] == "pass");
 
     const auto results = qc_service.find_results(parsed_record.id);
-    assert(results.size() == 1);
-    assert(results.front().parsed_record_id == parsed_record.id);
-    assert(results.front().qc_rule_id == rule.id);
-    assert(results.front().level == "pass");
-    assert(results.front().result == "passed");
+    EXPECT_TRUE(results.size() == 1);
+    EXPECT_TRUE(results.front().parsed_record_id == parsed_record.id);
+    EXPECT_TRUE(results.front().qc_rule_id == rule.id);
+    EXPECT_TRUE(results.front().level == "pass");
+    EXPECT_TRUE(results.front().result == "passed");
 
-    return 0;
 }

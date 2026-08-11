@@ -8,7 +8,7 @@
 #include "labbridge/server/application/result_service.h"
 #include "labbridge/server/application/task_run_service.h"
 
-#include <cassert>
+#include <gtest/gtest.h>
 #include <string>
 #include <vector>
 
@@ -46,7 +46,7 @@ bool contains_alert(const std::vector<labbridge::server::AlertRecord>& alerts,
 
 }  // namespace
 
-int main() {
+TEST(ControlPlaneQueryTest, ReturnsNodeOverviewAndTaskRunDetail) {
     labbridge::server::InMemoryNodeRepository node_repository;
     labbridge::server::InMemoryConfigRepository config_repository;
     labbridge::server::InMemoryTaskRunRepository task_run_repository;
@@ -75,9 +75,9 @@ int main() {
     const std::string node_code = "lab-node-query-014";
     const std::string other_node_code = "lab-node-query-014-other";
 
-    assert(node_service.register_node({node_code, "query-node", labbridge::core::kVersion}).ok);
-    assert(node_service.register_node({other_node_code, "other-query-node", labbridge::core::kVersion}).ok);
-    assert(node_service.accept_heartbeat({
+    EXPECT_TRUE(node_service.register_node({node_code, "query-node", labbridge::core::kVersion}).ok);
+    EXPECT_TRUE(node_service.register_node({other_node_code, "other-query-node", labbridge::core::kVersion}).ok);
+    EXPECT_TRUE(node_service.accept_heartbeat({
                node_code,
                labbridge::core::kVersion,
                "2026-05-29 10:00:00+08",
@@ -90,7 +90,7 @@ int main() {
         R"({"path":"tests/fixtures/agent","pattern":"*.csv"})",
         true,
     });
-    assert(data_source.status.ok);
+    EXPECT_TRUE(data_source.status.ok);
 
     const auto task = config_service.create_task({
         node_code,
@@ -102,7 +102,7 @@ int main() {
         "basic",
         true,
     });
-    assert(task.status.ok);
+    EXPECT_TRUE(task.status.ok);
 
     const auto disabled_task = config_service.create_task({
         node_code,
@@ -114,7 +114,7 @@ int main() {
         "basic",
         false,
     });
-    assert(disabled_task.status.ok);
+    EXPECT_TRUE(disabled_task.status.ok);
 
     const auto started = task_run_service.start({
         node_code,
@@ -122,7 +122,7 @@ int main() {
         "2026-05-29 10:01:00+08",
         "manual",
     });
-    assert(started.status.ok);
+    EXPECT_TRUE(started.status.ok);
 
     const auto raw_file = result_service.record_raw_file({
         started.id,
@@ -134,7 +134,7 @@ int main() {
         "2026-05-29 09:59:00+08",
         "collected",
     });
-    assert(raw_file.status.ok);
+    EXPECT_TRUE(raw_file.status.ok);
 
     const auto parsed_record = result_service.record_parsed_record({
         started.id,
@@ -147,7 +147,7 @@ int main() {
         },
         "parsed",
     });
-    assert(parsed_record.status.ok);
+    EXPECT_TRUE(parsed_record.status.ok);
 
     const auto rule = qc_service.create_rule({
         "phase14 temperature range",
@@ -155,7 +155,7 @@ int main() {
         R"({"field":"temperature","min":0,"max":40})",
         true,
     });
-    assert(rule.status.ok);
+    EXPECT_TRUE(rule.status.ok);
 
     const auto pass_result = qc_service.record_result({
         parsed_record.id,
@@ -164,7 +164,7 @@ int main() {
         "passed",
         "humidity is in range",
     });
-    assert(pass_result.status.ok);
+    EXPECT_TRUE(pass_result.status.ok);
 
     const auto failed_result = qc_service.record_result({
         parsed_record.id,
@@ -173,10 +173,10 @@ int main() {
         "failed",
         "temperature is outside configured range",
     });
-    assert(failed_result.status.ok);
+    EXPECT_TRUE(failed_result.status.ok);
 
     const auto failed_alert = alert_service.create_from_qc_result({failed_result.id});
-    assert(failed_alert.status.ok);
+    EXPECT_TRUE(failed_alert.status.ok);
 
     const auto finish_status = task_run_service.finish({
         started.id,
@@ -187,36 +187,35 @@ int main() {
         1,
         "qc failed",
     });
-    assert(finish_status.ok);
+    EXPECT_TRUE(finish_status.ok);
 
     const auto missing_node = query_service.find_node_overview("missing-node");
-    assert(!missing_node.status.ok);
+    EXPECT_TRUE(!missing_node.status.ok);
 
     const auto node_overview = query_service.find_node_overview(node_code);
-    assert(node_overview.status.ok);
-    assert(node_overview.node.has_value());
-    assert(node_overview.node->info.node_code == node_code);
-    assert(node_overview.node->status == labbridge::core::NodeStatus::Online);
-    assert(contains_task(node_overview.enabled_tasks, task.id));
-    assert(!contains_task(node_overview.enabled_tasks, disabled_task.id));
-    assert(contains_alert(node_overview.alerts, failed_alert.id));
+    EXPECT_TRUE(node_overview.status.ok);
+    EXPECT_TRUE(node_overview.node.has_value());
+    EXPECT_TRUE(node_overview.node->info.node_code == node_code);
+    EXPECT_TRUE(node_overview.node->status == labbridge::core::NodeStatus::Online);
+    EXPECT_TRUE(contains_task(node_overview.enabled_tasks, task.id));
+    EXPECT_TRUE(!contains_task(node_overview.enabled_tasks, disabled_task.id));
+    EXPECT_TRUE(contains_alert(node_overview.alerts, failed_alert.id));
 
     const auto detail = query_service.find_task_run_detail(node_code, started.id);
-    assert(detail.status.ok);
-    assert(detail.task_run.has_value());
-    assert(detail.task_run->id == started.id);
-    assert(detail.task_run->status == labbridge::core::TaskRunStatus::Failed);
-    assert(detail.parsed_records.size() == 1);
-    assert(detail.parsed_records.front().id == parsed_record.id);
-    assert(contains_qc_result(detail.qc_results, pass_result.id));
-    assert(contains_qc_result(detail.qc_results, failed_result.id));
-    assert(contains_alert(detail.alerts, failed_alert.id));
+    EXPECT_TRUE(detail.status.ok);
+    EXPECT_TRUE(detail.task_run.has_value());
+    EXPECT_TRUE(detail.task_run->id == started.id);
+    EXPECT_TRUE(detail.task_run->status == labbridge::core::TaskRunStatus::Failed);
+    EXPECT_TRUE(detail.parsed_records.size() == 1);
+    EXPECT_TRUE(detail.parsed_records.front().id == parsed_record.id);
+    EXPECT_TRUE(contains_qc_result(detail.qc_results, pass_result.id));
+    EXPECT_TRUE(contains_qc_result(detail.qc_results, failed_result.id));
+    EXPECT_TRUE(contains_alert(detail.alerts, failed_alert.id));
 
     const auto wrong_node_detail = query_service.find_task_run_detail(other_node_code, started.id);
-    assert(!wrong_node_detail.status.ok);
+    EXPECT_TRUE(!wrong_node_detail.status.ok);
 
     const auto missing_run_detail = query_service.find_task_run_detail(node_code, "999999");
-    assert(!missing_run_detail.status.ok);
+    EXPECT_TRUE(!missing_run_detail.status.ok);
 
-    return 0;
 }

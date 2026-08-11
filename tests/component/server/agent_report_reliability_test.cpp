@@ -40,7 +40,7 @@ public:
 
 }  // namespace
 
-TEST(Phase018AgentReportReliabilityTest, PreservesTransactionAndIdempotencyBehavior) {
+TEST(AgentReportReliabilityTest, PreservesTransactionAndIdempotencyBehavior) {
     {
         RecordingSqlSession session;
         {
