@@ -50,6 +50,7 @@ public:
                  IRuntimeTimeSource& time_source,
                  IRuntimeConfigSink* config_sink = nullptr);
 
+    void publish_initial_config();
     PulledAgentConfig run();
     void request_stop() noexcept;
 
@@ -65,6 +66,7 @@ private:
     PulledAgentConfig current_config_;
     IRuntimeTimeSource& time_source_;
     IRuntimeConfigSink* config_sink_;
+    bool initial_config_published_{false};
     std::atomic<bool> stop_requested_{false};
 };
 

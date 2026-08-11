@@ -66,7 +66,12 @@ public:
         }
     }
 
+    void request_stop() noexcept override {}
+    void forget_task(const std::string& task_id) override {
+        forgotten_task_ids.push_back(task_id);
+    }
     std::vector<labbridge::agent::ScheduledTaskExecution> executions;
+    std::vector<std::string> forgotten_task_ids;
     std::function<void(const labbridge::agent::ScheduledTaskExecution&)>
         on_execute;
 };
@@ -131,6 +136,29 @@ TEST(TaskSchedulerTest, PreservesUnchangedProgressAndResetsChangedTasks) {
     ASSERT_EQ(executor.executions.size(), 1U);
     EXPECT_EQ(executor.executions.front().task.id, "1");
     EXPECT_EQ(executor.executions.front().task.name, "display name changed");
+    EXPECT_EQ(
+        executor.forgotten_task_ids,
+        (std::vector<std::string>{"removed"}));
+}
+
+TEST(TaskSchedulerTest, DefersRemovedTaskCleanupUntilActiveExecutionEnds) {
+    ScriptedTimeSource time;
+    RecordingExecutor executor;
+    labbridge::agent::TaskScheduler scheduler{executor, time};
+    scheduler.replace_config({task("1")});
+    time.on_wait = [&](std::size_t) { time.system = SystemTimePoint{60s}; };
+    executor.on_execute = [&](const auto&) {
+        EXPECT_TRUE(executor.forgotten_task_ids.empty());
+        scheduler.replace_config({});
+        EXPECT_TRUE(executor.forgotten_task_ids.empty());
+        scheduler.request_stop();
+    };
+
+    scheduler.run();
+
+    EXPECT_EQ(
+        executor.forgotten_task_ids,
+        (std::vector<std::string>{"1"}));
 }
 
 TEST(TaskSchedulerTest, ConfigRefreshCancelsDueTaskNotYetStarted) {

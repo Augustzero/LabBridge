@@ -1,6 +1,7 @@
 #include "labbridge/agent/execution/task_executor.h"
 
 #include "labbridge/agent/collectors/local_dir_collector.h"
+#include "labbridge/core/logging.h"
 #include "labbridge/agent/parsers/csv_parser.h"
 #include "labbridge/agent/qc/basic_qc_rules.h"
 
@@ -16,6 +17,7 @@
 
 namespace labbridge::agent {
 namespace {
+constexpr std::string_view kComponent = "task-executor";
 
 constexpr std::size_t kMaximumErrorDetails = 5;
 constexpr std::size_t kMaximumErrorSummaryBytes = 512;
@@ -210,6 +212,10 @@ TaskExecutor::TaskExecutor(
 }
 
 void TaskExecutor::execute(ScheduledTaskExecution execution) {
+    if (stop_requested_.load(std::memory_order_acquire)) {
+        return;
+    }
+
     const auto scheduled_for = format_utc(execution.scheduled_for);
     const auto started_at = format_utc(now_());
     const auto start = client_.start_task_run({
@@ -232,6 +238,10 @@ void TaskExecutor::execute(ScheduledTaskExecution execution) {
     std::vector<ArchivedWork> archived;
 
     try {
+        if (stop_requested_.load(std::memory_order_acquire)) {
+            throw std::runtime_error(
+                "agent stopping after task run start; collection skipped");
+        }
         validate_execution_types(execution.task);
         const auto source =
             parse_source_spec(execution.task, allowed_local_roots_);
@@ -248,6 +258,10 @@ void TaskExecutor::execute(ScheduledTaskExecution execution) {
 
         std::size_t ordinal = 0;
         for (const auto& item : collected.items) {
+            if (stop_requested_.load(std::memory_order_acquire)) {
+                throw std::runtime_error(
+                    "agent stopping; remaining files were not collected");
+            }
             try {
                 auto metadata = archive_store_.inspect(item);
                 const auto fingerprint =
@@ -349,6 +363,13 @@ void TaskExecutor::execute(ScheduledTaskExecution execution) {
                         : labbridge::core::TaskRunStatus::Failed;
     report.finished_at = format_utc(now_());
     report.error_summary = errors.text();
+    if (stop_requested_.load(std::memory_order_acquire)) {
+        labbridge::core::log_warn(
+            kComponent,
+            "draining=true; task_run_id=" + report.task_run_id +
+                "; report_idempotency_key=" + report.idempotency_key);
+    }
+
     client_.report_task_run(report);
     // 只有控制面明确接收终态报告后，成功文件才进入进程内去重集合。
     // 网络结果不确定时保留再次投递机会，不能伪造“已处理”。
@@ -361,14 +382,20 @@ void TaskExecutor::execute(ScheduledTaskExecution execution) {
         }
     }
 }
+void TaskExecutor::request_stop() noexcept {
+    stop_requested_.store(true, std::memory_order_release);
+}
+
 
 void TaskExecutor::forget_task(const std::string& task_id) {
+    const std::lock_guard<std::mutex> lock{processed_fingerprints_mutex_};
     processed_fingerprints_.erase(task_id);
 }
 
 bool TaskExecutor::was_processed(
     const std::string& task_id,
     const std::string& fingerprint) const {
+    const std::lock_guard<std::mutex> lock{processed_fingerprints_mutex_};
     const auto found = processed_fingerprints_.find(task_id);
     return found != processed_fingerprints_.end() &&
            std::find(
@@ -379,6 +406,7 @@ bool TaskExecutor::was_processed(
 void TaskExecutor::remember_processed(
     const std::string& task_id,
     std::string fingerprint) {
+    const std::lock_guard<std::mutex> lock{processed_fingerprints_mutex_};
     auto& fingerprints = processed_fingerprints_[task_id];
     if (std::find(
             fingerprints.begin(), fingerprints.end(), fingerprint) !=

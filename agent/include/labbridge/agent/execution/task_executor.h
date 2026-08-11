@@ -4,9 +4,11 @@
 #include "labbridge/agent/execution/task_execution_client.h"
 #include "labbridge/agent/scheduler/task_scheduler.h"
 
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <deque>
+#include <mutex>
 #include <functional>
 #include <string>
 #include <unordered_map>
@@ -30,7 +32,8 @@ public:
                  std::size_t fingerprint_capacity = 1024);
 
     void execute(ScheduledTaskExecution execution) override;
-    void forget_task(const std::string& task_id);
+    void request_stop() noexcept override;
+    void forget_task(const std::string& task_id) override;
 
 private:
     bool was_processed(const std::string& task_id,
@@ -45,6 +48,8 @@ private:
     std::size_t fingerprint_capacity_;
     std::unordered_map<std::string, std::deque<std::string>>
         processed_fingerprints_;
+    mutable std::mutex processed_fingerprints_mutex_;
+    std::atomic<bool> stop_requested_{false};
 };
 
 }  // namespace labbridge::agent

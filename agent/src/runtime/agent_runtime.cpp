@@ -84,10 +84,15 @@ AgentRuntime::AgentRuntime(labbridge::core::NodeInfo node,
     }
 }
 
-PulledAgentConfig AgentRuntime::run() {
-    if (config_sink_ != nullptr) {
+void AgentRuntime::publish_initial_config() {
+    if (!initial_config_published_ && config_sink_ != nullptr) {
         config_sink_->replace_config(current_config_.tasks);
     }
+    initial_config_published_ = true;
+}
+
+PulledAgentConfig AgentRuntime::run() {
+    publish_initial_config();
     const auto started_at = time_source_.steady_now();
     auto next_heartbeat = started_at + heartbeat_interval_;
     auto next_config_poll = started_at + config_poll_interval_;

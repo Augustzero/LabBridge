@@ -2,12 +2,17 @@
 #include "labbridge/agent/bootstrap/control_plane_client.h"
 #include "labbridge/agent/bootstrap/process_signal_monitor.h"
 #include "labbridge/agent/bootstrap/startup_handshake.h"
+#include "labbridge/agent/execution/task_executor.h"
+#include "labbridge/agent/runtime/agent_application.h"
 #include "labbridge/agent/runtime/agent_runtime.h"
+#include "labbridge/agent/scheduler/task_scheduler.h"
 #include "labbridge/core/logging.h"
 #include "labbridge/core/version.h"
 
 #include <exception>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace {
 
@@ -35,24 +40,38 @@ int main(int argc, char* argv[]) {
             "startup handshake completed; enabled tasks: " +
                 std::to_string(remote_config.tasks.size()));
 
-        labbridge::agent::SystemRuntimeTimeSource time_source;
+        std::vector<labbridge::core::fs::path> allowed_local_roots;
+        allowed_local_roots.reserve(config.allowed_local_roots.size());
+        for (const auto& root : config.allowed_local_roots) {
+            allowed_local_roots.emplace_back(root);
+        }
+
+        labbridge::agent::SystemRuntimeTimeSource runtime_time_source;
+        labbridge::agent::TaskExecutor executor{
+            client, config.work_dir, std::move(allowed_local_roots)};
+        labbridge::agent::SystemSchedulerTimeSource scheduler_time_source;
+        labbridge::agent::TaskScheduler scheduler{
+            executor, scheduler_time_source};
         labbridge::agent::AgentRuntime runtime{
             config.node,
             config.heartbeat_interval,
             config.config_poll_interval,
             client,
             remote_config,
-            time_source};
-        labbridge::agent::ProcessSignalMonitor signal_monitor{[&runtime] {
+            runtime_time_source,
+            &scheduler};
+        labbridge::agent::AgentApplication application{runtime, scheduler};
+        labbridge::agent::ProcessSignalMonitor signal_monitor{[&application] {
             labbridge::core::log_info(kComponent, "stop requested");
-            runtime.request_stop();
+            application.request_stop();
         }};
 
-        labbridge::core::log_info(kComponent, "runtime control loop started");
-        const auto final_config = runtime.run();
+        labbridge::core::log_info(
+            kComponent, "runtime control and task loops started");
+        const auto final_config = application.run();
         labbridge::core::log_info(
             kComponent,
-            "runtime control loop stopped; enabled tasks: " +
+            "runtime control and task loops stopped; enabled tasks: " +
                 std::to_string(final_config.tasks.size()));
         return 0;
     } catch (const std::exception& error) {

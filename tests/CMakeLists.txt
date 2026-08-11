@@ -166,6 +166,15 @@ add_labbridge_test(
 )
 
 add_labbridge_test(
+    agent_application_test
+    SOURCES component/agent/agent_application_test.cpp
+    LINK_LIBRARIES
+        GTest::gtest_main labbridge_agent_application Threads::Threads
+    LABELS component
+    TIMEOUT 10
+)
+
+add_labbridge_test(
     storage_mapping_test
     SOURCES unit/server/storage_mapping_test.cpp
     LINK_LIBRARIES GTest::gtest_main labbridge_server_postgres

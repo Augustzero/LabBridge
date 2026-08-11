@@ -168,6 +168,13 @@ public:
             }
         }
 
+        for (const auto& item : entries) {
+            if (replacement.count(item.first) == 0U &&
+                active_task_id != item.first) {
+                executor.forget_task(item.first);
+            }
+        }
+
         entries = std::move(replacement);
         time_source.wake();
     }
@@ -239,8 +246,18 @@ public:
                                                    execution.task)) {
                             continue;
                         }
+                        active_task_id = execution.task.id;
                     }
+                    const auto executed_task_id = execution.task.id;
                     executor.execute(std::move(execution));
+                    {
+                        std::lock_guard<std::mutex> lock{mutex};
+                        active_task_id.reset();
+                        if (entries.count(executed_task_id) == 0U) {
+                            // 运行中删除的任务可能在结束时重新写入指纹，需再次清理。
+                            executor.forget_task(executed_task_id);
+                        }
+                    }
                 }
 
                 const auto completed_at = time_source.system_now();
@@ -274,6 +291,7 @@ public:
         const bool was_stopped =
             stop_requested.exchange(true, std::memory_order_acq_rel);
         if (!was_stopped) {
+            executor.request_stop();
             time_source.wake();
         }
     }
@@ -282,6 +300,7 @@ public:
     ISchedulerTimeSource& time_source;
     std::mutex mutex;
     std::map<std::string, Entry> entries;
+    std::optional<std::string> active_task_id;
     std::atomic<bool> stop_requested{false};
     std::atomic<bool> running{false};
 };

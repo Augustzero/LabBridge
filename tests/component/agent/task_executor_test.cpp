@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -115,6 +116,9 @@ public:
         const labbridge::agent::StartTaskRunRequest& request) const override {
         events.push_back("start");
         starts.push_back(request);
+        if (on_start) {
+            on_start();
+        }
         return {"run-" + std::to_string(++run_sequence), false};
     }
 
@@ -149,6 +153,7 @@ public:
     mutable std::vector<labbridge::agent::TaskRunReportRequest> reports;
     mutable int run_sequence{0};
     mutable bool fail_next_report{false};
+    std::function<void()> on_start;
     bool return_wrong_manifest_count{false};
 };
 
@@ -189,6 +194,47 @@ auto fixed_now() {
     return [] {
         return std::chrono::system_clock::time_point{} + 1786176001s;
     };
+}
+
+TEST(TaskExecutorTest, StopBeforeStartDoesNotCreateTaskRun) {
+    TemporaryExecutionTree tree;
+    FakeExecutionClient client;
+    labbridge::agent::TaskExecutor executor{
+        client, tree.work(), {tree.inbox()}, fixed_now()};
+
+    executor.request_stop();
+    executor.execute(scheduled(executable_task(tree.inbox())));
+
+    EXPECT_TRUE(client.events.empty());
+    std::cout << "idle_stop start_requests=0 terminal_reports=0" << std::endl;
+}
+
+TEST(TaskExecutorTest, StopAfterStartDrainsOneFailedTerminalReport) {
+    TemporaryExecutionTree tree;
+    tree.write_csv(
+        "must-not-be-collected.csv",
+        "station_code,device_code,record_time,value\n"
+        "ST001,DV001,2026-08-08 08:00:00,42\n");
+    FakeExecutionClient client;
+    labbridge::agent::TaskExecutor executor{
+        client, tree.work(), {tree.inbox()}, fixed_now()};
+    client.on_start = [&executor] { executor.request_stop(); };
+
+    executor.execute(scheduled(executable_task(tree.inbox())));
+
+    EXPECT_EQ(
+        client.events,
+        (std::vector<std::string>{"start", "report"}));
+    ASSERT_EQ(client.reports.size(), 1U);
+    EXPECT_EQ(
+        client.reports.front().status,
+        labbridge::core::TaskRunStatus::Failed);
+    EXPECT_NE(
+        client.reports.front().error_summary.find("collection skipped"),
+        std::string::npos);
+    EXPECT_TRUE(client.manifests.empty());
+    std::cout << "active_stop flow=start->drain_report status=failed "
+              << "manifest_requests=0 terminal_reports=1" << std::endl;
 }
 
 TEST(TaskExecutorTest, ArchivesParsesQcAndReportsOneTerminalResult) {
