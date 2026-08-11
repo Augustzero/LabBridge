@@ -90,6 +90,14 @@ add_labbridge_test(
     LABELS unit
     TIMEOUT 10
 )
+add_labbridge_test(
+    task_executor_test
+    SOURCES component/agent/task_executor_test.cpp
+    LINK_LIBRARIES
+        GTest::gtest_main
+        labbridge_agent_execution
+    LABELS component
+)
 
 add_labbridge_test(
     csv_parser_test

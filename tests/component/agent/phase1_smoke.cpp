@@ -6,6 +6,7 @@
 #include "labbridge/server/application/node_service.h"
 
 #include <cassert>
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -38,13 +39,19 @@ int main() {
         "{}",
     });
     assert(collect_result.status.ok);
+    const auto sample = std::find_if(
+        collect_result.items.begin(), collect_result.items.end(),
+        [](const auto& item) {
+            return item.original_name == "sample_observation.csv";
+        });
+    assert(sample != collect_result.items.end());
     assert(!collect_result.items.empty());
 
     labbridge::agent::CsvObservationParser parser;
     const auto parse_result = parser.parse({
         "run-001",
         "raw-001",
-        collect_result.items.front().local_path,
+        sample->local_path,
     });
     assert(parse_result.status.ok);
     assert(parse_result.records.size() == 2);

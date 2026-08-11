@@ -16,6 +16,8 @@ target_include_directories(labbridge_agent_domain
 
 add_library(labbridge_agent_execution
     src/execution/task_execution_client.cpp
+    src/execution/local_archive_store.cpp
+    src/execution/task_executor.cpp
 )
 
 target_link_libraries(labbridge_agent_execution
@@ -23,6 +25,8 @@ target_link_libraries(labbridge_agent_execution
         labbridge_core
     PRIVATE
         OpenSSL::Crypto
+        labbridge_agent_domain
+        nlohmann_json::nlohmann_json
 )
 
 target_include_directories(labbridge_agent_execution

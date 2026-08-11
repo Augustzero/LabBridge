@@ -6,6 +6,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace labbridge::agent {
 
@@ -15,6 +16,8 @@ struct AgentStartupConfig {
     std::chrono::milliseconds request_timeout;
     std::chrono::milliseconds heartbeat_interval;
     std::chrono::milliseconds config_poll_interval;
+    std::string work_dir;
+    std::vector<std::string> allowed_local_roots;
 };
 
 class AgentConfigError final : public std::runtime_error {

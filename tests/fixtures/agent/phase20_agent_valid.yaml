@@ -5,5 +5,10 @@ agent:
   request_timeout_seconds: 7
   heartbeat_interval_seconds: 15
 
+storage:
+  work_dir: ./work
+
 tasks:
   poll_interval_seconds: 10
+  allowed_local_roots:
+    - /srv/labbridge/inbox

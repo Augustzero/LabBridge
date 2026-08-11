@@ -1,5 +1,6 @@
 #include "labbridge/agent/bootstrap/agent_config.h"
 #include "labbridge/core/version.h"
+#include "labbridge/core/filesystem.h"
 
 #include <gtest/gtest.h>
 
@@ -28,7 +29,10 @@ std::string runtime_config(std::string_view heartbeat_line,
   name: phase21 agent
   server_url: http://127.0.0.1:18080
   request_timeout_seconds: 7
-)"} + std::string{heartbeat_line} + std::string{tasks_section};
+)"} + std::string{heartbeat_line} + std::string{tasks_section} + R"(
+storage:
+  work_dir: ./work
+)";
 }
 
 TEST(AgentConfigTest, ParsesRequiredFieldsFromYamlContent) {
@@ -40,8 +44,13 @@ agent:
   request_timeout_seconds: 7
   heartbeat_interval_seconds: 15
 
+storage:
+  work_dir: ./data/work
+
 tasks:
   poll_interval_seconds: 10
+  allowed_local_roots:
+    - /srv/labbridge/inbox
 )");
 
     EXPECT_EQ(config.node.node_code, "phase20-node");
@@ -51,6 +60,9 @@ tasks:
     EXPECT_EQ(config.request_timeout, 7s);
     EXPECT_EQ(config.heartbeat_interval, 15s);
     EXPECT_EQ(config.config_poll_interval, 10s);
+    EXPECT_TRUE(labbridge::core::fs::path{config.work_dir}.is_absolute());
+    ASSERT_EQ(config.allowed_local_roots.size(), 1U);
+    EXPECT_EQ(config.allowed_local_roots.front(), "/srv/labbridge/inbox");
 }
 
 TEST(AgentConfigTest, RejectsMissingRequiredName) {
@@ -136,6 +148,27 @@ TEST(AgentConfigTest, RejectsConfigPollIntervalOutsideDedicatedBounds) {
                 "tasks:\n  poll_interval_seconds: " + std::string{value} + "\n"),
             "tasks.poll_interval_seconds must be between 1 and 86400");
     }
+}
+TEST(AgentConfigTest, RejectsMissingOrRelativeAllowedLocalRoots) {
+    const auto base = R"(
+agent:
+  node_code: phase22-node
+  name: phase22 agent
+  server_url: http://127.0.0.1:18080
+  request_timeout_seconds: 7
+  heartbeat_interval_seconds: 15
+storage:
+  work_dir: ./work
+tasks:
+  poll_interval_seconds: 10
+)";
+    expect_config_error(
+        base,
+        "tasks.allowed_local_roots must be a non-empty sequence");
+    expect_config_error(
+        std::string{base} +
+            "  allowed_local_roots:\n    - relative/inbox\n",
+        "entries must be absolute paths");
 }
 
 }  // namespace

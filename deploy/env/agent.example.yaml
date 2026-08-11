@@ -11,4 +11,6 @@ storage:
 
 tasks:
   poll_interval_seconds: 10
+  allowed_local_roots:
+    - /srv/labbridge/inbox
 

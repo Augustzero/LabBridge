@@ -1,6 +1,7 @@
 #include "labbridge/agent/bootstrap/agent_config.h"
 
 #include "labbridge/agent/bootstrap/control_plane_client.h"
+#include "labbridge/core/filesystem.h"
 #include "labbridge/core/version.h"
 
 #include <yaml-cpp/yaml.h>
@@ -9,6 +10,7 @@
 #include <cctype>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace labbridge::agent {
 namespace {
@@ -68,7 +70,43 @@ int required_positive_integer(const YAML::Node& object,
     }
 }
 
-AgentStartupConfig parse_agent_config_node(const YAML::Node& root) {
+labbridge::core::fs::path normalized_absolute_path(
+    const labbridge::core::fs::path& value,
+    const labbridge::core::fs::path& base_directory) {
+    const auto absolute = value.is_absolute() ? value : base_directory / value;
+    return labbridge::core::fs::weakly_canonical(absolute);
+}
+
+std::vector<std::string> required_allowed_roots(const YAML::Node& tasks) {
+    const auto roots = tasks["allowed_local_roots"];
+    if (!roots || !roots.IsSequence() || roots.size() == 0U) {
+        throw AgentConfigError(
+            "tasks.allowed_local_roots must be a non-empty sequence");
+    }
+
+    std::vector<std::string> result;
+    result.reserve(roots.size());
+    for (std::size_t index = 0; index < roots.size(); ++index) {
+        const auto path = roots[index];
+        if (!path.IsScalar()) {
+            throw AgentConfigError(
+                "tasks.allowed_local_roots entries must be absolute paths");
+        }
+        const auto text = path.as<std::string>();
+        const labbridge::core::fs::path root_path{text};
+        if (text.empty() || !root_path.is_absolute()) {
+            throw AgentConfigError(
+                "tasks.allowed_local_roots entries must be absolute paths");
+        }
+        result.push_back(
+            labbridge::core::fs::weakly_canonical(root_path).string());
+    }
+    return result;
+}
+
+AgentStartupConfig parse_agent_config_node(
+    const YAML::Node& root,
+    const labbridge::core::fs::path& base_directory) {
     const auto agent = root["agent"];
     if (!agent || !agent.IsMap()) {
         throw AgentConfigError("agent configuration section is required");
@@ -107,6 +145,16 @@ AgentStartupConfig parse_agent_config_node(const YAML::Node& root) {
         kMaximumIntervalSeconds);
     config.config_poll_interval =
         std::chrono::seconds{config_poll_interval_seconds};
+
+    const auto storage = root["storage"];
+    if (!storage || !storage.IsMap()) {
+        throw AgentConfigError("storage configuration section is required");
+    }
+    config.work_dir = normalized_absolute_path(
+                          required_string(storage, "work_dir", "storage"),
+                          base_directory)
+                          .string();
+    config.allowed_local_roots = required_allowed_roots(tasks);
     return config;
 }
 
@@ -114,7 +162,9 @@ AgentStartupConfig parse_agent_config_node(const YAML::Node& root) {
 
 AgentStartupConfig parse_agent_config(std::string_view yaml_content) {
     try {
-        return parse_agent_config_node(YAML::Load(std::string{yaml_content}));
+        return parse_agent_config_node(
+            YAML::Load(std::string{yaml_content}),
+            labbridge::core::fs::current_path());
     } catch (const AgentConfigError&) {
         throw;
     } catch (const YAML::Exception& error) {
@@ -123,12 +173,17 @@ AgentStartupConfig parse_agent_config(std::string_view yaml_content) {
     } catch (const std::invalid_argument& error) {
         throw AgentConfigError(
             "invalid agent.server_url: " + std::string{error.what()});
+    } catch (const labbridge::core::fs::filesystem_error& error) {
+        throw AgentConfigError(
+            "invalid local path configuration: " + std::string{error.what()});
     }
 }
 
 AgentStartupConfig load_agent_config(const std::string& path) {
     try {
-        return parse_agent_config_node(YAML::LoadFile(path));
+        const auto absolute_path = labbridge::core::fs::absolute(path);
+        return parse_agent_config_node(
+            YAML::LoadFile(path), absolute_path.parent_path());
     } catch (const AgentConfigError&) {
         throw;
     } catch (const YAML::Exception& error) {
@@ -137,6 +192,9 @@ AgentStartupConfig load_agent_config(const std::string& path) {
     } catch (const std::invalid_argument& error) {
         throw AgentConfigError(
             "invalid agent.server_url: " + std::string{error.what()});
+    } catch (const labbridge::core::fs::filesystem_error& error) {
+        throw AgentConfigError(
+            "invalid local path configuration: " + std::string{error.what()});
     }
 }
 

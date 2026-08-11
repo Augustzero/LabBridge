@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -79,6 +80,15 @@ public:
         return path;
     }
 
+    std::filesystem::path create_symlink(
+        const std::filesystem::path& target,
+        const std::string& name) {
+        const auto path = root_ / name;
+        std::filesystem::create_symlink(target, path);
+        files_.push_back(path);
+        return path;
+    }
+
     const std::filesystem::path& root() const {
         return root_;
     }
@@ -114,9 +124,11 @@ TEST(LocalDirCollectorTest, ReturnsFailureWhenRootIsAFile) {
     EXPECT_TRUE(result.items.empty());
 }
 
-TEST(LocalDirCollectorTest, CollectsMatchingFilesAndSkipsNestedFiles) {
+TEST(LocalDirCollectorTest, SortsMatchingFilesAndSkipsNestedAndSymlinkFiles) {
     TemporaryDirectory temporary;
     temporary.create_file("observation.csv", "header\n");
+    temporary.create_file("alpha.csv", "header\n");
+    temporary.create_symlink(temporary.root() / "observation.csv", "linked.csv");
     temporary.create_file("notes.txt", "ignored\n");
     const auto nested = temporary.create_directory("nested");
     temporary.create_nested_file(nested, "nested.csv");
@@ -125,9 +137,13 @@ TEST(LocalDirCollectorTest, CollectsMatchingFilesAndSkipsNestedFiles) {
     const auto result = collector.collect({});
 
     ASSERT_TRUE(result.status.ok) << result.status.message;
-    ASSERT_EQ(result.items.size(), 1U);
-    EXPECT_EQ(result.items.front().original_name, "observation.csv");
-    EXPECT_EQ(result.items.front().source_mtime, "pending");
+    ASSERT_EQ(result.items.size(), 2U);
+    EXPECT_EQ(result.items[0].original_name, "alpha.csv");
+    EXPECT_EQ(result.items[1].original_name, "observation.csv");
+    EXPECT_LT(result.items[0].local_path, result.items[1].local_path);
+    std::cout << "collected_order=" << result.items[0].original_name
+              << "," << result.items[1].original_name
+              << " nested_and_symlink=skipped" << std::endl;
 }
 
 TEST(LocalDirCollectorTest, ConvertsFilesystemErrorsToFailureStatus) {

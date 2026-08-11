@@ -88,7 +88,9 @@ ParseResult CsvObservationParser::parse(const RawFileContext& context) {
     }
 
     const auto header = split_csv_line(line);
-    if (header.size() < 4) {
+    if (header.size() < 4 || header[0] != "station_code" ||
+        header[1] != "device_code" || header[2] != "record_time" ||
+        header[3].empty()) {
         result.status = labbridge::core::Status::failure("csv header is invalid");
         return result;
     }
@@ -102,7 +104,8 @@ ParseResult CsvObservationParser::parse(const RawFileContext& context) {
 
         const auto row = split_csv_line(line);
         if (row.size() < 3) {
-            result.errors.push_back("line " + std::to_string(line_number) + " has fewer than 3 fields");
+            result.errors.push_back(
+                "line " + std::to_string(line_number) + " has fewer than 3 fields");
             continue;
         }
 
@@ -113,7 +116,11 @@ ParseResult CsvObservationParser::parse(const RawFileContext& context) {
         record.payload_json = make_payload_json(header, row);
         result.records.push_back(std::move(record));
     }
-
+    if (input.bad()) {
+        result.status = labbridge::core::Status::failure(
+            "failed while reading csv file");
+        return result;
+    }
     result.status = labbridge::core::Status::success();
     return result;
 }
