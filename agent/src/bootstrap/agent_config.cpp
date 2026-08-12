@@ -17,6 +17,8 @@ namespace {
 
 constexpr int kMaximumRequestTimeoutSeconds = 300;
 constexpr int kMaximumIntervalSeconds = 86400;
+constexpr int kMaximumPendingJobs = 1000000;
+constexpr int kMaximumFingerprintCapacity = 1000000;
 
 bool is_blank(const std::string& value) {
     for (const unsigned char ch : value) {
@@ -103,6 +105,18 @@ std::vector<std::string> required_allowed_roots(const YAML::Node& tasks) {
     }
     return result;
 }
+bool is_within(const labbridge::core::fs::path& path,
+               const labbridge::core::fs::path& root) {
+    auto path_it = path.begin();
+    auto root_it = root.begin();
+    for (; root_it != root.end(); ++root_it, ++path_it) {
+        if (path_it == path.end() || *path_it != *root_it) {
+            return false;
+        }
+    }
+    return true;
+}
+
 
 AgentStartupConfig parse_agent_config_node(
     const YAML::Node& root,
@@ -155,6 +169,41 @@ AgentStartupConfig parse_agent_config_node(
                           base_directory)
                           .string();
     config.allowed_local_roots = required_allowed_roots(tasks);
+    const auto queue_path = normalized_absolute_path(
+        required_string(storage, "queue_db", "storage"), base_directory);
+    if (labbridge::core::fs::exists(queue_path) &&
+        labbridge::core::fs::is_directory(queue_path)) {
+        throw AgentConfigError("storage.queue_db must not be a directory");
+    }
+    for (const auto& root_path : config.allowed_local_roots) {
+        if (is_within(queue_path, labbridge::core::fs::path{root_path})) {
+            throw AgentConfigError(
+                "storage.queue_db must not be inside tasks.allowed_local_roots");
+        }
+    }
+    config.queue_db = queue_path.string();
+    config.max_pending_jobs = static_cast<std::size_t>(required_positive_integer(
+        storage, "max_pending_jobs", "storage", kMaximumPendingJobs));
+    config.processed_fingerprint_capacity_per_task =
+        static_cast<std::size_t>(required_positive_integer(
+            storage, "processed_fingerprint_capacity_per_task",
+            "storage", kMaximumFingerprintCapacity));
+
+    const auto delivery = root["delivery"];
+    if (!delivery || !delivery.IsMap()) {
+        throw AgentConfigError("delivery configuration section is required");
+    }
+    const auto retry_initial_seconds = required_positive_integer(
+        delivery, "retry_initial_seconds", "delivery", 3600);
+    const auto retry_max_seconds = required_positive_integer(
+        delivery, "retry_max_seconds", "delivery", 86400);
+    if (retry_max_seconds < retry_initial_seconds) {
+        throw AgentConfigError(
+            "delivery.retry_max_seconds must be greater than or equal to "
+            "delivery.retry_initial_seconds");
+    }
+    config.retry_initial = std::chrono::seconds{retry_initial_seconds};
+    config.retry_max = std::chrono::seconds{retry_max_seconds};
     return config;
 }
 

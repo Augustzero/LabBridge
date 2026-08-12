@@ -45,7 +45,14 @@ agent:
   heartbeat_interval_seconds: 15
 
 storage:
+  queue_db: ./data/agent_queue.db
   work_dir: ./data/work
+  max_pending_jobs: 1000
+  processed_fingerprint_capacity_per_task: 10000
+
+delivery:
+  retry_initial_seconds: 2
+  retry_max_seconds: 300
 
 tasks:
   poll_interval_seconds: 10

@@ -100,6 +100,21 @@ add_labbridge_test(
     LABELS unit
     TIMEOUT 10
 )
+
+add_labbridge_test(
+    execution_request_codec_test
+    SOURCES unit/agent/execution_request_codec_test.cpp
+    LINK_LIBRARIES GTest::gtest_main labbridge_agent_execution
+    LABELS unit
+    TIMEOUT 10
+)
+add_labbridge_test(
+    agent_queue_store_test
+    SOURCES component/agent/agent_queue_store_test.cpp
+    LINK_LIBRARIES GTest::gtest_main labbridge_agent_storage
+    LABELS component
+    TIMEOUT 10
+)
 add_labbridge_test(
     task_executor_test
     SOURCES component/agent/task_executor_test.cpp

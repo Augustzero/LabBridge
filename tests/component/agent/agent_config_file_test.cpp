@@ -14,14 +14,17 @@ using namespace std::chrono_literals;
 
 TEST(AgentConfigFileTest, LoadsConfigurationFromFile) {
     const auto config = labbridge::agent::load_agent_config(
-        "tests/fixtures/agent/phase20_agent_valid.yaml");
+        "tests/fixtures/agent/phase24_agent_valid.yaml");
 
     EXPECT_EQ(
         config.work_dir,
         labbridge::core::fs::weakly_canonical(
             "tests/fixtures/agent/work").string());
-    EXPECT_EQ(config.node.node_code, "phase20-node");
-    EXPECT_EQ(config.node.name, "phase20 agent");
+    EXPECT_EQ(config.queue_db,
+              labbridge::core::fs::weakly_canonical(
+                  "tests/fixtures/agent/queue/agent.db").string());
+    EXPECT_EQ(config.node.node_code, "phase24-node");
+    EXPECT_EQ(config.node.name, "phase24 agent");
     EXPECT_EQ(config.node.agent_version, labbridge::core::kVersion);
     EXPECT_EQ(config.server_url, "http://127.0.0.1:18080/");
     EXPECT_EQ(config.request_timeout, 7s);

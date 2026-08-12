@@ -16,6 +16,7 @@ target_include_directories(labbridge_agent_domain
 
 add_library(labbridge_agent_execution
     src/execution/task_execution_client.cpp
+    src/execution/execution_request_codec.cpp
     src/execution/local_archive_store.cpp
     src/execution/task_executor.cpp
 )
@@ -30,6 +31,22 @@ target_link_libraries(labbridge_agent_execution
 )
 
 target_include_directories(labbridge_agent_execution
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+add_library(labbridge_agent_storage
+    src/storage/agent_queue_store.cpp
+)
+
+target_link_libraries(labbridge_agent_storage
+    PUBLIC
+        labbridge_agent_execution
+    PRIVATE
+        SQLite::SQLite3
+)
+
+target_include_directories(labbridge_agent_storage
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/include
 )

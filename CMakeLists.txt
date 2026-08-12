@@ -8,6 +8,7 @@ project(LabBridge
 
 find_package(PostgreSQL REQUIRED)
 find_package(OpenSSL REQUIRED COMPONENTS Crypto)
+find_package(SQLite3 REQUIRED)
 find_package(Boost REQUIRED COMPONENTS system)
 find_package(nlohmann_json REQUIRED)
 find_package(Threads REQUIRED)

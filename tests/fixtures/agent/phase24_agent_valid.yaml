@@ -1,13 +1,13 @@
 agent:
-  node_code: lab-node-001
-  name: default-lab-node
-  server_url: http://127.0.0.1:18080
-  request_timeout_seconds: 5
+  node_code: phase24-node
+  name: phase24 agent
+  server_url: http://127.0.0.1:18080/
+  request_timeout_seconds: 7
   heartbeat_interval_seconds: 15
 
 storage:
-  queue_db: ./data/agent_queue.db
-  work_dir: ./data/work
+  queue_db: ./queue/agent.db
+  work_dir: ./work
   max_pending_jobs: 1000
   processed_fingerprint_capacity_per_task: 10000
 
@@ -19,4 +19,3 @@ tasks:
   poll_interval_seconds: 10
   allowed_local_roots:
     - /srv/labbridge/inbox
-

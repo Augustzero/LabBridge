@@ -1,4 +1,5 @@
 #include "labbridge/agent/bootstrap/control_plane_client.h"
+#include "labbridge/agent/execution/execution_request_codec.h"
 
 #include "labbridge/core/logging.h"
 
@@ -728,14 +729,8 @@ PulledAgentConfig ControlPlaneClient::fetch_config(
 
 StartTaskRunResult ControlPlaneClient::start_task_run(
     const StartTaskRunRequest& request_value) const {
-    Json body{
-        {"node_code", request_value.node_code},
-        {"task_id", request_value.task_id},
-        {"execution_key", request_value.execution_key},
-        {"scheduled_for", request_value.scheduled_for},
-        {"started_at", request_value.started_at},
-        {"trigger_type", request_value.trigger_type},
-    };
+    Json body = Json::parse(encode_start_task_run_request(request_value));
+    body.erase("codec_version");
     const auto response = request(
         "POST", "/api/v1/task-runs/start", body.dump());
     const auto data = success_data(response.status, response.body);
@@ -747,23 +742,8 @@ StartTaskRunResult ControlPlaneClient::start_task_run(
 
 RawFileManifestResult ControlPlaneClient::report_raw_file_manifest(
     const RawFileManifestRequest& request_value) const {
-    Json files = Json::array();
-    for (const auto& file : request_value.files) {
-        files.push_back({
-            {"original_name", file.original_name},
-            {"file_hash", file.file_hash},
-            {"storage_path", file.storage_path},
-            {"size_bytes", file.size_bytes},
-            {"source_mtime", file.source_mtime},
-            {"ingest_status", file.ingest_status},
-        });
-    }
-    Json body{
-        {"task_run_id", request_value.task_run_id},
-        {"node_code", request_value.node_code},
-        {"idempotency_key", request_value.idempotency_key},
-        {"files", std::move(files)},
-    };
+    Json body = Json::parse(encode_raw_file_manifest_request(request_value));
+    body.erase("codec_version");
     const auto response = request(
         "POST", "/api/v1/raw-files/manifest", body.dump());
     const auto data = success_data(response.status, response.body);
@@ -775,39 +755,8 @@ RawFileManifestResult ControlPlaneClient::report_raw_file_manifest(
 
 TaskRunReportResult ControlPlaneClient::report_task_run(
     const TaskRunReportRequest& request_value) const {
-    Json records = Json::array();
-    for (const auto& parsed : request_value.parsed_records) {
-        Json qc_results = Json::array();
-        for (const auto& qc : parsed.qc_results) {
-            qc_results.push_back({
-                {"qc_rule_id", qc.qc_rule_id},
-                {"level", qc.level},
-                {"result", qc.result},
-                {"message", qc.message},
-            });
-        }
-        records.push_back({
-            {"raw_file_id", parsed.raw_file_id},
-            {"station_code", parsed.record.station_code},
-            {"device_code", parsed.record.device_code},
-            {"record_time", parsed.record.record_time},
-            {"payload_json", parsed.record.payload_json},
-            {"parse_status", parsed.parse_status},
-            {"qc_results", std::move(qc_results)},
-        });
-    }
-    Json body{
-        {"task_run_id", request_value.task_run_id},
-        {"node_code", request_value.node_code},
-        {"idempotency_key", request_value.idempotency_key},
-        {"status", terminal_status(request_value.status)},
-        {"finished_at", request_value.finished_at},
-        {"items_total", request_value.items_total},
-        {"items_success", request_value.items_success},
-        {"items_failed", request_value.items_failed},
-        {"error_summary", request_value.error_summary},
-        {"parsed_records", std::move(records)},
-    };
+    Json body = Json::parse(encode_task_run_report_request(request_value));
+    body.erase("codec_version");
     const auto response = request(
         "POST", "/api/v1/task-runs/report", body.dump());
     const auto data = success_data(response.status, response.body);
