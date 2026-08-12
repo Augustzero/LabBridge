@@ -37,6 +37,7 @@ target_include_directories(labbridge_agent_execution
 
 add_library(labbridge_agent_storage
     src/storage/agent_queue_store.cpp
+    src/execution/reliable_delivery_client.cpp
 )
 
 target_link_libraries(labbridge_agent_storage
@@ -130,6 +131,7 @@ target_link_libraries(labbridge_agent
         labbridge_agent_application
         labbridge_agent_execution
         labbridge_agent_scheduler
+        labbridge_agent_storage
 )
 set_target_properties(
     labbridge_agent

@@ -37,11 +37,12 @@ public:
                  labbridge::core::fs::path work_dir,
                  std::vector<labbridge::core::fs::path> allowed_local_roots,
                  NowFunction now);
-    void recover_pending_jobs();
+    void recover_pending_jobs() override;
 
     void execute(ScheduledTaskExecution execution) override;
     void request_stop() noexcept override;
     void forget_task(const std::string& task_id) override;
+    void reconcile_tasks(const std::vector<std::string>& task_ids) override;
 
 private:
     bool was_processed(const std::string& task_id,

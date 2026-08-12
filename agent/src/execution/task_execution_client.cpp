@@ -9,6 +9,20 @@
 #include <string_view>
 
 namespace labbridge::agent {
+
+TaskExecutionClientError::TaskExecutionClientError(
+    TaskExecutionErrorKind kind, std::string message, unsigned int http_status)
+    : std::runtime_error(std::move(message)), kind_(kind),
+      http_status_(http_status) {}
+
+TaskExecutionErrorKind TaskExecutionClientError::kind() const noexcept {
+    return kind_;
+}
+
+unsigned int TaskExecutionClientError::http_status() const noexcept {
+    return http_status_;
+}
+
 namespace {
 
 std::string sha256_hex(std::string_view value) {

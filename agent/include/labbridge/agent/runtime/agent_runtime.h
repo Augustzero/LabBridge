@@ -48,7 +48,12 @@ public:
                  IRuntimeControlClient& client,
                  PulledAgentConfig initial_config,
                  IRuntimeTimeSource& time_source,
-                 IRuntimeConfigSink* config_sink = nullptr);
+                 IRuntimeConfigSink* config_sink = nullptr,
+                 bool initially_connected = true,
+                 std::chrono::milliseconds reconnect_initial =
+                     std::chrono::seconds{2},
+                 std::chrono::milliseconds reconnect_max =
+                     std::chrono::minutes{5});
 
     void publish_initial_config();
     PulledAgentConfig run();
@@ -58,6 +63,7 @@ private:
     bool stop_requested() const noexcept;
     void send_heartbeat();
     void refresh_config();
+    bool reconnect();
 
     labbridge::core::NodeInfo node_;
     std::chrono::milliseconds heartbeat_interval_;
@@ -67,6 +73,9 @@ private:
     IRuntimeTimeSource& time_source_;
     IRuntimeConfigSink* config_sink_;
     bool initial_config_published_{false};
+    bool connected_{true};
+    std::chrono::milliseconds reconnect_initial_;
+    std::chrono::milliseconds reconnect_max_;
     std::atomic<bool> stop_requested_{false};
 };
 

@@ -378,6 +378,7 @@ void TaskExecutor::execute(ScheduledTaskExecution execution) {
         return;
     }
     if (queue_store_ != nullptr) {
+        if (queue_store_->has_capacity() == false) { return; }
         const auto scheduled_for = format_utc(execution.scheduled_for);
         StartTaskRunRequest request{
             execution.task.node_code,
@@ -561,6 +562,13 @@ void TaskExecutor::execute(ScheduledTaskExecution execution) {
 }
 void TaskExecutor::request_stop() noexcept {
     stop_requested_.store(true, std::memory_order_release);
+    client_.request_stop();
+}
+
+void TaskExecutor::reconcile_tasks(const std::vector<std::string>& task_ids) {
+    if (queue_store_ != nullptr) {
+        queue_store_->reconcile_tasks(task_ids);
+    }
 }
 
 

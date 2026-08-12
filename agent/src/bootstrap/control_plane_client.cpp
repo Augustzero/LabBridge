@@ -427,7 +427,14 @@ ControlPlaneClientError::ControlPlaneClientError(
     std::string message,
     unsigned int http_status,
     std::string server_code)
-    : std::runtime_error(std::move(message)),
+    : TaskExecutionClientError(
+          kind == ControlPlaneErrorKind::Network ? TaskExecutionErrorKind::Network
+          : kind == ControlPlaneErrorKind::ServerError ? TaskExecutionErrorKind::ServerError
+          : (kind == ControlPlaneErrorKind::InvalidJson ||
+             kind == ControlPlaneErrorKind::InvalidResponse)
+                ? TaskExecutionErrorKind::InvalidResponse
+                : TaskExecutionErrorKind::HttpStatus,
+          std::move(message), http_status),
       kind_(kind),
       http_status_(http_status),
       server_code_(std::move(server_code)) {}

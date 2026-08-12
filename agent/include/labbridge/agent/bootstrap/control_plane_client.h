@@ -19,7 +19,7 @@ enum class ControlPlaneErrorKind {
     ServerError,
 };
 
-class ControlPlaneClientError final : public std::runtime_error {
+class ControlPlaneClientError final : public TaskExecutionClientError {
 public:
     ControlPlaneClientError(ControlPlaneErrorKind kind,
                             std::string message,
@@ -49,6 +49,8 @@ class IRuntimeControlClient {
 public:
     virtual ~IRuntimeControlClient() = default;
 
+    virtual void register_node(const labbridge::core::NodeInfo&) const {}
+
     virtual void send_heartbeat(
         const labbridge::core::NodeHeartbeat& heartbeat) const = 0;
     virtual PulledAgentConfig fetch_config(
@@ -61,7 +63,7 @@ public:
     ControlPlaneClient(std::string server_url,
                        std::chrono::milliseconds request_timeout);
 
-    void register_node(const labbridge::core::NodeInfo& node) const;
+    void register_node(const labbridge::core::NodeInfo& node) const override;
     void send_heartbeat(
         const labbridge::core::NodeHeartbeat& heartbeat) const override;
     PulledAgentConfig fetch_config(

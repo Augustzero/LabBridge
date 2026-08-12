@@ -2,6 +2,7 @@
 
 #include "labbridge/agent/execution/reliable_execution_store.h"
 
+#include <chrono>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -41,6 +42,18 @@ public:
                      const TaskRunReportRequest& request,
                      const std::vector<bool>& parsed_without_errors) override;
     void complete_job(const std::string& execution_key) override;
+    void record_delivery_failure(
+        const std::string& request_type, const std::string& idempotency_key,
+        bool retryable, const std::string& error_kind, unsigned int http_status,
+        const std::string& message, std::chrono::milliseconds retry_delay);
+    void resume_delivery(const std::string& request_type,
+                         const std::string& idempotency_key);
+    std::chrono::milliseconds delivery_retry_remaining(
+        const std::string& request_type, const std::string& idempotency_key) const;
+    int delivery_attempt_count(const std::string& request_type,
+                               const std::string& idempotency_key) const;
+    void reconcile_tasks(const std::vector<std::string>& active_task_ids) override;
+    bool has_capacity() const override;
     bool is_file_processed(const std::string& task_id,
                            const std::string& fingerprint) const override;
     std::size_t pending_job_count() const;

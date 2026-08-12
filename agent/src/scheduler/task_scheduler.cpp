@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <labbridge/agent/execution/reliable_delivery_client.h>
 #include <map>
 #include <optional>
 #include <stdexcept>
@@ -176,6 +177,9 @@ public:
         }
 
         entries = std::move(replacement);
+        std::vector<std::string> active_ids;
+        for (const auto& item : entries) { active_ids.push_back(item.first); }
+        executor.reconcile_tasks(active_ids);
         time_source.wake();
     }
 
@@ -189,6 +193,11 @@ public:
             std::atomic<bool>& state;
             ~RunningGuard() { state.store(false, std::memory_order_release); }
         } guard{running};
+
+        try { executor.recover_pending_jobs(); }
+        catch (const DeliveryAbandoned& error) {
+            labbridge::core::log_warn(kComponent, error.what());
+        }
 
         while (!stop_requested.load(std::memory_order_acquire)) {
             const auto now = time_source.system_now();
@@ -249,7 +258,11 @@ public:
                         active_task_id = execution.task.id;
                     }
                     const auto executed_task_id = execution.task.id;
-                    executor.execute(std::move(execution));
+                    try {
+                        executor.execute(std::move(execution));
+                    } catch (const DeliveryAbandoned& error) {
+                        labbridge::core::log_warn(kComponent, error.what());
+                    }
                     {
                         std::lock_guard<std::mutex> lock{mutex};
                         active_task_id.reset();

@@ -109,6 +109,14 @@ add_labbridge_test(
     TIMEOUT 10
 )
 add_labbridge_test(
+    reliable_delivery_client_test
+    SOURCES component/agent/reliable_delivery_client_test.cpp
+    LINK_LIBRARIES GTest::gtest_main labbridge_agent_storage Threads::Threads
+    LABELS component
+    TIMEOUT 10
+)
+
+add_labbridge_test(
     agent_queue_store_test
     SOURCES component/agent/agent_queue_store_test.cpp
     LINK_LIBRARIES GTest::gtest_main labbridge_agent_storage

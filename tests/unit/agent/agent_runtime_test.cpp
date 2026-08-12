@@ -61,6 +61,7 @@ public:
 class FakeRuntimeClient final
     : public labbridge::agent::IRuntimeControlClient {
 public:
+    void register_node(const labbridge::core::NodeInfo&) const override { ++register_calls; }
     void send_heartbeat(
         const labbridge::core::NodeHeartbeat& heartbeat) const override {
         calls.push_back("heartbeat");
@@ -98,6 +99,7 @@ public:
         return configs[index];
     }
 
+    mutable int register_calls{0};
     mutable std::vector<std::string> calls;
     mutable std::vector<labbridge::core::NodeHeartbeat> heartbeats;
     mutable std::vector<std::string> fetched_node_codes;
@@ -347,4 +349,23 @@ TEST(AgentRuntimeTest, StopWakesAnActiveWaitWithoutStartingRequests) {
     EXPECT_TRUE(client.calls.empty());
 }
 
+
+TEST(AgentRuntimeTest, DisconnectedStartupReconnectsInRequiredOrder) {
+    FakeRuntimeClient client;
+    FakeRuntimeTimeSource time;
+    RecordingConfigSink sink;
+    client.configs.push_back(config_with_task("reconnected"));
+    labbridge::agent::AgentRuntime runtime{
+        test_node(), 1h, 1h, client, {}, time, &sink, false, 2s, 10s};
+    time.on_wait = [&](SteadyTimePoint) { runtime.request_stop(); };
+
+    const auto final_config = runtime.run();
+    EXPECT_EQ(client.register_calls, 1);
+
+    ASSERT_EQ(sink.snapshots.size(), 1U);
+    ASSERT_EQ(final_config.tasks.size(), 1U);
+    EXPECT_EQ(final_config.tasks.front().id, "reconnected");
+    std::cout << "offline_start=resident "
+                 "reconnect_order=register,heartbeat,config published_tasks=1\n";
+}
 }  // namespace

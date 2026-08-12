@@ -579,7 +579,7 @@ std::vector<RecoveredJob> AgentQueueStore::recover_jobs() const {
     std::lock_guard<std::mutex> lock{impl_->mutex};
     auto statement = prepare(
         impl_->database,
-        "SELECT jobs.execution_key, jobs.task_config_json, jobs.stage, "
+        "SELECT jobs.execution_key, jobs.task_config_json, CASE WHEN jobs.stage = 'retry_wait' THEN jobs.retry_stage ELSE jobs.stage END, "
         "deliveries.request_json, COALESCE(jobs.task_run_id, ''), "
         "COALESCE((SELECT request_json FROM pending_deliveries "
         "WHERE execution_key = jobs.execution_key AND request_type = 'manifest'), ''), "
@@ -588,7 +588,7 @@ std::vector<RecoveredJob> AgentQueueStore::recover_jobs() const {
         "FROM pending_jobs AS jobs "
         "JOIN pending_deliveries AS deliveries "
         "ON deliveries.execution_key = jobs.execution_key "
-        "AND deliveries.request_type = 'start' "
+        "AND deliveries.request_type = 'start' WHERE jobs.stage != 'requires_attention' "
         "ORDER BY jobs.created_at, jobs.execution_key",
         "recover jobs");
 
@@ -846,6 +846,179 @@ void AgentQueueStore::complete_job(const std::string& execution_key) {
         throw AgentQueueError("complete job requires report_pending job");
     }
     transaction.commit();
+}
+
+void AgentQueueStore::record_delivery_failure(
+    const std::string& request_type,
+    const std::string& idempotency_key,
+    bool retryable,
+    const std::string& error_kind,
+    unsigned int http_status,
+    const std::string& message,
+    std::chrono::milliseconds retry_delay) {
+    std::lock_guard<std::mutex> lock{impl_->mutex};
+    Transaction transaction{impl_->database, "record delivery failure"};
+    auto delivery = prepare(
+        impl_->database,
+        "UPDATE pending_deliveries SET attempt_count = attempt_count + 1, "
+        "next_attempt_at = strftime('%Y-%m-%dT%H:%M:%fZ','now', ?), "
+        "last_error_kind = ?, last_http_status = ?, last_error = ?, "
+        "updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') "
+        "WHERE request_type = ? AND idempotency_key = ?",
+        "record delivery failure");
+    const auto modifier = "+" +
+        std::to_string(static_cast<double>(retry_delay.count()) / 1000.0) +
+        " seconds";
+    bind_text(impl_->database, delivery.get(), 1, modifier,
+              "record delivery failure");
+    bind_text(impl_->database, delivery.get(), 2, error_kind,
+              "record delivery failure");
+    check_result(sqlite3_bind_int64(delivery.get(), 3, http_status),
+                 impl_->database, "record delivery failure");
+    bind_text(impl_->database, delivery.get(), 4, message.substr(0, 512),
+              "record delivery failure");
+    bind_text(impl_->database, delivery.get(), 5, request_type,
+              "record delivery failure");
+    bind_text(impl_->database, delivery.get(), 6, idempotency_key,
+              "record delivery failure");
+    check_result(sqlite3_step(delivery.get()), impl_->database,
+                 "record delivery failure");
+    if (sqlite3_changes(impl_->database) != 1) {
+        throw AgentQueueError("delivery does not exist");
+    }
+    auto job = prepare(
+        impl_->database,
+        "UPDATE pending_jobs SET retry_stage = stage, stage = ?, "
+        "attempt_count = attempt_count + 1, "
+        "next_attempt_at = strftime('%Y-%m-%dT%H:%M:%fZ','now', ?), "
+        "last_error_kind = ?, last_error = ?, "
+        "updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') "
+        "WHERE execution_key = (SELECT execution_key FROM pending_deliveries "
+        "WHERE request_type = ? AND idempotency_key = ?) "
+        "AND stage IN ('start_pending','manifest_pending','report_pending')",
+        "record job failure");
+    bind_text(impl_->database, job.get(), 1,
+              retryable ? "retry_wait" : "requires_attention",
+              "record job failure");
+    bind_text(impl_->database, job.get(), 2, modifier,
+              "record job failure");
+    bind_text(impl_->database, job.get(), 3, error_kind,
+              "record job failure");
+    bind_text(impl_->database, job.get(), 4, message.substr(0, 512),
+              "record job failure");
+    bind_text(impl_->database, job.get(), 5, request_type,
+              "record job failure");
+    bind_text(impl_->database, job.get(), 6, idempotency_key,
+              "record job failure");
+    check_result(sqlite3_step(job.get()), impl_->database,
+                 "record job failure");
+    auto attempt = prepare(
+        impl_->database,
+        "INSERT INTO delivery_attempts "
+        "(execution_key,request_type,attempt_number,attempted_at,outcome,"
+        "error_kind,http_status,message) SELECT execution_key,request_type,"
+        "attempt_count,strftime('%Y-%m-%dT%H:%M:%fZ','now'),?,?,?,? "
+        "FROM pending_deliveries WHERE request_type = ? AND idempotency_key = ?",
+        "insert delivery attempt");
+    bind_text(impl_->database, attempt.get(), 1,
+              retryable ? "retryable_failure" : "permanent_failure",
+              "insert delivery attempt");
+    bind_text(impl_->database, attempt.get(), 2, error_kind,
+              "insert delivery attempt");
+    check_result(sqlite3_bind_int64(attempt.get(), 3, http_status),
+                 impl_->database, "insert delivery attempt");
+    bind_text(impl_->database, attempt.get(), 4, message.substr(0, 512),
+              "insert delivery attempt");
+    bind_text(impl_->database, attempt.get(), 5, request_type,
+              "insert delivery attempt");
+    bind_text(impl_->database, attempt.get(), 6, idempotency_key,
+              "insert delivery attempt");
+    check_result(sqlite3_step(attempt.get()), impl_->database,
+                 "insert delivery attempt");
+    transaction.commit();
+}
+
+void AgentQueueStore::resume_delivery(const std::string& request_type,
+                                      const std::string& idempotency_key) {
+    std::lock_guard<std::mutex> lock{impl_->mutex};
+    auto statement = prepare(
+        impl_->database,
+        "UPDATE pending_jobs SET stage = retry_stage, retry_stage = NULL, "
+        "next_attempt_at = NULL WHERE execution_key = "
+        "(SELECT execution_key FROM pending_deliveries "
+        "WHERE request_type = ? AND idempotency_key = ?) "
+        "AND stage = 'retry_wait'",
+        "resume delivery");
+    bind_text(impl_->database, statement.get(), 1, request_type,
+              "resume delivery");
+    bind_text(impl_->database, statement.get(), 2, idempotency_key,
+              "resume delivery");
+    check_result(sqlite3_step(statement.get()), impl_->database,
+                 "resume delivery");
+}
+
+std::chrono::milliseconds AgentQueueStore::delivery_retry_remaining(
+    const std::string& request_type,
+    const std::string& idempotency_key) const {
+    std::lock_guard<std::mutex> lock{impl_->mutex};
+    auto statement = prepare(
+        impl_->database,
+        "SELECT max(0, CAST((julianday(next_attempt_at) - "
+        "julianday('now')) * 86400000 AS INTEGER)) "
+        "FROM pending_deliveries WHERE request_type = ? AND idempotency_key = ?",
+        "read delivery retry remaining");
+    bind_text(impl_->database, statement.get(), 1, request_type,
+              "read delivery retry remaining");
+    bind_text(impl_->database, statement.get(), 2, idempotency_key,
+              "read delivery retry remaining");
+    check_result(sqlite3_step(statement.get()), impl_->database,
+                 "read delivery retry remaining");
+    return std::chrono::milliseconds{sqlite3_column_int64(statement.get(), 0)};
+}
+
+int AgentQueueStore::delivery_attempt_count(
+    const std::string& request_type,
+    const std::string& idempotency_key) const {
+    std::lock_guard<std::mutex> lock{impl_->mutex};
+    auto statement = prepare(
+        impl_->database,
+        "SELECT attempt_count FROM pending_deliveries "
+        "WHERE request_type = ? AND idempotency_key = ?",
+        "read delivery attempt count");
+    bind_text(impl_->database, statement.get(), 1, request_type,
+              "read delivery attempt count");
+    bind_text(impl_->database, statement.get(), 2, idempotency_key,
+              "read delivery attempt count");
+    check_result(sqlite3_step(statement.get()), impl_->database,
+                 "read delivery attempt count");
+    return sqlite3_column_int(statement.get(), 0);
+}
+
+void AgentQueueStore::reconcile_tasks(
+    const std::vector<std::string>& active_task_ids) {
+    std::lock_guard<std::mutex> lock{impl_->mutex};
+    std::string sql = "DELETE FROM processed_files";
+    if (!active_task_ids.empty()) {
+        sql += " WHERE task_id NOT IN (";
+        for (std::size_t index = 0; index < active_task_ids.size(); ++index) {
+            sql += index == 0 ? "?" : ",?";
+        }
+        sql += ")";
+    }
+    auto statement = prepare(impl_->database, sql.c_str(),
+                             "reconcile processed tasks");
+    for (std::size_t index = 0; index < active_task_ids.size(); ++index) {
+        bind_text(impl_->database, statement.get(),
+                  static_cast<int>(index + 1), active_task_ids[index],
+                  "reconcile processed tasks");
+    }
+    check_result(sqlite3_step(statement.get()), impl_->database,
+                 "reconcile processed tasks");
+}
+
+bool AgentQueueStore::has_capacity() const {
+    std::lock_guard<std::mutex> lock{impl_->mutex};
+    return read_pending_job_count(impl_->database) < impl_->max_pending_jobs;
 }
 
 bool AgentQueueStore::is_file_processed(

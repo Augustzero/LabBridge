@@ -2,10 +2,25 @@
 
 #include "labbridge/core/models.h"
 
+#include <stdexcept>
 #include <string>
 #include <vector>
 
 namespace labbridge::agent {
+
+enum class TaskExecutionErrorKind { Network, HttpStatus, InvalidResponse, ServerError };
+
+class TaskExecutionClientError : public std::runtime_error {
+public:
+    TaskExecutionClientError(TaskExecutionErrorKind kind, std::string message,
+                             unsigned int http_status = 0);
+    TaskExecutionErrorKind kind() const noexcept;
+    unsigned int http_status() const noexcept;
+private:
+    TaskExecutionErrorKind kind_;
+    unsigned int http_status_;
+};
+
 
 struct StartTaskRunRequest {
     std::string node_code;
@@ -91,6 +106,7 @@ std::string make_report_idempotency_key(
 class ITaskExecutionClient {
 public:
     virtual ~ITaskExecutionClient() = default;
+    virtual void request_stop() noexcept {}
 
     virtual StartTaskRunResult start_task_run(
         const StartTaskRunRequest& request) const = 0;

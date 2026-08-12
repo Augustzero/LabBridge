@@ -70,67 +70,114 @@ AgentRuntime::AgentRuntime(labbridge::core::NodeInfo node,
                            IRuntimeControlClient& client,
                            PulledAgentConfig initial_config,
                            IRuntimeTimeSource& time_source,
-                           IRuntimeConfigSink* config_sink)
+                           IRuntimeConfigSink* config_sink,
+                           bool initially_connected,
+                           std::chrono::milliseconds reconnect_initial,
+                           std::chrono::milliseconds reconnect_max)
     : node_(std::move(node)),
       heartbeat_interval_(heartbeat_interval),
       config_poll_interval_(config_poll_interval),
       client_(client),
       current_config_(std::move(initial_config)),
       time_source_(time_source),
-      config_sink_(config_sink) {
+      config_sink_(config_sink),
+      connected_(initially_connected),
+      reconnect_initial_(reconnect_initial),
+      reconnect_max_(reconnect_max) {
     if (heartbeat_interval_ <= std::chrono::milliseconds::zero() ||
-        config_poll_interval_ <= std::chrono::milliseconds::zero()) {
+        config_poll_interval_ <= std::chrono::milliseconds::zero() ||
+        reconnect_initial_ <= std::chrono::milliseconds::zero() ||
+        reconnect_max_ < reconnect_initial_) {
         throw std::invalid_argument("runtime intervals must be positive");
     }
 }
 
 void AgentRuntime::publish_initial_config() {
-    if (!initial_config_published_ && config_sink_ != nullptr) {
+    if (connected_ && !initial_config_published_ && config_sink_ != nullptr) {
         config_sink_->replace_config(current_config_.tasks);
     }
     initial_config_published_ = true;
 }
-
 PulledAgentConfig AgentRuntime::run() {
     publish_initial_config();
-    const auto started_at = time_source_.steady_now();
-    auto next_heartbeat = started_at + heartbeat_interval_;
-    auto next_config_poll = started_at + config_poll_interval_;
+    auto now = time_source_.steady_now();
+    auto next_heartbeat = now + heartbeat_interval_;
+    auto next_config_poll = now + config_poll_interval_;
+    auto reconnect_delay = reconnect_initial_;
+    auto next_reconnect = now;
 
     while (!stop_requested()) {
-        if (time_source_.steady_now() >= next_heartbeat) {
-            if (stop_requested()) {
-                break;
+        now = time_source_.steady_now();
+        if (!connected_) {
+            if (now >= next_reconnect) {
+                try {
+                    if (reconnect()) {
+                        connected_ = true;
+                        reconnect_delay = reconnect_initial_;
+                        now = time_source_.steady_now();
+                        next_heartbeat = now + heartbeat_interval_;
+                        next_config_poll = now + config_poll_interval_;
+                        continue;
+                    }
+                } catch (const ControlPlaneClientError& error) {
+                    const auto status = error.http_status();
+                    const bool transient =
+                        error.kind() == ControlPlaneErrorKind::Network ||
+                        error.kind() == ControlPlaneErrorKind::ServerError ||
+                        status == 408 || status == 429 ||
+                        (status >= 500 && status <= 599);
+                    if (!transient) {
+                        throw;
+                    }
+                    log_control_plane_failure("reconnect", error);
+                }
+                next_reconnect = time_source_.steady_now() + reconnect_delay;
+                reconnect_delay = std::min(reconnect_max_, reconnect_delay * 2);
             }
+            time_source_.wait_until(next_reconnect, stop_requested_);
+            continue;
+        }
+
+        if (now >= next_heartbeat) {
             send_heartbeat();
             next_heartbeat = time_source_.steady_now() + heartbeat_interval_;
         }
-
-        // 请求期间可能收到停止通知，不能继续发起同一轮的下一项网络请求。
         if (stop_requested()) {
             break;
         }
-
         if (time_source_.steady_now() >= next_config_poll) {
-            if (stop_requested()) {
-                break;
-            }
             refresh_config();
-            next_config_poll =
-                time_source_.steady_now() + config_poll_interval_;
+            next_config_poll = time_source_.steady_now() + config_poll_interval_;
         }
-
         if (stop_requested()) {
             break;
         }
-
-        time_source_.wait_until(
-            std::min(next_heartbeat, next_config_poll), stop_requested_);
+        time_source_.wait_until(std::min(next_heartbeat, next_config_poll),
+                                stop_requested_);
     }
-
     return current_config_;
 }
 
+bool AgentRuntime::reconnect() {
+    client_.register_node(node_);
+    if (stop_requested()) {
+        return false;
+    }
+    client_.send_heartbeat({node_.node_code, node_.agent_version,
+                            format_utc_timestamp(time_source_.system_now())});
+    if (stop_requested()) {
+        return false;
+    }
+    current_config_ = client_.fetch_config(node_.node_code);
+    if (config_sink_ != nullptr) {
+        config_sink_->replace_config(current_config_.tasks);
+    }
+    initial_config_published_ = true;
+    labbridge::core::log_info(
+        kComponent, "control plane reconnected; enabled_tasks=" +
+                        std::to_string(current_config_.tasks.size()));
+    return true;
+}
 void AgentRuntime::request_stop() noexcept {
     const bool was_stopped =
         stop_requested_.exchange(true, std::memory_order_acq_rel);
