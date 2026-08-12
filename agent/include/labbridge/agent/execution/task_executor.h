@@ -2,6 +2,7 @@
 
 #include "labbridge/agent/execution/local_archive_store.h"
 #include "labbridge/agent/execution/task_execution_client.h"
+#include "labbridge/agent/execution/reliable_execution_store.h"
 #include "labbridge/agent/scheduler/task_scheduler.h"
 
 #include <atomic>
@@ -31,6 +32,13 @@ public:
                  NowFunction now,
                  std::size_t fingerprint_capacity = 1024);
 
+    TaskExecutor(ITaskExecutionClient& client,
+                 IReliableExecutionStore& queue_store,
+                 labbridge::core::fs::path work_dir,
+                 std::vector<labbridge::core::fs::path> allowed_local_roots,
+                 NowFunction now);
+    void recover_pending_jobs();
+
     void execute(ScheduledTaskExecution execution) override;
     void request_stop() noexcept override;
     void forget_task(const std::string& task_id) override;
@@ -42,8 +50,12 @@ private:
                             std::string fingerprint);
 
     ITaskExecutionClient& client_;
+    void run_reliable_job(RecoveredJob job);
+    RecoveredJob load_job(const std::string& execution_key) const;
+
     LocalArchiveStore archive_store_;
     std::vector<labbridge::core::fs::path> allowed_local_roots_;
+    IReliableExecutionStore* queue_store_{nullptr};
     NowFunction now_;
     std::size_t fingerprint_capacity_;
     std::unordered_map<std::string, std::deque<std::string>>

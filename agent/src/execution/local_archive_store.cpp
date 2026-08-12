@@ -148,15 +148,15 @@ ArchivedLocalFile LocalArchiveStore::archive(
         throw std::invalid_argument("task and task run IDs must be safe path segments");
     }
 
-    const auto directory = work_dir_ / "archive" / task_id / task_run_id;
+    const auto destination =
+        plan_archive_path(task_id, task_run_id, ordinal, source.original_name);
+    const auto directory = destination.parent_path();
     labbridge::core::fs::create_directories(directory);
-    const auto filename = std::to_string(ordinal) + "-" +
-                          sanitized_filename(source.original_name);
-    const auto destination = directory / filename;
     if (labbridge::core::fs::exists(destination)) {
         throw std::runtime_error("archive destination already exists");
     }
 
+    const auto filename = destination.filename().string();
     const auto temporary =
         directory /
         (filename + ".tmp-" +
@@ -181,6 +181,45 @@ ArchivedLocalFile LocalArchiveStore::archive(
     }
 
     return {source, labbridge::core::fs::weakly_canonical(destination)};
+}
+ArchivedLocalFile LocalArchiveStore::recover_archive(
+    const LocalFileMetadata& source,
+    const labbridge::core::fs::path& archive_path) const {
+    if (labbridge::core::fs::exists(archive_path)) {
+        if (!labbridge::core::fs::is_regular_file(archive_path) ||
+            labbridge::core::fs::file_size(archive_path) !=
+                static_cast<std::uintmax_t>(source.size_bytes) ||
+            sha256_file(archive_path) != source.file_hash) {
+            throw std::runtime_error(
+                "persisted archive conflicts with expected evidence");
+        }
+        return {source, labbridge::core::fs::weakly_canonical(archive_path)};
+    }
+    const auto filename = archive_path.filename().string();
+    const auto separator = filename.find('-');
+    if (separator == std::string::npos) {
+        throw std::runtime_error("invalid persisted archive path");
+    }
+    const auto parent = archive_path.parent_path();
+    return archive(
+        parent.parent_path().filename().string(),
+        parent.filename().string(),
+        static_cast<std::size_t>(std::stoull(filename.substr(0, separator))),
+        source);
+}
+labbridge::core::fs::path LocalArchiveStore::plan_archive_path(
+    const std::string& task_id,
+    const std::string& task_run_id,
+    std::size_t ordinal,
+    const std::string& original_name) const {
+    if (!is_safe_segment(task_id) || !is_safe_segment(task_run_id) ||
+        ordinal == 0) {
+        throw std::invalid_argument(
+            "task, task run and ordinal must form a safe archive path");
+    }
+    return work_dir_ / "archive" / task_id / task_run_id /
+           (std::to_string(ordinal) + "-" +
+            sanitized_filename(original_name));
 }
 
 const labbridge::core::fs::path& LocalArchiveStore::work_dir() const noexcept {

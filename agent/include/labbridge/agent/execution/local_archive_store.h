@@ -31,6 +31,14 @@ public:
                               const std::string& task_run_id,
                               std::size_t ordinal,
                               const LocalFileMetadata& source) const;
+    labbridge::core::fs::path plan_archive_path(
+        const std::string& task_id,
+        const std::string& task_run_id,
+        std::size_t ordinal,
+        const std::string& original_name) const;
+    ArchivedLocalFile recover_archive(
+        const LocalFileMetadata& source,
+        const labbridge::core::fs::path& archive_path) const;
 
     const labbridge::core::fs::path& work_dir() const noexcept;
 

@@ -162,3 +162,42 @@ TEST(AgentQueueStoreTest, RejectsUnsupportedOrIncompleteSchema) {
         labbridge::agent::AgentQueueStore(database_path, "node-1", 10),
         labbridge::agent::AgentQueueError);
 }
+TEST(AgentQueueStoreTest, PersistsStageTransitionsAndCompletesAtomically) {
+    TempDirectory temp;
+    labbridge::agent::AgentQueueStore store{
+        (temp.path() / "queue.db").string(), "node-1", 10, 1};
+    store.begin_job(task_config(), start_request());
+    store.accept_start("execution-1", "run-1");
+    store.save_file_plan("execution-1", {file_plan(0, "fingerprint")});
+    store.mark_file_archived("execution-1", 0);
+    labbridge::agent::RawFileManifestRequest manifest{
+        "run-1", "node-1", "manifest-key",
+        {{"sample.csv", "hash", "/archive/sample.csv", 42,
+          "2026-08-12T00:00:00Z", "archived_local"}}};
+    store.save_manifest("execution-1", manifest);
+    EXPECT_THROW(store.accept_manifest("execution-1", {}),
+                 labbridge::agent::AgentQueueError);
+    EXPECT_EQ(store.recover_jobs().front().stage, "manifest_pending");
+    store.accept_manifest("execution-1", {"raw-1"});
+    labbridge::agent::TaskRunReportRequest report;
+    report.task_run_id = "run-1";
+    report.node_code = "node-1";
+    report.idempotency_key = "report-key";
+    report.status = labbridge::core::TaskRunStatus::Succeeded;
+    report.finished_at = "2026-08-12T00:00:02Z";
+    report.items_total = 1;
+    report.items_success = 1;
+    EXPECT_THROW(store.save_report("execution-1", report, {}),
+                 labbridge::agent::AgentQueueError);
+    store.save_report("execution-1", report, {true});
+    const auto job = store.recover_jobs().front();
+    EXPECT_EQ(job.stage, "report_pending");
+    EXPECT_EQ(job.files.front().raw_file_id, "raw-1");
+    EXPECT_EQ(job.report_request.idempotency_key, "report-key");
+    store.complete_job("execution-1");
+    EXPECT_EQ(store.pending_job_count(), 0U);
+    EXPECT_TRUE(store.is_file_processed("42", "fingerprint"));
+    std::cout << "queue_flow=start_pending->collecting->manifest_pending"
+              << "->report_building->report_pending->completed "
+              << "raw_file_id=raw-1 processed_fingerprint=1" << std::endl;
+}

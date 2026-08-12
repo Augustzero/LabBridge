@@ -1,4 +1,5 @@
 #include "labbridge/agent/execution/task_executor.h"
+#include "labbridge/agent/storage/agent_queue_store.h"
 
 #include <gtest/gtest.h>
 
@@ -526,4 +527,46 @@ TEST(TaskExecutorTest, BoundsErrorSummaryDetailsAndBytes) {
         report.error_summary.find("2 additional error(s) omitted"),
         std::string::npos);
 }
+TEST(TaskExecutorTest, RecoversFrozenReportAndPersistsDedupAcrossObjects) {
+    TemporaryExecutionTree tree;
+    tree.write_csv(
+        "reliable.csv",
+        "station_code,device_code,record_time,value\n"
+        "ST001,DV001,2026-08-08 08:00:00,42\n");
+    FakeExecutionClient client;
+    const auto database = (tree.work().parent_path() / "queue.db").string();
+    const auto task = executable_task(tree.inbox());
+    {
+        labbridge::agent::AgentQueueStore store{
+            database, task.node_code, 10, 10};
+        labbridge::agent::TaskExecutor executor{
+            client, store, tree.work(), {tree.inbox()}, fixed_now()};
+        client.fail_next_report = true;
+        EXPECT_THROW(executor.execute(scheduled(task)), std::runtime_error);
+        ASSERT_EQ(store.recover_jobs().size(), 1U);
+        EXPECT_EQ(store.recover_jobs().front().stage, "report_pending");
+        tree.track_archive(
+            store.recover_jobs().front().manifest_request.files.front().storage_path);
+    }
+    const auto frozen_report = client.reports.front();
+    {
+        labbridge::agent::AgentQueueStore store{
+            database, task.node_code, 10, 10};
+        labbridge::agent::TaskExecutor executor{
+            client, store, tree.work(), {tree.inbox()}, fixed_now()};
+        executor.recover_pending_jobs();
+        EXPECT_EQ(store.pending_job_count(), 0U);
+        EXPECT_EQ(client.reports.back().idempotency_key,
+                  frozen_report.idempotency_key);
+        executor.execute(scheduled(task));
+        EXPECT_EQ(client.manifests.size(), 1U);
+        EXPECT_EQ(client.reports.back().items_total, 0);
+    }
+    std::filesystem::remove(database);
+    std::filesystem::remove(database + "-wal");
+    std::filesystem::remove(database + "-shm");
+    std::cout << "recovery stage=report_pending replayed_report=1 "
+              << "pending_jobs=0 next_run_manifest_files=0" << std::endl;
+}
+
 }  // namespace

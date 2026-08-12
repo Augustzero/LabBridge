@@ -406,7 +406,8 @@ std::vector<PendingFilePlan> recover_file_plan(
     auto statement = prepare(
         database,
         "SELECT ordinal, source_path, original_name, source_mtime, "
-        "size_bytes, file_hash, fingerprint, archive_path "
+        "size_bytes, file_hash, fingerprint, archive_path, archive_state, "
+        "COALESCE(raw_file_id, ''), COALESCE(parsed_without_errors, 0) "
         "FROM pending_files WHERE execution_key = ? ORDER BY ordinal",
         "recover file plan");
     bind_text(database,
@@ -426,6 +427,9 @@ std::vector<PendingFilePlan> recover_file_plan(
             read_text(statement.get(), 5),
             read_text(statement.get(), 6),
             read_text(statement.get(), 7),
+            read_text(statement.get(), 8),
+            read_text(statement.get(), 9),
+            sqlite3_column_int(statement.get(), 10) == 1,
         });
     }
     return files;
@@ -437,6 +441,7 @@ struct AgentQueueStore::Impl {
     sqlite3* database{nullptr};
     std::string node_code;
     std::size_t max_pending_jobs{0};
+    std::size_t processed_fingerprint_capacity{0};
     mutable std::mutex mutex;
 
     ~Impl() {
@@ -448,15 +453,18 @@ struct AgentQueueStore::Impl {
 
 AgentQueueStore::AgentQueueStore(std::string database_path,
                                  std::string node_code,
-                                 std::size_t max_pending_jobs)
+                                 std::size_t max_pending_jobs,
+                                 std::size_t processed_fingerprint_capacity)
     : impl_(std::make_unique<Impl>()) {
-    if (database_path.empty() || node_code.empty() || max_pending_jobs == 0) {
+    if (database_path.empty() || node_code.empty() || max_pending_jobs == 0 ||
+        processed_fingerprint_capacity == 0) {
         throw AgentQueueError(
             "database path, node identity and capacity are required");
     }
 
     impl_->node_code = std::move(node_code);
     impl_->max_pending_jobs = max_pending_jobs;
+    impl_->processed_fingerprint_capacity = processed_fingerprint_capacity;
 
     const labbridge::core::fs::path path{database_path};
     if (!path.parent_path().empty()) {
@@ -572,7 +580,11 @@ std::vector<RecoveredJob> AgentQueueStore::recover_jobs() const {
     auto statement = prepare(
         impl_->database,
         "SELECT jobs.execution_key, jobs.task_config_json, jobs.stage, "
-        "deliveries.request_json "
+        "deliveries.request_json, COALESCE(jobs.task_run_id, ''), "
+        "COALESCE((SELECT request_json FROM pending_deliveries "
+        "WHERE execution_key = jobs.execution_key AND request_type = 'manifest'), ''), "
+        "COALESCE((SELECT request_json FROM pending_deliveries "
+        "WHERE execution_key = jobs.execution_key AND request_type = 'report'), '') "
         "FROM pending_jobs AS jobs "
         "JOIN pending_deliveries AS deliveries "
         "ON deliveries.execution_key = jobs.execution_key "
@@ -588,10 +600,267 @@ std::vector<RecoveredJob> AgentQueueStore::recover_jobs() const {
         job.stage = read_text(statement.get(), 2);
         job.start_request =
             decode_start_task_run_request(read_text(statement.get(), 3));
+        job.task_run_id = read_text(statement.get(), 4);
+        const auto manifest_json = read_text(statement.get(), 5);
+        if (!manifest_json.empty()) {
+            job.manifest_request =
+                decode_raw_file_manifest_request(manifest_json);
+        }
+        const auto report_json = read_text(statement.get(), 6);
+        if (!report_json.empty()) {
+            job.report_request =
+                decode_task_run_report_request(report_json);
+        }
         job.files = recover_file_plan(impl_->database, job.execution_key);
         jobs.push_back(std::move(job));
     }
     return jobs;
+}
+
+void AgentQueueStore::accept_start(const std::string& execution_key,
+                                   const std::string& task_run_id) {
+    std::lock_guard<std::mutex> lock{impl_->mutex};
+    Transaction transaction{impl_->database, "accept start"};
+    auto statement = prepare(
+        impl_->database,
+        "UPDATE pending_jobs SET task_run_id = ?, stage = 'collecting', "
+        "updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') "
+        "WHERE execution_key = ? AND stage = 'start_pending'",
+        "accept start");
+    bind_text(impl_->database, statement.get(), 1, task_run_id, "accept start");
+    bind_text(impl_->database, statement.get(), 2, execution_key, "accept start");
+    check_result(sqlite3_step(statement.get()), impl_->database, "accept start");
+    if (sqlite3_changes(impl_->database) != 1) {
+        throw AgentQueueError("accept start requires start_pending job");
+    }
+    transaction.commit();
+}
+
+void AgentQueueStore::mark_file_archived(const std::string& execution_key,
+                                         int ordinal) {
+    std::lock_guard<std::mutex> lock{impl_->mutex};
+    auto statement = prepare(
+        impl_->database,
+        "UPDATE pending_files SET archive_state = 'archived' "
+        "WHERE execution_key = ? AND ordinal = ?",
+        "mark file archived");
+    bind_text(impl_->database, statement.get(), 1, execution_key,
+              "mark file archived");
+    check_result(sqlite3_bind_int(statement.get(), 2, ordinal),
+                 impl_->database, "mark file archived");
+    check_result(sqlite3_step(statement.get()), impl_->database,
+                 "mark file archived");
+    if (sqlite3_changes(impl_->database) != 1) {
+        throw AgentQueueError("pending file does not exist");
+    }
+}
+
+void AgentQueueStore::save_manifest(
+    const std::string& execution_key,
+    const RawFileManifestRequest& request) {
+    const auto request_json = encode_raw_file_manifest_request(request);
+    std::lock_guard<std::mutex> lock{impl_->mutex};
+    Transaction transaction{impl_->database, "save manifest"};
+    auto delivery = prepare(
+        impl_->database,
+        "INSERT INTO pending_deliveries "
+        "(execution_key, request_type, idempotency_key, request_json, "
+        "created_at, updated_at) VALUES (?, 'manifest', ?, ?, "
+        "strftime('%Y-%m-%dT%H:%M:%fZ','now'), "
+        "strftime('%Y-%m-%dT%H:%M:%fZ','now'))",
+        "save manifest");
+    bind_text(impl_->database, delivery.get(), 1, execution_key, "save manifest");
+    bind_text(impl_->database, delivery.get(), 2, request.idempotency_key,
+              "save manifest");
+    bind_text(impl_->database, delivery.get(), 3, request_json, "save manifest");
+    check_result(sqlite3_step(delivery.get()), impl_->database, "save manifest");
+    auto job = prepare(
+        impl_->database,
+        "UPDATE pending_jobs SET stage = 'manifest_pending', "
+        "updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') "
+        "WHERE execution_key = ? AND stage = 'collecting'",
+        "advance manifest");
+    bind_text(impl_->database, job.get(), 1, execution_key, "advance manifest");
+    check_result(sqlite3_step(job.get()), impl_->database, "advance manifest");
+    if (sqlite3_changes(impl_->database) != 1) {
+        throw AgentQueueError("save manifest requires collecting job");
+    }
+    transaction.commit();
+}
+
+void AgentQueueStore::accept_manifest(
+    const std::string& execution_key,
+    const std::vector<std::string>& raw_file_ids) {
+    std::lock_guard<std::mutex> lock{impl_->mutex};
+    Transaction transaction{impl_->database, "accept manifest"};
+    auto count = prepare(
+        impl_->database,
+        "SELECT count(*) FROM pending_files WHERE execution_key = ?",
+        "count manifest files");
+    bind_text(impl_->database, count.get(), 1, execution_key,
+              "count manifest files");
+    check_result(sqlite3_step(count.get()), impl_->database,
+                 "count manifest files");
+    if (sqlite3_column_int64(count.get(), 0) !=
+        static_cast<sqlite3_int64>(raw_file_ids.size())) {
+        throw AgentQueueError("manifest raw ID count mismatch");
+    }
+    auto update = prepare(
+        impl_->database,
+        "UPDATE pending_files SET raw_file_id = ? "
+        "WHERE execution_key = ? AND ordinal = ?",
+        "map raw file ID");
+    for (std::size_t index = 0; index < raw_file_ids.size(); ++index) {
+        sqlite3_reset(update.get());
+        sqlite3_clear_bindings(update.get());
+        bind_text(impl_->database, update.get(), 1, raw_file_ids[index],
+                  "map raw file ID");
+        bind_text(impl_->database, update.get(), 2, execution_key,
+                  "map raw file ID");
+        check_result(sqlite3_bind_int(update.get(), 3, static_cast<int>(index)),
+                     impl_->database, "map raw file ID");
+        check_result(sqlite3_step(update.get()), impl_->database,
+                     "map raw file ID");
+    }
+    auto job = prepare(
+        impl_->database,
+        "UPDATE pending_jobs SET stage = 'report_building', "
+        "updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') "
+        "WHERE execution_key = ? AND stage = 'manifest_pending'",
+        "advance report building");
+    bind_text(impl_->database, job.get(), 1, execution_key,
+              "advance report building");
+    check_result(sqlite3_step(job.get()), impl_->database,
+                 "advance report building");
+    transaction.commit();
+}
+
+void AgentQueueStore::save_report(
+    const std::string& execution_key,
+    const TaskRunReportRequest& request,
+    const std::vector<bool>& parsed_without_errors) {
+    const auto request_json = encode_task_run_report_request(request);
+    std::lock_guard<std::mutex> lock{impl_->mutex};
+    Transaction transaction{impl_->database, "save report"};
+    auto file_count = prepare(
+        impl_->database,
+        "SELECT count(*) FROM pending_files WHERE execution_key = ?",
+        "count report files");
+    bind_text(impl_->database, file_count.get(), 1, execution_key,
+              "count report files");
+    check_result(sqlite3_step(file_count.get()), impl_->database,
+                 "count report files");
+    if (sqlite3_column_int64(file_count.get(), 0) !=
+        static_cast<sqlite3_int64>(parsed_without_errors.size())) {
+        throw AgentQueueError("report file outcome count mismatch");
+    }
+    auto delivery = prepare(
+        impl_->database,
+        "INSERT INTO pending_deliveries "
+        "(execution_key, request_type, idempotency_key, request_json, "
+        "created_at, updated_at) VALUES (?, 'report', ?, ?, "
+        "strftime('%Y-%m-%dT%H:%M:%fZ','now'), "
+        "strftime('%Y-%m-%dT%H:%M:%fZ','now'))",
+        "save report");
+    bind_text(impl_->database, delivery.get(), 1, execution_key, "save report");
+    bind_text(impl_->database, delivery.get(), 2, request.idempotency_key,
+              "save report");
+    bind_text(impl_->database, delivery.get(), 3, request_json, "save report");
+    check_result(sqlite3_step(delivery.get()), impl_->database, "save report");
+    auto file = prepare(
+        impl_->database,
+        "UPDATE pending_files SET parsed_without_errors = ? "
+        "WHERE execution_key = ? AND ordinal = ?",
+        "save parsed outcome");
+    for (std::size_t index = 0; index < parsed_without_errors.size(); ++index) {
+        sqlite3_reset(file.get());
+        sqlite3_clear_bindings(file.get());
+        check_result(sqlite3_bind_int(file.get(), 1,
+                                     parsed_without_errors[index] ? 1 : 0),
+                     impl_->database, "save parsed outcome");
+        bind_text(impl_->database, file.get(), 2, execution_key,
+                  "save parsed outcome");
+        check_result(sqlite3_bind_int(file.get(), 3, static_cast<int>(index)),
+                     impl_->database, "save parsed outcome");
+        check_result(sqlite3_step(file.get()), impl_->database,
+                     "save parsed outcome");
+    }
+    auto job = prepare(
+        impl_->database,
+        "UPDATE pending_jobs SET stage = 'report_pending', "
+        "updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') "
+        "WHERE execution_key = ? AND stage IN ('collecting','report_building')",
+        "advance report pending");
+    bind_text(impl_->database, job.get(), 1, execution_key,
+              "advance report pending");
+    check_result(sqlite3_step(job.get()), impl_->database,
+                 "advance report pending");
+    transaction.commit();
+}
+
+void AgentQueueStore::complete_job(const std::string& execution_key) {
+    std::lock_guard<std::mutex> lock{impl_->mutex};
+    Transaction transaction{impl_->database, "complete job"};
+    auto insert = prepare(
+        impl_->database,
+        "INSERT OR IGNORE INTO processed_files "
+        "(task_id, fingerprint, source_path, file_hash, processed_at, execution_key) "
+        "SELECT jobs.task_id, files.fingerprint, files.source_path, "
+        "files.file_hash, strftime('%Y-%m-%dT%H:%M:%fZ','now'), jobs.execution_key "
+        "FROM pending_jobs jobs JOIN pending_files files "
+        "ON files.execution_key = jobs.execution_key "
+        "WHERE jobs.execution_key = ? AND jobs.stage = 'report_pending' "
+        "AND files.parsed_without_errors = 1",
+        "write processed fingerprints");
+    bind_text(impl_->database, insert.get(), 1, execution_key,
+              "write processed fingerprints");
+    check_result(sqlite3_step(insert.get()), impl_->database,
+                 "write processed fingerprints");
+    auto trim = prepare(
+        impl_->database,
+        "DELETE FROM processed_files WHERE task_id = "
+        "(SELECT task_id FROM pending_jobs WHERE execution_key = ?) "
+        "AND rowid NOT IN (SELECT rowid FROM processed_files WHERE task_id = "
+        "(SELECT task_id FROM pending_jobs WHERE execution_key = ?) "
+        "ORDER BY processed_at DESC, rowid DESC LIMIT ?)",
+        "trim processed fingerprints");
+    bind_text(impl_->database, trim.get(), 1, execution_key,
+              "trim processed fingerprints");
+    bind_text(impl_->database, trim.get(), 2, execution_key,
+              "trim processed fingerprints");
+    check_result(sqlite3_bind_int64(
+                     trim.get(), 3,
+                     static_cast<sqlite3_int64>(
+                         impl_->processed_fingerprint_capacity)),
+                 impl_->database, "trim processed fingerprints");
+    check_result(sqlite3_step(trim.get()), impl_->database,
+                 "trim processed fingerprints");
+    auto remove = prepare(
+        impl_->database,
+        "DELETE FROM pending_jobs WHERE execution_key = ? "
+        "AND stage = 'report_pending'",
+        "complete job");
+    bind_text(impl_->database, remove.get(), 1, execution_key, "complete job");
+    check_result(sqlite3_step(remove.get()), impl_->database, "complete job");
+    if (sqlite3_changes(impl_->database) != 1) {
+        throw AgentQueueError("complete job requires report_pending job");
+    }
+    transaction.commit();
+}
+
+bool AgentQueueStore::is_file_processed(
+    const std::string& task_id,
+    const std::string& fingerprint) const {
+    std::lock_guard<std::mutex> lock{impl_->mutex};
+    auto statement = prepare(
+        impl_->database,
+        "SELECT 1 FROM processed_files WHERE task_id = ? AND fingerprint = ?",
+        "find processed fingerprint");
+    bind_text(impl_->database, statement.get(), 1, task_id,
+              "find processed fingerprint");
+    bind_text(impl_->database, statement.get(), 2, fingerprint,
+              "find processed fingerprint");
+    return sqlite3_step(statement.get()) == SQLITE_ROW;
 }
 
 }  // namespace labbridge::agent

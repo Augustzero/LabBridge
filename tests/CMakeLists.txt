@@ -121,6 +121,7 @@ add_labbridge_test(
     LINK_LIBRARIES
         GTest::gtest_main
         labbridge_agent_execution
+        labbridge_agent_storage
     LABELS component
 )
 
