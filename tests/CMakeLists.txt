@@ -13,6 +13,7 @@ FetchContent_MakeAvailable(googletest)
 
 add_library(labbridge_agent_test_support
     support/agent/mock_http_server.cpp
+    support/agent/response_loss_proxy.cpp
 )
 target_include_directories(
     labbridge_agent_test_support
@@ -24,6 +25,19 @@ target_link_libraries(
         Boost::system
         Threads::Threads
 )
+add_executable(
+    phase024_response_loss_proxy
+    support/agent/response_loss_proxy_main.cpp
+)
+target_link_libraries(
+    phase024_response_loss_proxy
+    PRIVATE labbridge_agent_test_support Threads::Threads
+)
+set_target_properties(
+    phase024_response_loss_proxy
+    PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
+)
+
 
 add_library(labbridge_server_test_support
     support/server/in_memory_agent_report_receipt_repository.cpp
@@ -167,6 +181,13 @@ add_labbridge_test(
     LABELS component contract
     TIMEOUT 10
 )
+add_labbridge_test(
+    response_loss_proxy_test
+    SOURCES component/agent/response_loss_proxy_test.cpp
+    LINK_LIBRARIES GTest::gtest_main labbridge_agent_test_support
+    LABELS component
+)
+
 
 add_labbridge_test(
     startup_handshake_test
