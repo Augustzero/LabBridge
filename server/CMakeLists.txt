@@ -3,6 +3,7 @@ add_library(labbridge_server_domain
     src/application/agent_report_service.cpp
     src/application/alert_service.cpp
     src/application/config_service.cpp
+    src/application/management_query_service.cpp
     src/application/node_service.cpp
     src/application/qc_service.cpp
     src/application/query_service.cpp
@@ -29,6 +30,7 @@ add_library(labbridge_server_postgres
     src/postgres/alert_repository.cpp
     src/postgres/config_repository.cpp
     src/postgres/libpq_sql_session.cpp
+    src/postgres/management_query_repository.cpp
     src/postgres/node_repository.cpp
     src/postgres/qc_repository.cpp
     src/postgres/result_repository.cpp

@@ -11,6 +11,9 @@ struct NodeRecord {
     labbridge::core::NodeInfo info;
     labbridge::core::NodeStatus status{labbridge::core::NodeStatus::Offline};
     std::string last_heartbeat_at;
+    std::string id;
+    std::string created_at;
+    std::string updated_at;
 };
 
 class INodeRepository {

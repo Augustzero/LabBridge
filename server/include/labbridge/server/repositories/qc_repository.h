@@ -12,6 +12,7 @@ struct QcRuleRecord {
     std::string rule_type;
     std::string rule_config_json;
     bool enabled{true};
+    std::string created_at;
 };
 
 struct QcResultRecord {
@@ -21,6 +22,8 @@ struct QcResultRecord {
     std::string level;
     std::string result;
     std::string message;
+    std::string task_run_id;
+    std::string created_at;
 };
 
 class IQcRepository {

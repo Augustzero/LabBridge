@@ -18,6 +18,7 @@ struct RawFileRecord {
     long long size_bytes{0};
     std::string source_mtime;
     std::string ingest_status{"collected"};
+    std::string created_at;
 };
 
 struct ParsedRecordRecord {
@@ -26,6 +27,7 @@ struct ParsedRecordRecord {
     std::string task_run_id;
     labbridge::core::ParsedRecord record;
     std::string parse_status{"parsed"};
+    std::string created_at;
 };
 
 class IResultRepository {

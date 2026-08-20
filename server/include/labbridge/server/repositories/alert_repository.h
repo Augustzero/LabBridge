@@ -14,6 +14,7 @@ struct AlertRecord {
     std::string severity;
     std::string message;
     std::string status{"open"};
+    std::string created_at;
 };
 
 class IAlertRepository {

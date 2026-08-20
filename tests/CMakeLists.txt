@@ -278,6 +278,14 @@ add_labbridge_test(
 )
 
 add_labbridge_test(
+    management_query_repository_test
+    SOURCES unit/server/management_query_repository_test.cpp
+    LINK_LIBRARIES GTest::gtest_main labbridge_server_sql_test_support
+    LABELS unit
+    TIMEOUT 10
+)
+
+add_labbridge_test(
     storage_mapping_test
     SOURCES unit/server/storage_mapping_test.cpp
     LINK_LIBRARIES GTest::gtest_main labbridge_server_postgres
@@ -312,6 +320,13 @@ add_labbridge_test(
     config_service_test
     SOURCES component/server/config_service_test.cpp
     LINK_LIBRARIES GTest::gtest_main labbridge_server_test_support
+    LABELS component
+)
+
+add_labbridge_test(
+    management_query_service_test
+    SOURCES component/server/management_query_service_test.cpp
+    LINK_LIBRARIES GTest::gtest_main labbridge_server_domain
     LABELS component
 )
 
@@ -365,6 +380,12 @@ add_labbridge_postgres_test(
     task_run_start_postgres_test
     SOURCES integration/postgres/task_run_start_postgres_test.cpp
     LINK_LIBRARIES GTest::gtest labbridge_server_postgres Threads::Threads
+)
+
+add_labbridge_postgres_test(
+    management_query_postgres_test
+    SOURCES integration/postgres/management_query_postgres_test.cpp
+    LINK_LIBRARIES GTest::gtest labbridge_server_postgres
 )
 
 

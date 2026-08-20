@@ -15,6 +15,8 @@ struct DataSourceRecord {
     std::string name;
     std::string config_json;
     bool enabled{true};
+    std::string created_at;
+    std::string updated_at;
 };
 
 struct TaskRecord {
@@ -28,6 +30,8 @@ struct TaskRecord {
     std::string qc_profile;
     bool enabled{true};
     std::vector<std::string> qc_rule_ids;
+    std::string created_at;
+    std::string updated_at;
 };
 
 struct TaskQcRuleBinding {
