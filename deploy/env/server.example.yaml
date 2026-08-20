@@ -15,6 +15,9 @@ app:
 custom_config:
   database:
     connection_info: "host=127.0.0.1 port=5432 dbname=labbridge user=labbridge password=labbridge"
+  management:
+    node_offline_after_seconds: 120
+    task_run_stale_after_seconds: 3600
   storage:
     type: local
     root: ./data/archive

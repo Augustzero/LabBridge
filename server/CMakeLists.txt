@@ -30,6 +30,7 @@ add_library(labbridge_server_postgres
     src/postgres/alert_repository.cpp
     src/postgres/config_repository.cpp
     src/postgres/libpq_sql_session.cpp
+    src/postgres/management_query_executor.cpp
     src/postgres/management_query_repository.cpp
     src/postgres/node_repository.cpp
     src/postgres/qc_repository.cpp
@@ -49,6 +50,7 @@ add_library(labbridge_server_http
     src/http/agent_control_http_controller.cpp
     src/http/agent_report_http_controller.cpp
     src/http/http_json_response.cpp
+    src/http/management_http_controller.cpp
     src/http/task_run_http_controller.cpp
 )
 

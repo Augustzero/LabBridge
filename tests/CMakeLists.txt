@@ -358,6 +358,15 @@ add_labbridge_test(
 )
 
 add_labbridge_test(
+    management_http_controller_test
+    SOURCES component/server/management_http_controller_test.cpp
+    LINK_LIBRARIES
+        GTest::gtest_main
+        labbridge_server_http
+    LABELS component contract
+)
+
+add_labbridge_test(
     alert_service_test
     SOURCES component/server/alert_service_test.cpp
     LINK_LIBRARIES GTest::gtest_main labbridge_server_test_support
@@ -388,6 +397,14 @@ add_labbridge_postgres_test(
     LINK_LIBRARIES GTest::gtest labbridge_server_postgres
 )
 
+add_labbridge_postgres_test(
+    management_http_postgres_test
+    SOURCES integration/postgres/management_http_postgres_test.cpp
+    LINK_LIBRARIES
+        GTest::gtest
+        labbridge_server_http
+        labbridge_server_postgres
+)
 
 add_labbridge_test(
     result_service_test
