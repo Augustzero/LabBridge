@@ -107,6 +107,35 @@ void InMemoryConfigRepository::bind_task_qc_rule(
     });
 }
 
+std::vector<std::string> InMemoryConfigRepository::find_task_qc_rule_ids(
+    const std::string& task_id) const {
+    auto bindings = task_qc_rules_;
+    std::sort(
+        bindings.begin(),
+        bindings.end(),
+        [](const TaskQcRuleBinding& left,
+           const TaskQcRuleBinding& right) {
+            if (left.sort_order != right.sort_order) {
+                return left.sort_order < right.sort_order;
+            }
+            return left.qc_rule_id < right.qc_rule_id;
+        });
+
+    std::vector<std::string> rule_ids;
+    for (const auto& binding : bindings) {
+        if (binding.task_id == task_id) {
+            rule_ids.push_back(binding.qc_rule_id);
+        }
+    }
+    return rule_ids;
+}
+
+void InMemoryConfigRepository::set_task_enabled(
+    const std::string& task_id,
+    bool enabled) {
+    tasks_.at(task_id).enabled = enabled;
+}
+
 void InMemoryConfigRepository::add_task_qc_rule_projection(
     TaskQcRuleBinding binding) {
     const auto existing = std::find_if(

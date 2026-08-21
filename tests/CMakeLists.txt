@@ -324,6 +324,13 @@ add_labbridge_test(
 )
 
 add_labbridge_test(
+    management_command_service_test
+    SOURCES component/server/management_command_service_test.cpp
+    LINK_LIBRARIES GTest::gtest_main labbridge_server_test_support
+    LABELS component
+)
+
+add_labbridge_test(
     management_query_service_test
     SOURCES component/server/management_query_service_test.cpp
     LINK_LIBRARIES GTest::gtest_main labbridge_server_domain
@@ -394,6 +401,12 @@ add_labbridge_postgres_test(
 add_labbridge_postgres_test(
     management_query_postgres_test
     SOURCES integration/postgres/management_query_postgres_test.cpp
+    LINK_LIBRARIES GTest::gtest labbridge_server_postgres
+)
+
+add_labbridge_postgres_test(
+    management_command_postgres_test
+    SOURCES integration/postgres/management_command_postgres_test.cpp
     LINK_LIBRARIES GTest::gtest labbridge_server_postgres
 )
 

@@ -21,6 +21,10 @@ public:
     void bind_task_qc_rule(const std::string& task_id,
                            const std::string& qc_rule_id,
                            int sort_order) override;
+    std::vector<std::string> find_task_qc_rule_ids(
+        const std::string& task_id) const override;
+    void set_task_enabled(const std::string& task_id,
+                          bool enabled) override;
 
 private:
     ISqlSession& session_;

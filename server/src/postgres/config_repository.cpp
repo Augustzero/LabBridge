@@ -217,4 +217,28 @@ void PostgresConfigRepository::bind_task_qc_rule(
         sql,
         {task_id, qc_rule_id, std::to_string(sort_order)});
 }
+
+std::vector<std::string> PostgresConfigRepository::find_task_qc_rule_ids(
+    const std::string& task_id) const {
+    static const std::string sql =
+        "SELECT qc_rule_id::text AS qc_rule_id "
+        "FROM task_qc_rules "
+        "WHERE task_id = $1::bigint "
+        "ORDER BY sort_order, qc_rule_id";
+
+    std::vector<std::string> rule_ids;
+    for (const auto& row : session_.query_all(sql, {task_id})) {
+        rule_ids.push_back(storage::value_or_empty(row, "qc_rule_id"));
+    }
+    return rule_ids;
+}
+
+void PostgresConfigRepository::set_task_enabled(
+    const std::string& task_id,
+    bool enabled) {
+    static const std::string sql =
+        "UPDATE tasks SET enabled = $2::boolean, updated_at = now() "
+        "WHERE id = $1::bigint";
+    session_.execute(sql, {task_id, storage::bool_param(enabled)});
+}
 }  // namespace labbridge::server

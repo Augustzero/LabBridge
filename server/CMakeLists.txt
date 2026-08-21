@@ -4,6 +4,7 @@ add_library(labbridge_server_domain
     src/application/alert_service.cpp
     src/application/config_service.cpp
     src/application/management_query_service.cpp
+    src/application/management_command_service.cpp
     src/application/node_service.cpp
     src/application/qc_service.cpp
     src/application/query_service.cpp
@@ -15,6 +16,7 @@ target_link_libraries(labbridge_server_domain
     PUBLIC
         labbridge_core
     PRIVATE
+        nlohmann_json::nlohmann_json
         OpenSSL::Crypto
 )
 
@@ -30,6 +32,7 @@ add_library(labbridge_server_postgres
     src/postgres/alert_repository.cpp
     src/postgres/config_repository.cpp
     src/postgres/libpq_sql_session.cpp
+    src/postgres/management_command_executor.cpp
     src/postgres/management_query_executor.cpp
     src/postgres/management_query_repository.cpp
     src/postgres/node_repository.cpp

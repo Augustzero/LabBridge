@@ -140,4 +140,40 @@ TEST(PostgresConfigRepositoryTest, BindQcRuleUsesStableUpsertParameters) {
               (labbridge::server::SqlParams{"202", "303", "10"}));
 }
 
+TEST(PostgresConfigRepositoryTest, FindsBoundQcRuleIdsInStableOrder) {
+    RecordingSqlSession session;
+    session.on_query_all = [](const std::string&, const auto&) {
+        return std::vector<SqlRow>{
+            SqlRow{{"qc_rule_id", "303"}},
+            SqlRow{{"qc_rule_id", "304"}},
+        };
+    };
+    PostgresConfigRepository repository{session};
+
+    const auto rule_ids = repository.find_task_qc_rule_ids("202");
+
+    EXPECT_EQ(rule_ids, (std::vector<std::string>{"303", "304"}));
+    ASSERT_EQ(session.query_all_calls.size(), 1U);
+    EXPECT_NE(session.query_all_calls.front().sql.find(
+                  "ORDER BY sort_order, qc_rule_id"),
+              std::string::npos);
+    EXPECT_EQ(session.query_all_calls.front().params,
+              labbridge::server::SqlParams{"202"});
+}
+
+TEST(PostgresConfigRepositoryTest, UpdatesTaskEnabledAndTimestamp) {
+    RecordingSqlSession session;
+    PostgresConfigRepository repository{session};
+
+    repository.set_task_enabled("202", false);
+
+    ASSERT_EQ(session.executions.size(), 1U);
+    EXPECT_NE(session.executions.front().sql.find("UPDATE tasks"),
+              std::string::npos);
+    EXPECT_NE(session.executions.front().sql.find("updated_at = now()"),
+              std::string::npos);
+    EXPECT_EQ(session.executions.front().params,
+              (labbridge::server::SqlParams{"202", "false"}));
+}
+
 }  // namespace

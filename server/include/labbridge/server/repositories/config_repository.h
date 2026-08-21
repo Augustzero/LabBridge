@@ -59,6 +59,9 @@ public:
     virtual void bind_task_qc_rule(const std::string& task_id,
                                    const std::string& qc_rule_id,
                                    int sort_order) = 0;
+    virtual std::vector<std::string> find_task_qc_rule_ids(
+        const std::string& task_id) const = 0;
+    virtual void set_task_enabled(const std::string& task_id, bool enabled) = 0;
 };
 
 }  // namespace labbridge::server
