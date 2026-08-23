@@ -15,6 +15,8 @@ DataSourceRecord to_data_source_record(const SqlRow& row) {
     record.name = storage::value_or_empty(row, "name");
     record.config_json = storage::value_or_empty(row, "config_json");
     record.enabled = storage::bool_value(storage::value_or_empty(row, "enabled"));
+    record.created_at = storage::value_or_empty(row, "created_at");
+    record.updated_at = storage::value_or_empty(row, "updated_at");
     return record;
 }
 
@@ -29,6 +31,8 @@ TaskRecord to_task_record(const SqlRow& row) {
     record.parser_type = storage::value_or_empty(row, "parser_type");
     record.qc_profile = storage::value_or_empty(row, "qc_profile");
     record.enabled = storage::bool_value(storage::value_or_empty(row, "enabled"));
+    record.created_at = storage::value_or_empty(row, "created_at");
+    record.updated_at = storage::value_or_empty(row, "updated_at");
     return record;
 }
 
@@ -75,7 +79,11 @@ std::optional<DataSourceRecord> PostgresConfigRepository::find_data_source(
     static const std::string sql =
         "SELECT ds.id::text AS id, n.node_code, ds.source_type, ds.name, "
         "ds.config_json::text AS config_json, "
-        "CASE WHEN ds.enabled THEN 'true' ELSE 'false' END AS enabled "
+        "CASE WHEN ds.enabled THEN 'true' ELSE 'false' END AS enabled, "
+        "to_char(ds.created_at AT TIME ZONE 'UTC', "
+        "'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS created_at, "
+        "to_char(ds.updated_at AT TIME ZONE 'UTC', "
+        "'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS updated_at "
         "FROM data_sources ds "
         "JOIN nodes n ON n.id = ds.node_id "
         "WHERE ds.id = $1::bigint "
@@ -120,7 +128,11 @@ std::optional<TaskRecord> PostgresConfigRepository::find_task(const std::string&
         "SELECT t.id::text AS id, n.node_code, t.data_source_id::text AS data_source_id, "
         "t.name, t.task_type, t.schedule_expr, t.parser_type, "
         "COALESCE(t.qc_profile, '') AS qc_profile, "
-        "CASE WHEN t.enabled THEN 'true' ELSE 'false' END AS enabled "
+        "CASE WHEN t.enabled THEN 'true' ELSE 'false' END AS enabled, "
+        "to_char(t.created_at AT TIME ZONE 'UTC', "
+        "'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS created_at, "
+        "to_char(t.updated_at AT TIME ZONE 'UTC', "
+        "'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS updated_at "
         "FROM tasks t "
         "JOIN nodes n ON n.id = t.node_id "
         "WHERE t.id = $1::bigint "

@@ -101,6 +101,16 @@ TEST_F(ManagementCommandServiceTest,
     EXPECT_FALSE(invalid_source.status.ok);
     EXPECT_EQ(invalid_source.status.code, StatusCode::InvalidArgument);
 
+    const auto unsupported_source = service_.create_data_source({
+        "node-a",
+        labbridge::core::SourceType::Ftp,
+        "Unsupported source",
+        R"({"root_path":"/srv/inbox","extension":".csv"})",
+        true,
+    });
+    EXPECT_FALSE(unsupported_source.status.ok);
+    EXPECT_EQ(unsupported_source.status.code, StatusCode::InvalidArgument);
+
     const auto unsupported_rule = service_.create_qc_rule({
         "Future rule", "range_check", "{}", true});
     EXPECT_FALSE(unsupported_rule.status.ok);
@@ -117,7 +127,7 @@ TEST_F(ManagementCommandServiceTest,
     const auto duplicate = service_.create_task(
         task_request(source_id, {enabled_rule, enabled_rule}));
     EXPECT_FALSE(duplicate.status.ok);
-    EXPECT_EQ(duplicate.status.code, StatusCode::Conflict);
+    EXPECT_EQ(duplicate.status.code, StatusCode::InvalidArgument);
 }
 
 TEST_F(ManagementCommandServiceTest,

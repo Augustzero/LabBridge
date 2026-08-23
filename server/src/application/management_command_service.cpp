@@ -88,6 +88,16 @@ std::optional<Json> parse_json_object(const std::string& text) {
     }
 }
 
+template <typename Record>
+ManagementCommandResult successful_result(std::string id,
+                                          std::optional<Record> record) {
+    // 写入对象必须在同一事务内可读，否则说明 repository 契约已被破坏。
+    if (!record.has_value()) {
+        throw std::runtime_error("created management object is not readable");
+    }
+    return {Status::success(), std::move(id), std::move(*record)};
+}
+
 }  // namespace
 
 ManagementCommandService::ManagementCommandService(
@@ -137,8 +147,9 @@ ManagementCommandResult ManagementCommandService::create_data_source(
     record.name = request.name;
     record.config_json = request.config_json;
     record.enabled = request.enabled;
-    return {Status::success(),
-            config_repository_.create_data_source(std::move(record))};
+    const auto id = config_repository_.create_data_source(std::move(record));
+    return successful_result(
+        id, config_repository_.find_data_source(id));
 }
 
 ManagementCommandResult ManagementCommandService::create_qc_rule(
@@ -160,7 +171,8 @@ ManagementCommandResult ManagementCommandService::create_qc_rule(
     record.rule_type = request.rule_type;
     record.rule_config_json = request.rule_config_json;
     record.enabled = request.enabled;
-    return {Status::success(), qc_repository_.create_rule(std::move(record))};
+    const auto id = qc_repository_.create_rule(std::move(record));
+    return successful_result(id, qc_repository_.find_rule(id));
 }
 
 ManagementCommandResult ManagementCommandService::create_task(
@@ -206,7 +218,7 @@ ManagementCommandResult ManagementCommandService::create_task(
             return {invalid("qc_rule_ids must contain positive integers"), {}};
         }
         if (!unique_rule_ids.insert(qc_rule_id).second) {
-            return {conflict("qc_rule_ids must not contain duplicates"), {}};
+            return {invalid("qc_rule_ids must not contain duplicates"), {}};
         }
     }
 
@@ -234,7 +246,12 @@ ManagementCommandResult ManagementCommandService::create_task(
             request.qc_rule_ids[index],
             static_cast<int>((index + 1) * 10));
     }
-    return {Status::success(), task_id};
+    auto created_task = config_repository_.find_task(task_id);
+    if (created_task.has_value()) {
+        created_task->qc_rule_ids =
+            config_repository_.find_task_qc_rule_ids(task_id);
+    }
+    return successful_result(task_id, std::move(created_task));
 }
 
 ManagementCommandResult ManagementCommandService::set_task_enabled(
@@ -260,7 +277,12 @@ ManagementCommandResult ManagementCommandService::set_task_enabled(
 
     // 禁用仅改变后续中心端投影，不触碰 Agent 已持久化或运行中的作业。
     config_repository_.set_task_enabled(task_id, enabled);
-    return {Status::success(), task_id};
+    auto updated_task = config_repository_.find_task(task_id);
+    if (updated_task.has_value()) {
+        updated_task->qc_rule_ids =
+            config_repository_.find_task_qc_rule_ids(task_id);
+    }
+    return successful_result(task_id, std::move(updated_task));
 }
 
 Status ManagementCommandService::validate_task_dependencies(

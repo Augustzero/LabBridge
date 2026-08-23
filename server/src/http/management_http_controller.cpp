@@ -1,6 +1,8 @@
 #include "labbridge/server/http/management_http_controller.h"
 #include "labbridge/core/logging.h"
 
+#include <json/writer.h>
+
 #include <charconv>
 #include <chrono>
 #include <memory>
@@ -11,6 +13,8 @@
 #include <string_view>
 #include <unordered_map>
 #include <utility>
+#include <variant>
+#include <vector>
 
 namespace labbridge::server {
 namespace {
@@ -38,6 +42,153 @@ void require_allowed_parameters(
                 "unknown query parameter: " + parameter.first);
         }
     }
+}
+
+void require_allowed_members(
+    const Json::Value& object,
+    std::initializer_list<std::string_view> allowed) {
+    std::set<std::string, std::less<>> names;
+    for (const auto name : allowed) {
+        names.emplace(name);
+    }
+    for (const auto& member : object.getMemberNames()) {
+        if (names.find(member) == names.end()) {
+            throw RequestValidationError("unknown body field: " + member);
+        }
+    }
+}
+
+const Json::Value& parse_json_body(const drogon::HttpRequestPtr& request) {
+    const auto& body = request->getJsonObject();
+    if (body == nullptr || !body->isObject()) {
+        throw RequestValidationError(
+            "request body must contain a JSON object");
+    }
+    return *body;
+}
+
+std::string required_string(const Json::Value& object,
+                            const std::string& field) {
+    if (!object.isMember(field)) {
+        throw RequestValidationError(field + " is required");
+    }
+    if (!object[field].isString()) {
+        throw RequestValidationError(field + " must be a string");
+    }
+    return object[field].asString();
+}
+
+bool required_bool(const Json::Value& object, const std::string& field) {
+    if (!object.isMember(field)) {
+        throw RequestValidationError(field + " is required");
+    }
+    if (!object[field].isBool()) {
+        throw RequestValidationError(field + " must be a boolean");
+    }
+    return object[field].asBool();
+}
+
+const Json::Value& required_object(const Json::Value& object,
+                                   const std::string& field) {
+    if (!object.isMember(field)) {
+        throw RequestValidationError(field + " is required");
+    }
+    if (!object[field].isObject()) {
+        throw RequestValidationError(field + " must be an object");
+    }
+    return object[field];
+}
+
+std::vector<std::string> required_string_array(
+    const Json::Value& object,
+    const std::string& field) {
+    if (!object.isMember(field)) {
+        throw RequestValidationError(field + " is required");
+    }
+    if (!object[field].isArray()) {
+        throw RequestValidationError(field + " must be an array");
+    }
+    std::vector<std::string> values;
+    for (const auto& value : object[field]) {
+        if (!value.isString()) {
+            throw RequestValidationError(
+                field + " must contain only strings");
+        }
+        values.push_back(value.asString());
+    }
+    return values;
+}
+
+std::string compact_json(const Json::Value& value) {
+    Json::StreamWriterBuilder builder;
+    builder["indentation"] = "";
+    return Json::writeString(builder, value);
+}
+
+labbridge::core::SourceType parse_source_type(const std::string& value) {
+    if (value == "local_directory") {
+        return labbridge::core::SourceType::LocalDirectory;
+    }
+    if (value == "ftp") {
+        return labbridge::core::SourceType::Ftp;
+    }
+    if (value == "oracle") {
+        return labbridge::core::SourceType::Oracle;
+    }
+    throw RequestValidationError("unsupported source_type");
+}
+
+ManagementDataSourceCreateRequest parse_data_source_create(
+    const Json::Value& body) {
+    require_allowed_members(
+        body, {"node_code", "source_type", "name", "config", "enabled"});
+
+    ManagementDataSourceCreateRequest request;
+    request.node_code = required_string(body, "node_code");
+    request.source_type = parse_source_type(
+        required_string(body, "source_type"));
+    request.name = required_string(body, "name");
+    request.config_json = compact_json(required_object(body, "config"));
+    request.enabled = required_bool(body, "enabled");
+    return request;
+}
+
+ManagementQcRuleCreateRequest parse_qc_rule_create(
+    const Json::Value& body) {
+    require_allowed_members(
+        body, {"name", "rule_type", "config", "enabled"});
+
+    ManagementQcRuleCreateRequest request;
+    request.name = required_string(body, "name");
+    request.rule_type = required_string(body, "rule_type");
+    request.rule_config_json = compact_json(required_object(body, "config"));
+    request.enabled = required_bool(body, "enabled");
+    return request;
+}
+
+ManagementTaskCreateRequest parse_task_create(const Json::Value& body) {
+    require_allowed_members(
+        body,
+        {"node_code", "data_source_id", "name", "task_type",
+         "schedule_expr", "parser_type", "qc_profile", "qc_rule_ids",
+         "enabled"});
+
+    ManagementTaskCreateRequest request;
+    request.node_code = required_string(body, "node_code");
+    request.data_source_id = required_string(body, "data_source_id");
+    request.name = required_string(body, "name");
+    request.task_type = required_string(body, "task_type");
+    request.schedule_expr = required_string(body, "schedule_expr");
+    request.parser_type = required_string(body, "parser_type");
+    request.qc_profile = required_string(body, "qc_profile");
+    request.qc_rule_ids = required_string_array(body, "qc_rule_ids");
+    request.enabled = required_bool(body, "enabled");
+    return request;
+}
+
+bool parse_task_enabled_patch(const Json::Value& body) {
+    require_allowed_members(body, {"enabled"});
+    return required_bool(body, "enabled");
 }
 
 std::optional<std::string> optional_parameter(
@@ -299,6 +450,23 @@ Json::Value alert_json(const AlertRecord& record) {
     return value;
 }
 
+template <typename Record, typename Mapper>
+void respond_command(const ManagementCommandResult& result,
+                     drogon::HttpStatusCode status,
+                     Mapper mapper,
+                     http::ResponseCallback& callback) {
+    if (!result.status.ok) {
+        callback(http::status_error_response(result.status));
+        return;
+    }
+    const auto* item = std::get_if<Record>(&result.item);
+    if (item == nullptr) {
+        throw std::runtime_error(
+            "management command result is missing its response item");
+    }
+    callback(http::success_response(status, mapper(*item)));
+}
+
 template <typename T, typename Mapper>
 Json::Value page_json(const ManagementPage<T>& page, Mapper mapper) {
     Json::Value value;
@@ -379,6 +547,14 @@ void handle_request(std::string_view route,
                 (*json)["data"]["items"].size());
             message += " has_more=" + std::string{
                 (*json)["data"]["has_more"].asBool() ? "true" : "false"};
+        } else if (json != nullptr && (*json)["ok"].asBool() &&
+                   (*json)["data"]["id"].isString()) {
+            message += " id=" + (*json)["data"]["id"].asString();
+            if ((*json)["data"]["enabled"].isBool()) {
+                message += " enabled=" + std::string{
+                    (*json)["data"]["enabled"].asBool()
+                        ? "true" : "false"};
+            }
         }
     }
     labbridge::core::log_info(kComponent, message);
@@ -387,15 +563,23 @@ void handle_request(std::string_view route,
 }  // namespace
 
 ManagementHttpController::ManagementHttpController(
-    ManagementQueryHandlers handlers)
-    : handlers_(std::move(handlers)) {
-    if (!handlers_.list_nodes || !handlers_.find_node ||
-        !handlers_.list_data_sources || !handlers_.list_qc_rules ||
-        !handlers_.list_tasks || !handlers_.list_task_runs ||
-        !handlers_.find_task_run || !handlers_.list_raw_files ||
-        !handlers_.list_parsed_records || !handlers_.list_qc_results ||
-        !handlers_.list_alerts) {
+    ManagementQueryHandlers query_handlers,
+    ManagementCommandHandlers command_handlers)
+    : query_handlers_(std::move(query_handlers)),
+      command_handlers_(std::move(command_handlers)) {
+    if (!query_handlers_.list_nodes || !query_handlers_.find_node ||
+        !query_handlers_.list_data_sources || !query_handlers_.list_qc_rules ||
+        !query_handlers_.list_tasks || !query_handlers_.list_task_runs ||
+        !query_handlers_.find_task_run || !query_handlers_.list_raw_files ||
+        !query_handlers_.list_parsed_records || !query_handlers_.list_qc_results ||
+        !query_handlers_.list_alerts) {
         throw std::invalid_argument("management query HTTP handlers are required");
+    }
+    if (!command_handlers_.create_data_source ||
+        !command_handlers_.create_qc_rule || !command_handlers_.create_task ||
+        !command_handlers_.set_task_enabled) {
+        throw std::invalid_argument(
+            "management command HTTP handlers are required");
     }
 }
 
@@ -480,6 +664,35 @@ void ManagementHttpController::register_routes(drogon::HttpAppFramework& app) {
             self->get_alerts(request, std::move(callback));
         },
         {drogon::Get});
+    app.registerHandler(
+        "/api/v1/data-sources",
+        [self](const drogon::HttpRequestPtr& request,
+               ResponseCallback&& callback) {
+            self->post_data_source(request, std::move(callback));
+        },
+        {drogon::Post});
+    app.registerHandler(
+        "/api/v1/qc-rules",
+        [self](const drogon::HttpRequestPtr& request,
+               ResponseCallback&& callback) {
+            self->post_qc_rule(request, std::move(callback));
+        },
+        {drogon::Post});
+    app.registerHandler(
+        "/api/v1/tasks",
+        [self](const drogon::HttpRequestPtr& request,
+               ResponseCallback&& callback) {
+            self->post_task(request, std::move(callback));
+        },
+        {drogon::Post});
+    app.registerHandler(
+        "/api/v1/tasks/{1}",
+        [self](const drogon::HttpRequestPtr& request,
+               ResponseCallback&& callback,
+               const std::string& task_id) {
+            self->patch_task(request, task_id, std::move(callback));
+        },
+        {drogon::Patch});
 }
 
 void ManagementHttpController::get_nodes(const drogon::HttpRequestPtr& request,
@@ -487,7 +700,7 @@ void ManagementHttpController::get_nodes(const drogon::HttpRequestPtr& request,
     handle_request("GET /api/v1/nodes", [&] {
         const auto& parameters = request->getParameters();
         require_allowed_parameters(parameters, {"status", "limit", "cursor"});
-        respond_page(handlers_.list_nodes({optional_parameter(parameters, "status"),
+        respond_page(query_handlers_.list_nodes({optional_parameter(parameters, "status"),
                                            page_input(parameters)}),
                      node_json, callback);
     }, callback);
@@ -498,7 +711,7 @@ void ManagementHttpController::get_node(const drogon::HttpRequestPtr& request,
                                         ResponseCallback&& callback) const {
     handle_request("GET /api/v1/nodes/{nodeCode}", [&] {
         require_allowed_parameters(request->getParameters(), {});
-        respond_item(handlers_.find_node(node_code), node_summary_json, callback);
+        respond_item(query_handlers_.find_node(node_code), node_summary_json, callback);
     }, callback);
 }
 
@@ -507,7 +720,7 @@ void ManagementHttpController::get_data_sources(
     handle_request("GET /api/v1/data-sources", [&] {
         const auto& parameters = request->getParameters();
         require_allowed_parameters(parameters, {"node_code", "enabled", "limit", "cursor"});
-        respond_page(handlers_.list_data_sources({required_parameter(parameters, "node_code"),
+        respond_page(query_handlers_.list_data_sources({required_parameter(parameters, "node_code"),
                                                   optional_bool(parameters, "enabled"),
                                                   page_input(parameters)}),
                      data_source_json, callback);
@@ -519,7 +732,7 @@ void ManagementHttpController::get_qc_rules(const drogon::HttpRequestPtr& reques
     handle_request("GET /api/v1/qc-rules", [&] {
         const auto& parameters = request->getParameters();
         require_allowed_parameters(parameters, {"enabled", "limit", "cursor"});
-        respond_page(handlers_.list_qc_rules({optional_bool(parameters, "enabled"),
+        respond_page(query_handlers_.list_qc_rules({optional_bool(parameters, "enabled"),
                                               page_input(parameters)}),
                      qc_rule_json, callback);
     }, callback);
@@ -530,7 +743,7 @@ void ManagementHttpController::get_tasks(const drogon::HttpRequestPtr& request,
     handle_request("GET /api/v1/tasks", [&] {
         const auto& parameters = request->getParameters();
         require_allowed_parameters(parameters, {"node_code", "enabled", "limit", "cursor"});
-        respond_page(handlers_.list_tasks({required_parameter(parameters, "node_code"),
+        respond_page(query_handlers_.list_tasks({required_parameter(parameters, "node_code"),
                                            optional_bool(parameters, "enabled"),
                                            page_input(parameters)}),
                      task_json, callback);
@@ -543,7 +756,7 @@ void ManagementHttpController::get_task_runs(const drogon::HttpRequestPtr& reque
         const auto& parameters = request->getParameters();
         require_allowed_parameters(parameters,
             {"node_code", "task_id", "status", "limit", "cursor"});
-        respond_page(handlers_.list_task_runs({required_parameter(parameters, "node_code"),
+        respond_page(query_handlers_.list_task_runs({required_parameter(parameters, "node_code"),
                                                optional_parameter(parameters, "task_id"),
                                                optional_parameter(parameters, "status"),
                                                page_input(parameters)}),
@@ -557,7 +770,7 @@ void ManagementHttpController::get_task_run(const drogon::HttpRequestPtr& reques
     handle_request("GET /api/v1/task-runs/{runId}", [&] {
         const auto& parameters = request->getParameters();
         require_allowed_parameters(parameters, {"node_code"});
-        respond_item(handlers_.find_task_run(required_parameter(parameters, "node_code"),
+        respond_item(query_handlers_.find_task_run(required_parameter(parameters, "node_code"),
                                               task_run_id),
                      task_run_summary_json, callback);
     }, callback);
@@ -568,7 +781,7 @@ void ManagementHttpController::get_raw_files(const drogon::HttpRequestPtr& reque
     handle_request("GET /api/v1/raw-files", [&] {
         const auto& parameters = request->getParameters();
         require_allowed_parameters(parameters, {"task_run_id", "limit", "cursor"});
-        respond_page(handlers_.list_raw_files({required_parameter(parameters, "task_run_id"),
+        respond_page(query_handlers_.list_raw_files({required_parameter(parameters, "task_run_id"),
                                                page_input(parameters)}),
                      raw_file_json, callback);
     }, callback);
@@ -579,8 +792,9 @@ void ManagementHttpController::get_parsed_records(
     handle_request("GET /api/v1/parsed-records", [&] {
         const auto& parameters = request->getParameters();
         require_allowed_parameters(parameters, {"task_run_id", "limit", "cursor"});
-        respond_page(handlers_.list_parsed_records({required_parameter(parameters, "task_run_id"),
-                                                    page_input(parameters)}),
+        respond_page(query_handlers_.list_parsed_records(
+                         {required_parameter(parameters, "task_run_id"),
+                          page_input(parameters)}),
                      parsed_record_json, callback);
     }, callback);
 }
@@ -590,7 +804,7 @@ void ManagementHttpController::get_qc_results(const drogon::HttpRequestPtr& requ
     handle_request("GET /api/v1/qc-results", [&] {
         const auto& parameters = request->getParameters();
         require_allowed_parameters(parameters, {"task_run_id", "result", "limit", "cursor"});
-        respond_page(handlers_.list_qc_results({required_parameter(parameters, "task_run_id"),
+        respond_page(query_handlers_.list_qc_results({required_parameter(parameters, "task_run_id"),
                                                 optional_parameter(parameters, "result"),
                                                 page_input(parameters)}),
                      qc_result_json, callback);
@@ -603,12 +817,82 @@ void ManagementHttpController::get_alerts(const drogon::HttpRequestPtr& request,
         const auto& parameters = request->getParameters();
         require_allowed_parameters(parameters,
             {"node_code", "task_run_id", "status", "severity", "limit", "cursor"});
-        respond_page(handlers_.list_alerts({required_parameter(parameters, "node_code"),
+        respond_page(query_handlers_.list_alerts({required_parameter(parameters, "node_code"),
                                             optional_parameter(parameters, "task_run_id"),
                                             optional_parameter(parameters, "status"),
                                             optional_parameter(parameters, "severity"),
                                             page_input(parameters)}),
                      alert_json, callback);
+    }, callback);
+}
+
+void ManagementHttpController::post_data_source(
+    const drogon::HttpRequestPtr& request,
+    ResponseCallback&& callback) const {
+    handle_request("POST /api/v1/data-sources", [&] {
+        require_allowed_parameters(request->getParameters(), {});
+        if (!http::require_json_content_type(request, callback)) {
+            return;
+        }
+        respond_command<DataSourceRecord>(
+            command_handlers_.create_data_source(
+                parse_data_source_create(parse_json_body(request))),
+            drogon::k201Created,
+            data_source_json,
+            callback);
+    }, callback);
+}
+
+void ManagementHttpController::post_qc_rule(
+    const drogon::HttpRequestPtr& request,
+    ResponseCallback&& callback) const {
+    handle_request("POST /api/v1/qc-rules", [&] {
+        require_allowed_parameters(request->getParameters(), {});
+        if (!http::require_json_content_type(request, callback)) {
+            return;
+        }
+        respond_command<QcRuleRecord>(
+            command_handlers_.create_qc_rule(
+                parse_qc_rule_create(parse_json_body(request))),
+            drogon::k201Created,
+            qc_rule_json,
+            callback);
+    }, callback);
+}
+
+void ManagementHttpController::post_task(
+    const drogon::HttpRequestPtr& request,
+    ResponseCallback&& callback) const {
+    handle_request("POST /api/v1/tasks", [&] {
+        require_allowed_parameters(request->getParameters(), {});
+        if (!http::require_json_content_type(request, callback)) {
+            return;
+        }
+        respond_command<TaskRecord>(
+            command_handlers_.create_task(
+                parse_task_create(parse_json_body(request))),
+            drogon::k201Created,
+            task_json,
+            callback);
+    }, callback);
+}
+
+void ManagementHttpController::patch_task(
+    const drogon::HttpRequestPtr& request,
+    const std::string& task_id,
+    ResponseCallback&& callback) const {
+    handle_request("PATCH /api/v1/tasks/{taskId}", [&] {
+        require_allowed_parameters(request->getParameters(), {});
+        if (!http::require_json_content_type(request, callback)) {
+            return;
+        }
+        respond_command<TaskRecord>(
+            command_handlers_.set_task_enabled(
+                task_id,
+                parse_task_enabled_patch(parse_json_body(request))),
+            drogon::k200OK,
+            task_json,
+            callback);
     }, callback);
 }
 

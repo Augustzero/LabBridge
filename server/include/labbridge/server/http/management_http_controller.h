@@ -1,5 +1,6 @@
 #pragma once
 
+#include "labbridge/server/application/management_command_service.h"
 #include "labbridge/server/application/management_query_service.h"
 #include "labbridge/server/http/http_json_response.h"
 
@@ -37,12 +38,24 @@ struct ManagementQueryHandlers {
         list_alerts;
 };
 
+struct ManagementCommandHandlers {
+    std::function<ManagementCommandResult(
+        const ManagementDataSourceCreateRequest&)> create_data_source;
+    std::function<ManagementCommandResult(
+        const ManagementQcRuleCreateRequest&)> create_qc_rule;
+    std::function<ManagementCommandResult(
+        const ManagementTaskCreateRequest&)> create_task;
+    std::function<ManagementCommandResult(const std::string&, bool)>
+        set_task_enabled;
+};
+
 class ManagementHttpController
     : public std::enable_shared_from_this<ManagementHttpController> {
 public:
     using ResponseCallback = http::ResponseCallback;
 
-    explicit ManagementHttpController(ManagementQueryHandlers handlers);
+    ManagementHttpController(ManagementQueryHandlers query_handlers,
+                             ManagementCommandHandlers command_handlers);
 
     void register_routes(drogon::HttpAppFramework& app);
 
@@ -70,9 +83,19 @@ public:
                         ResponseCallback&& callback) const;
     void get_alerts(const drogon::HttpRequestPtr& request,
                     ResponseCallback&& callback) const;
+    void post_data_source(const drogon::HttpRequestPtr& request,
+                          ResponseCallback&& callback) const;
+    void post_qc_rule(const drogon::HttpRequestPtr& request,
+                      ResponseCallback&& callback) const;
+    void post_task(const drogon::HttpRequestPtr& request,
+                   ResponseCallback&& callback) const;
+    void patch_task(const drogon::HttpRequestPtr& request,
+                    const std::string& task_id,
+                    ResponseCallback&& callback) const;
 
 private:
-    ManagementQueryHandlers handlers_;
+    ManagementQueryHandlers query_handlers_;
+    ManagementCommandHandlers command_handlers_;
 };
 
 }  // namespace labbridge::server

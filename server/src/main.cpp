@@ -6,6 +6,7 @@
 #include "labbridge/server/http/task_run_http_controller.h"
 #include "labbridge/server/postgres/agent_control_executor.h"
 #include "labbridge/server/postgres/agent_report_executor.h"
+#include "labbridge/server/postgres/management_command_executor.h"
 #include "labbridge/server/postgres/management_query_executor.h"
 #include "labbridge/server/postgres/task_run_executor.h"
 
@@ -183,9 +184,34 @@ int main(int argc, char* argv[]) {
                 const labbridge::server::AlertListRequest& request) {
                 return management_executor->list_alerts(request);
             };
+        auto management_command_executor = std::make_shared<
+            labbridge::server::PostgresManagementCommandExecutor>(
+                connection_info);
+        labbridge::server::ManagementCommandHandlers command_handlers;
+        command_handlers.create_data_source =
+            [management_command_executor](
+                const labbridge::server::ManagementDataSourceCreateRequest& request) {
+                return management_command_executor->create_data_source(request);
+            };
+        command_handlers.create_qc_rule =
+            [management_command_executor](
+                const labbridge::server::ManagementQcRuleCreateRequest& request) {
+                return management_command_executor->create_qc_rule(request);
+            };
+        command_handlers.create_task =
+            [management_command_executor](
+                const labbridge::server::ManagementTaskCreateRequest& request) {
+                return management_command_executor->create_task(request);
+            };
+        command_handlers.set_task_enabled =
+            [management_command_executor](const std::string& task_id,
+                                          bool enabled) {
+                return management_command_executor->set_task_enabled(
+                    task_id, enabled);
+            };
         auto management_controller =
             std::make_shared<labbridge::server::ManagementHttpController>(
-                std::move(management_handlers));
+                std::move(management_handlers), std::move(command_handlers));
         management_controller->register_routes(app);
 
         labbridge::core::log_info(kComponent, "control plane HTTP service is ready");

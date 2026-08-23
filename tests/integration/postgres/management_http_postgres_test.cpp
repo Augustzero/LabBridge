@@ -1,17 +1,20 @@
 #include "labbridge/server/http/management_http_controller.h"
 #include "labbridge/server/postgres/libpq_sql_session.h"
+#include "labbridge/server/postgres/management_command_executor.h"
 #include "labbridge/server/postgres/management_query_executor.h"
 #include "labbridge/server/postgres/storage_mapping.h"
 
 #include <drogon/HttpRequest.h>
 #include <drogon/HttpResponse.h>
 #include <gtest/gtest.h>
+#include <json/writer.h>
 
 #include <cstdlib>
 #include <iostream>
 #include <memory>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace {
 
@@ -28,6 +31,17 @@ drogon::HttpRequestPtr request(
     return value;
 }
 
+drogon::HttpRequestPtr json_request(drogon::HttpMethod method,
+                                    const Json::Value& body) {
+    Json::StreamWriterBuilder builder;
+    builder["indentation"] = "";
+    auto value = drogon::HttpRequest::newHttpRequest();
+    value->setMethod(method);
+    value->setContentTypeCode(drogon::CT_APPLICATION_JSON);
+    value->setBody(Json::writeString(builder, body));
+    return value;
+}
+
 template <typename Invoke>
 drogon::HttpResponsePtr invoke(Invoke operation) {
     drogon::HttpResponsePtr response;
@@ -40,6 +54,16 @@ drogon::HttpResponsePtr invoke(Invoke operation) {
 
 const Json::Value& data(const drogon::HttpResponsePtr& response) {
     EXPECT_EQ(response->statusCode(), drogon::k200OK);
+    const auto& json = response->getJsonObject();
+    EXPECT_NE(json, nullptr);
+    EXPECT_TRUE((*json)["ok"].asBool());
+    return (*json)["data"];
+}
+
+const Json::Value& success_data(
+    const drogon::HttpResponsePtr& response,
+    drogon::HttpStatusCode expected_status) {
+    EXPECT_EQ(response->statusCode(), expected_status);
     const auto& json = response->getJsonObject();
     EXPECT_NE(json, nullptr);
     EXPECT_TRUE((*json)["ok"].asBool());
@@ -87,6 +111,28 @@ ManagementQueryHandlers handlers(
     value.list_alerts = [executor](const AlertListRequest& request) {
         return executor->list_alerts(request);
     };
+    return value;
+}
+
+ManagementCommandHandlers command_handlers(
+    const std::shared_ptr<PostgresManagementCommandExecutor>& executor) {
+    ManagementCommandHandlers value;
+    value.create_data_source =
+        [executor](const ManagementDataSourceCreateRequest& request) {
+            return executor->create_data_source(request);
+        };
+    value.create_qc_rule =
+        [executor](const ManagementQcRuleCreateRequest& request) {
+            return executor->create_qc_rule(request);
+        };
+    value.create_task =
+        [executor](const ManagementTaskCreateRequest& request) {
+            return executor->create_task(request);
+        };
+    value.set_task_enabled =
+        [executor](const std::string& task_id, bool enabled) {
+            return executor->set_task_enabled(task_id, enabled);
+        };
     return value;
 }
 
@@ -203,6 +249,10 @@ protected:
             session_->execute(
                 "DELETE FROM data_sources WHERE node_id=(SELECT id FROM nodes "
                 "WHERE node_code=$1)", {node_code_});
+            for (const auto& rule_id : created_rule_ids_) {
+                session_->execute(
+                    "DELETE FROM qc_rules WHERE id=$1::bigint", {rule_id});
+            }
             session_->execute("DELETE FROM qc_rules WHERE name=$1", {rule_name_});
             session_->execute("DELETE FROM nodes WHERE node_code=$1", {node_code_});
         } catch (const std::exception& error) {
@@ -230,12 +280,16 @@ protected:
     std::string parsed_id_;
     std::string qc_result_id_;
     std::string alert_id_;
+    std::vector<std::string> created_rule_ids_;
 };
 
 TEST_F(ManagementHttpPostgresTest, ReadsCompleteManagementEvidenceThroughHttpDtos) {
     auto executor = std::make_shared<PostgresManagementQueryExecutor>(
         connection_info_, 600, 3600);
-    ManagementHttpController controller{handlers(executor)};
+    auto command_executor =
+        std::make_shared<PostgresManagementCommandExecutor>(connection_info_);
+    ManagementHttpController controller{
+        handlers(executor), command_handlers(command_executor)};
 
     const auto nodes = data(invoke([&](auto callback) {
         controller.get_nodes(request({{"limit", "100"}}),
@@ -327,6 +381,137 @@ TEST_F(ManagementHttpPostgresTest, ReadsCompleteManagementEvidenceThroughHttpDto
               << " run=" << run_id_
               << " stale=true raw=1 parsed=1 qc=1 alerts=1"
               << " payload.temperature=22.5" << std::endl;
+}
+
+TEST_F(ManagementHttpPostgresTest,
+       WritesTransactionalConfigurationThroughHttpDtos) {
+    auto query_executor = std::make_shared<PostgresManagementQueryExecutor>(
+        connection_info_, 600, 3600);
+    auto command_executor =
+        std::make_shared<PostgresManagementCommandExecutor>(connection_info_);
+    ManagementHttpController controller{
+        handlers(query_executor), command_handlers(command_executor)};
+
+    Json::Value source_body;
+    source_body["node_code"] = node_code_;
+    source_body["source_type"] = "local_directory";
+    source_body["name"] = "phase02504-source-" + suffix_;
+    source_body["config"]["root_path"] = "/tmp/phase02504-inbox";
+    source_body["config"]["extension"] = ".csv";
+    source_body["enabled"] = true;
+    const auto source = success_data(invoke([&](auto callback) {
+        controller.post_data_source(
+            json_request(drogon::Post, source_body), std::move(callback));
+    }), drogon::k201Created);
+    const auto created_source_id = source["id"].asString();
+    EXPECT_TRUE(source["config"].isObject());
+    EXPECT_TRUE(source["created_at"].isString());
+
+    const auto create_rule = [&](const std::string& type, bool enabled) {
+        Json::Value rule_body;
+        rule_body["name"] = "phase02504-" + type + "-" + suffix_;
+        rule_body["rule_type"] = type;
+        rule_body["config"] = Json::Value{Json::objectValue};
+        rule_body["enabled"] = enabled;
+        const auto rule = success_data(invoke([&](auto callback) {
+            controller.post_qc_rule(
+                json_request(drogon::Post, rule_body), std::move(callback));
+        }), drogon::k201Created);
+        const auto id = rule["id"].asString();
+        created_rule_ids_.push_back(id);
+        return id;
+    };
+    const auto timestamp_rule_id =
+        create_rule("basic_timestamp_format", true);
+    const auto required_rule_id = create_rule("required_fields", true);
+    const auto disabled_rule_id = create_rule("required_fields", false);
+
+    Json::Value task_body;
+    task_body["node_code"] = node_code_;
+    task_body["data_source_id"] = created_source_id;
+    task_body["name"] = "phase02504-task-" + suffix_;
+    task_body["task_type"] = "local_file_import";
+    task_body["schedule_expr"] = "*/5 * * * *";
+    task_body["parser_type"] = "csv_observation";
+    task_body["qc_profile"] = "default";
+    task_body["qc_rule_ids"] = Json::Value{Json::arrayValue};
+    task_body["qc_rule_ids"].append(timestamp_rule_id);
+    task_body["qc_rule_ids"].append(required_rule_id);
+    task_body["enabled"] = true;
+    const auto task = success_data(invoke([&](auto callback) {
+        controller.post_task(
+            json_request(drogon::Post, task_body), std::move(callback));
+    }), drogon::k201Created);
+    const auto created_task_id = task["id"].asString();
+    ASSERT_EQ(task["qc_rule_ids"].size(), 2U);
+    EXPECT_EQ(task["qc_rule_ids"][0].asString(), timestamp_rule_id);
+    EXPECT_EQ(task["qc_rule_ids"][1].asString(), required_rule_id);
+    EXPECT_TRUE(task["created_at"].isString());
+
+    Json::Value patch_body;
+    patch_body["enabled"] = false;
+    const auto patched = success_data(invoke([&](auto callback) {
+        controller.patch_task(
+            json_request(drogon::Patch, patch_body), created_task_id,
+            std::move(callback));
+    }), drogon::k200OK);
+    EXPECT_FALSE(patched["enabled"].asBool());
+    EXPECT_TRUE(patched["updated_at"].isString());
+
+    const auto rejected_task_name = "phase02504-rejected-" + suffix_;
+    task_body["name"] = rejected_task_name;
+    task_body["qc_rule_ids"] = Json::Value{Json::arrayValue};
+    task_body["qc_rule_ids"].append(disabled_rule_id);
+    const auto rejected = invoke([&](auto callback) {
+        controller.post_task(
+            json_request(drogon::Post, task_body), std::move(callback));
+    });
+    EXPECT_EQ(rejected->statusCode(), drogon::k409Conflict);
+    ASSERT_NE(rejected->getJsonObject(), nullptr);
+    EXPECT_EQ((*rejected->getJsonObject())["error"]["code"].asString(),
+              "conflict");
+
+    const auto duplicate_task_name = "phase02504-duplicate-" + suffix_;
+    task_body["name"] = duplicate_task_name;
+    task_body["qc_rule_ids"] = Json::Value{Json::arrayValue};
+    task_body["qc_rule_ids"].append(required_rule_id);
+    task_body["qc_rule_ids"].append(required_rule_id);
+    const auto duplicate = invoke([&](auto callback) {
+        controller.post_task(
+            json_request(drogon::Post, task_body), std::move(callback));
+    });
+    EXPECT_EQ(duplicate->statusCode(), drogon::k400BadRequest);
+    ASSERT_NE(duplicate->getJsonObject(), nullptr);
+    EXPECT_EQ((*duplicate->getJsonObject())["error"]["code"].asString(),
+              "invalid_argument");
+
+    const auto persisted = session_->query_one(
+        "SELECT CASE WHEN t.enabled THEN 'true' ELSE 'false' END AS enabled, "
+        "string_agg(tqr.qc_rule_id::text, ',' ORDER BY tqr.sort_order) "
+        "AS bindings FROM tasks t JOIN task_qc_rules tqr "
+        "ON tqr.task_id=t.id WHERE t.id=$1::bigint GROUP BY t.id",
+        {created_task_id});
+    ASSERT_TRUE(persisted.has_value());
+    EXPECT_EQ(value_or_empty(*persisted, "enabled"), "false");
+    EXPECT_EQ(value_or_empty(*persisted, "bindings"),
+              timestamp_rule_id + "," + required_rule_id);
+    const auto rejected_count = session_->query_one(
+        "SELECT count(*)::text AS count FROM tasks WHERE name=$1",
+        {rejected_task_name});
+    ASSERT_TRUE(rejected_count.has_value());
+    EXPECT_EQ(value_or_empty(*rejected_count, "count"), "0");
+    const auto duplicate_count = session_->query_one(
+        "SELECT count(*)::text AS count FROM tasks WHERE name=$1",
+        {duplicate_task_name});
+    ASSERT_TRUE(duplicate_count.has_value());
+    EXPECT_EQ(value_or_empty(*duplicate_count, "count"), "0");
+
+    std::cout << "management_command_http source=" << created_source_id
+              << " task=" << created_task_id
+              << " bindings=" << timestamp_rule_id << "," << required_rule_id
+              << " create_status=201 patch_enabled=false"
+              << " rejected_status=409 rejected_tasks=0"
+              << " duplicate_status=400 duplicate_tasks=0" << std::endl;
 }
 
 }  // namespace

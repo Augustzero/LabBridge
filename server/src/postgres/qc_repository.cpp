@@ -13,6 +13,7 @@ QcRuleRecord to_rule_record(const SqlRow& row) {
     rule.rule_type = storage::value_or_empty(row, "rule_type");
     rule.rule_config_json = storage::value_or_empty(row, "rule_config_json");
     rule.enabled = storage::bool_value(storage::value_or_empty(row, "enabled"));
+    rule.created_at = storage::value_or_empty(row, "created_at");
     return rule;
 }
 
@@ -53,7 +54,9 @@ std::string PostgresQcRepository::create_rule(QcRuleRecord rule) {
 std::optional<QcRuleRecord> PostgresQcRepository::find_rule(const std::string& qc_rule_id) const {
     static const std::string sql =
         "SELECT id::text AS id, name, rule_type, rule_config_json::text AS rule_config_json, "
-        "CASE WHEN enabled THEN 'true' ELSE 'false' END AS enabled "
+        "CASE WHEN enabled THEN 'true' ELSE 'false' END AS enabled, "
+        "to_char(created_at AT TIME ZONE 'UTC', "
+        "'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS created_at "
         "FROM qc_rules "
         "WHERE id = $1::bigint "
         "LIMIT 1";

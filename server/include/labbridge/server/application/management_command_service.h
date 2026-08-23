@@ -7,6 +7,7 @@
 #include "labbridge/server/repositories/qc_repository.h"
 
 #include <string>
+#include <variant>
 #include <vector>
 
 namespace labbridge::server {
@@ -42,6 +43,8 @@ struct ManagementTaskCreateRequest {
 struct ManagementCommandResult {
     labbridge::core::Status status;
     std::string id;
+    std::variant<std::monostate, DataSourceRecord, QcRuleRecord, TaskRecord>
+        item;
 };
 
 class ManagementCommandService {
