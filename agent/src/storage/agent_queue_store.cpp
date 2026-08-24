@@ -994,28 +994,6 @@ int AgentQueueStore::delivery_attempt_count(
     return sqlite3_column_int(statement.get(), 0);
 }
 
-void AgentQueueStore::reconcile_tasks(
-    const std::vector<std::string>& active_task_ids) {
-    std::lock_guard<std::mutex> lock{impl_->mutex};
-    std::string sql = "DELETE FROM processed_files";
-    if (!active_task_ids.empty()) {
-        sql += " WHERE task_id NOT IN (";
-        for (std::size_t index = 0; index < active_task_ids.size(); ++index) {
-            sql += index == 0 ? "?" : ",?";
-        }
-        sql += ")";
-    }
-    auto statement = prepare(impl_->database, sql.c_str(),
-                             "reconcile processed tasks");
-    for (std::size_t index = 0; index < active_task_ids.size(); ++index) {
-        bind_text(impl_->database, statement.get(),
-                  static_cast<int>(index + 1), active_task_ids[index],
-                  "reconcile processed tasks");
-    }
-    check_result(sqlite3_step(statement.get()), impl_->database,
-                 "reconcile processed tasks");
-}
-
 bool AgentQueueStore::has_capacity() const {
     std::lock_guard<std::mutex> lock{impl_->mutex};
     return read_pending_job_count(impl_->database) < impl_->max_pending_jobs;

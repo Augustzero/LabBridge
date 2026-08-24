@@ -565,13 +565,6 @@ void TaskExecutor::request_stop() noexcept {
     client_.request_stop();
 }
 
-void TaskExecutor::reconcile_tasks(const std::vector<std::string>& task_ids) {
-    if (queue_store_ != nullptr) {
-        queue_store_->reconcile_tasks(task_ids);
-    }
-}
-
-
 void TaskExecutor::forget_task(const std::string& task_id) {
     const std::lock_guard<std::mutex> lock{processed_fingerprints_mutex_};
     processed_fingerprints_.erase(task_id);

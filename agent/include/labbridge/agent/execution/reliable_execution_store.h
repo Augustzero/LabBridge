@@ -57,7 +57,6 @@ public:
         const TaskRunReportRequest& request,
         const std::vector<bool>& parsed_without_errors) = 0;
     virtual void complete_job(const std::string& execution_key) = 0;
-    virtual void reconcile_tasks(const std::vector<std::string>& task_ids) = 0;
     virtual bool has_capacity() const = 0;
     virtual bool is_file_processed(const std::string& task_id,
                                    const std::string& fingerprint) const = 0;

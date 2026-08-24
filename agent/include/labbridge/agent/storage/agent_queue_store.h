@@ -52,7 +52,6 @@ public:
         const std::string& request_type, const std::string& idempotency_key) const;
     int delivery_attempt_count(const std::string& request_type,
                                const std::string& idempotency_key) const;
-    void reconcile_tasks(const std::vector<std::string>& active_task_ids) override;
     bool has_capacity() const override;
     bool is_file_processed(const std::string& task_id,
                            const std::string& fingerprint) const override;

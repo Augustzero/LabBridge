@@ -527,7 +527,7 @@ TEST(TaskExecutorTest, BoundsErrorSummaryDetailsAndBytes) {
         report.error_summary.find("2 additional error(s) omitted"),
         std::string::npos);
 }
-TEST(TaskExecutorTest, RecoversFrozenReportAndPersistsDedupAcrossObjects) {
+TEST(TaskExecutorTest, RetainsPersistentDedupAcrossDisableAndRecovery) {
     TemporaryExecutionTree tree;
     tree.write_csv(
         "reliable.csv",
@@ -536,6 +536,7 @@ TEST(TaskExecutorTest, RecoversFrozenReportAndPersistsDedupAcrossObjects) {
     FakeExecutionClient client;
     const auto database = (tree.work().parent_path() / "queue.db").string();
     const auto task = executable_task(tree.inbox());
+    std::string persisted_fingerprint;
     {
         labbridge::agent::AgentQueueStore store{
             database, task.node_code, 10, 10};
@@ -547,6 +548,8 @@ TEST(TaskExecutorTest, RecoversFrozenReportAndPersistsDedupAcrossObjects) {
         EXPECT_EQ(store.recover_jobs().front().stage, "report_pending");
         tree.track_archive(
             store.recover_jobs().front().manifest_request.files.front().storage_path);
+        persisted_fingerprint =
+            store.recover_jobs().front().files.front().fingerprint;
     }
     const auto frozen_report = client.reports.front();
     {
@@ -556,8 +559,12 @@ TEST(TaskExecutorTest, RecoversFrozenReportAndPersistsDedupAcrossObjects) {
             client, store, tree.work(), {tree.inbox()}, fixed_now()};
         executor.recover_pending_jobs();
         EXPECT_EQ(store.pending_job_count(), 0U);
+        EXPECT_TRUE(
+            store.is_file_processed(task.id, persisted_fingerprint));
         EXPECT_EQ(client.reports.back().idempotency_key,
                   frozen_report.idempotency_key);
+        // 配置缺席表示禁用时只清理进程内状态，持久化指纹必须跨重新启用保留。
+        executor.forget_task(task.id);
         executor.execute(scheduled(task));
         EXPECT_EQ(client.manifests.size(), 1U);
         EXPECT_EQ(client.reports.back().items_total, 0);
@@ -566,6 +573,7 @@ TEST(TaskExecutorTest, RecoversFrozenReportAndPersistsDedupAcrossObjects) {
     std::filesystem::remove(database + "-wal");
     std::filesystem::remove(database + "-shm");
     std::cout << "recovery stage=report_pending replayed_report=1 "
+              << "config_disabled=1 config_reenabled=1 "
               << "pending_jobs=0 next_run_manifest_files=0" << std::endl;
 }
 

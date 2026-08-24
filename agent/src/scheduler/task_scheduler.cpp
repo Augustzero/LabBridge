@@ -176,10 +176,9 @@ public:
             }
         }
 
+        // 可执行投影缺席既可能表示禁用，也可能表示删除；这里只停止新调度，
+        // 不能据此清除持久化指纹，否则任务重新启用后会重复发布历史文件。
         entries = std::move(replacement);
-        std::vector<std::string> active_ids;
-        for (const auto& item : entries) { active_ids.push_back(item.first); }
-        executor.reconcile_tasks(active_ids);
         time_source.wake();
     }
 

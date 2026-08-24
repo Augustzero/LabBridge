@@ -22,7 +22,6 @@ public:
     virtual void execute(ScheduledTaskExecution execution) = 0;
     virtual void request_stop() noexcept = 0;
     virtual void forget_task(const std::string& task_id) = 0;
-    virtual void reconcile_tasks(const std::vector<std::string>&) {}
 };
 
 class ISchedulerTimeSource {

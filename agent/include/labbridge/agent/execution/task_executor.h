@@ -42,7 +42,6 @@ public:
     void execute(ScheduledTaskExecution execution) override;
     void request_stop() noexcept override;
     void forget_task(const std::string& task_id) override;
-    void reconcile_tasks(const std::vector<std::string>& task_ids) override;
 
 private:
     bool was_processed(const std::string& task_id,
