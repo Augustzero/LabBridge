@@ -1,0 +1,21 @@
+agent:
+  node_code: demo-node-001
+  name: LabBridge demo node
+  server_url: http://server:18080
+  request_timeout_seconds: 5
+  heartbeat_interval_seconds: 5
+
+storage:
+  queue_db: /var/lib/labbridge/agent.db
+  work_dir: /var/lib/labbridge/work
+  max_pending_jobs: 1000
+  processed_fingerprint_capacity_per_task: 10000
+
+delivery:
+  retry_initial_seconds: 2
+  retry_max_seconds: 300
+
+tasks:
+  poll_interval_seconds: 5
+  allowed_local_roots:
+    - /demo/inbox

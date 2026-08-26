@@ -1,0 +1,24 @@
+listeners:
+  - address: 0.0.0.0
+    port: 18080
+    https: false
+
+app:
+  number_of_threads: 1
+  enable_session: false
+  client_max_body_size: 1M
+  client_max_memory_body_size: 64K
+  log:
+    log_level: INFO
+    display_local_time: false
+
+custom_config:
+  database:
+    connection_info: "host=postgres port=5432 dbname=labbridge user=labbridge password=labbridge_demo_only connect_timeout=5"
+  management:
+    node_offline_after_seconds: 120
+    task_run_stale_after_seconds: 3600
+  storage:
+    type: local
+    root: /var/lib/labbridge/archive
+

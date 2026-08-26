@@ -1,0 +1,68 @@
+name: labbridge-demo
+
+services:
+  postgres:
+    image: postgres:16.15-bookworm
+    environment:
+      POSTGRES_DB: labbridge
+      POSTGRES_USER: labbridge
+      POSTGRES_PASSWORD: labbridge_demo_only
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U labbridge -d labbridge"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 5s
+    restart: unless-stopped
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ../schema.sql:/docker-entrypoint-initdb.d/001-schema.sql:ro
+
+  server:
+    build:
+      context: ../..
+      dockerfile: deploy/demo/Dockerfile
+      target: server-runtime
+    environment:
+      LABBRIDGE_DATABASE_URL: >-
+        host=postgres port=5432 dbname=labbridge user=labbridge
+        password=labbridge_demo_only connect_timeout=5
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # 健康检查贯通 HTTP listener、请求处理、数据库连接与完整 schema。
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - --fail
+        - --silent
+        - --show-error
+        - http://127.0.0.1:18080/api/v1/nodes?limit=1
+      interval: 3s
+      timeout: 5s
+      retries: 30
+      start_period: 5s
+    ports:
+      - "127.0.0.1:${LABBRIDGE_SERVER_PORT:-18080}:18080"
+    restart: unless-stopped
+
+  agent:
+    build:
+      context: ../..
+      dockerfile: deploy/demo/Dockerfile
+      target: agent-runtime
+    depends_on:
+      server:
+        condition: service_healthy
+    restart: unless-stopped
+    volumes:
+      - agent_state:/var/lib/labbridge
+      # Agent 只能读取采集入口，不能从业务进程改写演示输入。
+      - demo_inbox:/demo/inbox:ro
+
+# 普通停止与再次启动均复用这些卷，不隐式清理历史状态。
+volumes:
+  postgres_data:
+  agent_state:
+  demo_inbox:
