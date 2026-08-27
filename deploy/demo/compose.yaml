@@ -61,6 +61,32 @@ services:
       # Agent 只能读取采集入口，不能从业务进程改写演示输入。
       - demo_inbox:/demo/inbox:ro
 
+  demo-runner:
+    profiles: ["demo"]
+    build:
+      context: ../..
+      dockerfile: deploy/demo/Dockerfile.runner
+    environment:
+      DEMO_API_BASE_URL: http://server:18080/api/v1
+      DEMO_NODE_CODE: demo-node-001
+      DEMO_TIMEOUT_SECONDS: ${LABBRIDGE_DEMO_TIMEOUT_SECONDS:-150}
+      PGHOST: postgres
+      PGPORT: 5432
+      PGDATABASE: labbridge
+      PGUSER: labbridge
+      PGPASSWORD: labbridge_demo_only
+    depends_on:
+      server:
+        condition: service_healthy
+      agent:
+        condition: service_started
+    volumes:
+      # runner 只在本次独立子目录写入 fixture 和结果索引。
+      - demo_inbox:/demo/inbox
+      # 工程回验只读 SQLite 与归档，普通演示不依赖这个挂载。
+      - agent_state:/var/lib/labbridge:ro
+    restart: "no"
+
 # 普通停止与再次启动均复用这些卷，不隐式清理历史状态。
 volumes:
   postgres_data:

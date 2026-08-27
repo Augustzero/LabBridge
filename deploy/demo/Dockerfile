@@ -11,6 +11,13 @@ RUN apt-get update \
         g++ \
         libboost-system-dev \
         libdrogon-dev \
+        libjsoncpp-dev \
+        libbrotli-dev \
+        libhiredis-dev \
+        libmariadb-dev \
+        libtrantor-dev \
+        uuid-dev \
+        zlib1g-dev \
         libpq-dev \
         libsqlite3-dev \
         libssl-dev \

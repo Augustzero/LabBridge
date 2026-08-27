@@ -1,0 +1,25 @@
+FROM python:3.12.11-slim-bookworm
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends postgresql-client \
+    && apt-get clean \
+    && groupadd --gid 10001 labbridge \
+    && useradd --uid 10001 --gid labbridge --no-create-home \
+        --shell /usr/sbin/nologin labbridge \
+    && install --directory --owner=labbridge --group=labbridge \
+        /opt/labbridge-demo /demo/inbox
+
+COPY --chown=labbridge:labbridge scripts/demo/demo_support.py /opt/labbridge-demo/
+COPY --chown=labbridge:labbridge scripts/demo/run_demo.py /opt/labbridge-demo/
+COPY --chown=labbridge:labbridge scripts/demo/inspect_demo.py /opt/labbridge-demo/
+COPY --chown=labbridge:labbridge scripts/mock_data/demo-observations.csv \
+    /opt/labbridge-demo/demo-observations.csv
+
+USER labbridge
+WORKDIR /opt/labbridge-demo
+ENTRYPOINT ["python3"]
+CMD ["run_demo.py"]
