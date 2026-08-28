@@ -9,6 +9,7 @@ from demo_support import (
     ApiClient,
     DemoError,
     Evidence,
+    build_browser_urls,
     find_business_run,
     require_run_key,
     validate_evidence,
@@ -76,6 +77,27 @@ def valid_evidence() -> Evidence:
 
 
 class DemoSupportTest(unittest.TestCase):
+    def test_browser_urls_link_to_selected_task_and_run(self) -> None:
+        self.assertEqual(
+            {
+                "web_url": "http://127.0.0.1:8080/nodes",
+                "task_url": (
+                    "http://127.0.0.1:8080/tasks?node_code=demo-node-001"
+                ),
+                "run_url": (
+                    "http://127.0.0.1:8080/task-runs?"
+                    "node_code=demo-node-001&task_id=10&run_id=20"
+                ),
+            },
+            build_browser_urls(
+                "http://127.0.0.1:8080/", "demo-node-001", "10", "20"
+            ),
+        )
+
+    def test_browser_urls_encode_query_values(self) -> None:
+        urls = build_browser_urls("http://web", "node + 1", "10", "20")
+        self.assertIn("node_code=node+%2B+1", urls["run_url"])
+
     def test_api_client_accepts_production_ok_data_envelope(self) -> None:
         response = io.BytesIO(b'{"ok":true,"data":{"id":"10"}}')
         with patch("urllib.request.urlopen", return_value=response):

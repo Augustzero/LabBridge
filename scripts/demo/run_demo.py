@@ -14,6 +14,7 @@ from pathlib import Path
 from demo_support import (
     ApiClient,
     DemoError,
+    build_browser_urls,
     find_business_run,
     load_evidence,
     require_run_key,
@@ -62,8 +63,9 @@ def main() -> int:
     if timeout_seconds < 30 or timeout_seconds > 600:
         raise DemoError("DEMO_TIMEOUT_SECONDS must be between 30 and 600")
     client = ApiClient(
-        os.getenv("DEMO_API_BASE_URL", "http://server:18080/api/v1")
+        os.getenv("DEMO_API_BASE_URL", "http://web:8080/api/v1")
     )
+    web_base_url = os.getenv("DEMO_WEB_BASE_URL", "http://127.0.0.1:8080")
     deadline = time.monotonic() + timeout_seconds
 
     run_dir = INBOX_ROOT / run_key
@@ -215,6 +217,7 @@ def main() -> int:
             "alerts": 1,
             "task_enabled": False,
         }
+        result.update(build_browser_urls(web_base_url, node_code, task_id, run_id))
         write_result(run_dir, result)
         print("\nLabBridge CSV demo succeeded")
         print(
@@ -223,6 +226,9 @@ def main() -> int:
         )
         print("evidence raw=1 parsed=2 qc=4 failed_qc=1 alerts=1(open)")
         print("task disabled=true; PostgreSQL, SQLite and archive evidence retained")
+        print(f"Web console: {result['web_url']}")
+        print(f"Task page: {result['task_url']}")
+        print(f"Run evidence: {result['run_url']}")
         print("LABBRIDGE_DEMO_RESULT=" + json.dumps(result, separators=(",", ":")))
         return 0
     except (DemoError, OSError, KeyboardInterrupt) as error:

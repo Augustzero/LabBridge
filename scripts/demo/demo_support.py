@@ -27,6 +27,21 @@ def require_run_key(value: str) -> str:
     return value
 
 
+def build_browser_urls(
+    base_url: str, node_code: str, task_id: str, run_id: str
+) -> dict[str, str]:
+    base = base_url.rstrip("/")
+    task_query = urllib.parse.urlencode({"node_code": node_code})
+    run_query = urllib.parse.urlencode(
+        {"node_code": node_code, "task_id": task_id, "run_id": run_id}
+    )
+    return {
+        "web_url": f"{base}/nodes",
+        "task_url": f"{base}/tasks?{task_query}",
+        "run_url": f"{base}/task-runs?{run_query}",
+    }
+
+
 @dataclass(frozen=True)
 class Evidence:
     detail: dict[str, Any]

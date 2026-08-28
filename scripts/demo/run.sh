@@ -51,22 +51,28 @@ printf 'LabBridge development demo: unauthenticated and restricted to this machi
 printf 'Do not expose these services to the public internet or an untrusted LAN.\n'
 printf 'demo_run_key=%s compose_project=%s\n\n' "$demo_run_key" "$compose_project"
 
-printf '[1/4] building Server, Agent and demo runner images\n'
+printf '[1/6] building Server, Agent, Web and demo runner images\n'
 if [[ ${LABBRIDGE_DEMO_SKIP_BUILD:-0} == 1 ]]; then
   printf 'using images built by the current review workflow\n'
 else
-  compose --profile demo build server agent demo-runner
+  compose --profile demo build server agent web demo-runner
 fi
 
-printf '[2/4] starting PostgreSQL, Server and Agent\n'
+printf '[2/6] starting PostgreSQL, Server and Agent\n'
 compose up -d --wait --wait-timeout 180 postgres server agent
 
-printf '[3/4] running isolated CSV demo and HTTP evidence checks\n'
+printf '[3/6] starting Web and checking the same-origin API proxy\n'
+compose up -d --wait --wait-timeout 180 web
+
+printf '[4/6] waiting for Agent demo-node-001\n'
+printf 'runner will verify registration and a real heartbeat through the Web proxy\n'
+
+printf '[5/6] creating the CSV task and verifying its complete evidence chain\n'
 compose --profile demo run --rm --no-deps \
   -e "DEMO_RUN_KEY=$demo_run_key" demo-runner run_demo.py
 
-printf '[4/4] demo complete; services remain available for inspection\n'
-printf 'Management API: http://127.0.0.1:%s/api/v1\n' "${LABBRIDGE_SERVER_PORT:-18080}"
+printf '[6/6] demo complete; browser and services remain available\n'
+printf 'Web console: http://127.0.0.1:%s/nodes\n' "${LABBRIDGE_WEB_PORT:-8080}"
 printf 'Inspect all evidence: LABBRIDGE_DEMO_RUN_KEY=%q ./scripts/demo/inspect.sh\n' "$demo_run_key"
 printf 'Stop without deleting data: ./scripts/demo/stop.sh\n'
 
