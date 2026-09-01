@@ -3,14 +3,22 @@ include(${PROJECT_SOURCE_DIR}/cmake/LabBridgeTesting.cmake)
 
 set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
 set(BUILD_GMOCK OFF CACHE BOOL "" FORCE)
+
+set(googletest_download_options)
+if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.24)
+    list(APPEND googletest_download_options DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+endif()
+
 FetchContent_Declare(
     googletest
     URL https://github.com/google/googletest/archive/refs/tags/v1.17.0.tar.gz
     URL_HASH SHA256=65fab701d9829d38cb77c14acdc431d2108bfdbf8979e40eb8ae567edf10b27c
-    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+    ${googletest_download_options}
 )
 FetchContent_MakeAvailable(googletest)
+unset(googletest_download_options)
 
+if(LABBRIDGE_BUILD_AGENT)
 add_library(labbridge_agent_test_support
     support/agent/mock_http_server.cpp
     support/agent/response_loss_proxy.cpp
@@ -37,8 +45,9 @@ set_target_properties(
     phase024_response_loss_proxy
     PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
 )
+endif()
 
-
+if(LABBRIDGE_BUILD_SERVER)
 add_library(labbridge_server_test_support
     support/server/in_memory_agent_report_receipt_repository.cpp
     support/server/in_memory_alert_repository.cpp
@@ -66,6 +75,7 @@ target_link_libraries(
     labbridge_server_sql_test_support
     INTERFACE labbridge_server_postgres
 )
+endif()
 
 add_labbridge_test(
     cron_schedule_test
@@ -75,6 +85,7 @@ add_labbridge_test(
     TIMEOUT 10
 )
 
+if(LABBRIDGE_BUILD_AGENT)
 add_labbridge_test(
     agent_config_test
     SOURCES unit/agent/agent_config_test.cpp
@@ -228,7 +239,9 @@ add_labbridge_test(
     LABELS component
     TIMEOUT 10
 )
+endif()
 
+if(LABBRIDGE_BUILD_SERVER)
 add_labbridge_test(
     node_repository_test
     SOURCES unit/server/node_repository_test.cpp
@@ -440,12 +453,14 @@ add_labbridge_test(
     LABELS component
 )
 
+if(LABBRIDGE_BUILD_AGENT)
 add_labbridge_test(
     local_csv_pipeline_test
     SOURCES component/agent/local_csv_pipeline_test.cpp
     LINK_LIBRARIES GTest::gtest_main labbridge_agent_domain labbridge_server_test_support
     LABELS component
 )
+endif()
 
 add_labbridge_test(
     libpq_sql_session_test
@@ -562,3 +577,4 @@ add_custom_target(
     DEPENDS ${labbridge_postgres_test_targets}
     USES_TERMINAL
 )
+endif()
