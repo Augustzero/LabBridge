@@ -6,7 +6,6 @@ import NodesView from '@/views/NodesView.vue'
 import TasksView from '@/views/TasksView.vue'
 import TaskRunsView from '@/views/TaskRunsView.vue'
 
-// 运行历史页当前为占位组件；026R-04 替换为实际页面
 export const routes = [
   { path: '/', redirect: '/nodes' },
   {
