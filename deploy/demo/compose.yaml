@@ -61,13 +61,35 @@ services:
       # Agent 只能读取采集入口，不能从业务进程改写演示输入。
       - demo_inbox:/demo/inbox:ro
 
+  # Web 控制台与 Server 同源：前端只发相对路径请求，/api 经 Nginx 反代到 server:18080。
+  web:
+    build:
+      context: ../..
+      dockerfile: deploy/demo/Dockerfile.web
+    depends_on:
+      server:
+        condition: service_healthy
+    # 健康检查同时覆盖静态入口与 /api 反代链路。
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - wget -q -O /dev/null http://127.0.0.1:8080/ && wget -q -O /dev/null http://127.0.0.1:8080/api/v1/nodes?limit=1
+      interval: 3s
+      timeout: 5s
+      retries: 30
+      start_period: 5s
+    ports:
+      - "127.0.0.1:${LABBRIDGE_WEB_PORT:-8080}:8080"
+    restart: unless-stopped
+
   demo-runner:
     profiles: ["demo"]
     build:
       context: ../..
       dockerfile: deploy/demo/Dockerfile.runner
     environment:
-      DEMO_API_BASE_URL: http://server:18080/api/v1
+      # runner 验证的是浏览器实际访问路径（Nginx 同源反代），不是直连 Server。
+      DEMO_API_BASE_URL: http://web:8080/api/v1
       DEMO_NODE_CODE: demo-node-001
       DEMO_TIMEOUT_SECONDS: ${LABBRIDGE_DEMO_TIMEOUT_SECONDS:-150}
       PGHOST: postgres
@@ -77,6 +99,8 @@ services:
       PGPASSWORD: labbridge_demo_only
     depends_on:
       server:
+        condition: service_healthy
+      web:
         condition: service_healthy
       agent:
         condition: service_started

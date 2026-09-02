@@ -1,0 +1,33 @@
+# Web 控制台镜像：Node 22 构建期 + Nginx 非 root 运行期。
+# 构建期执行完整门禁（typecheck / Vitest 单测 / build），任何一步失败即镜像构建失败。
+# 供 FROM 使用的 ARG 必须声明在首个 FROM 之前。
+ARG NODE_IMAGE=node:22.23.2-bookworm-slim
+ARG NGINX_IMAGE=nginx:1.26.3-alpine
+
+FROM ${NODE_IMAGE} AS builder
+
+WORKDIR /src
+
+# 先只拷贝依赖清单安装依赖，源码变更不打破 npm ci 缓存层。
+COPY web-console/package.json web-console/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+
+COPY web-console/ ./
+RUN npm run typecheck \
+    && npm run test -- --run \
+    && npm run build \
+    && test -f dist/index.html
+
+FROM ${NGINX_IMAGE} AS runtime
+
+COPY deploy/demo/nginx.conf /etc/nginx/nginx.conf
+COPY --from=builder /src/dist /usr/share/nginx/html
+
+# 非 root 运行：仅临时目录与日志目录需要可写，静态文件保持只读。
+RUN chown -R nginx:nginx /var/cache/nginx /var/log/nginx
+
+USER nginx
+EXPOSE 8080
+STOPSIGNAL SIGQUIT
+ENTRYPOINT ["nginx"]
+CMD ["-g", "daemon off;"]

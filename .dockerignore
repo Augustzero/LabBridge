@@ -1,6 +1,7 @@
 .git
 .agents
 .codex
+.zcode
 .gitignore
 .dockerignore
 
@@ -15,10 +16,10 @@ web-console/node_modules
 web-console/dist
 
 docs
+glm-docs
 learn
-README.md
-AGENTS.md
 
+*.md
 *.db
 *.sqlite
 *.sqlite3

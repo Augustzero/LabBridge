@@ -7,6 +7,10 @@ docs/blog/
 CMakeUserPresets.json
 compile_commands.json
 
+web-console/node_modules/
+web-console/dist/
+web-console/**/*.local
+
 *.exe
 *.dll
 *.so
