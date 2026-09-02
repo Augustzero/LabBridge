@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { createMemoryHistory, createRouter, type Router } from 'vue-router'
 
 import ConsoleLayout from '@/layouts/ConsoleLayout.vue'
+import NodeDetailView from '@/views/NodeDetailView.vue'
 import NodesView from '@/views/NodesView.vue'
 import TasksView from '@/views/TasksView.vue'
 import TaskRunsView from '@/views/TaskRunsView.vue'
@@ -45,6 +46,7 @@ describe('router', () => {
     const resolved = router.resolve('/nodes/LAB-01')
 
     expect(resolved.name).toBe('node-detail')
+    expect(resolved.matched[1]?.components?.default).toBe(NodeDetailView)
     expect(resolved.params.nodeCode).toBe('LAB-01')
   })
 })
