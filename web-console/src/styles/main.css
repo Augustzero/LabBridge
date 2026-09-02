@@ -1,0 +1,32 @@
+/* 工业风基础样式：信息优先、紧凑、无装饰；
+   仅定义全局基调，页面与组件样式放在各自文件内 */
+
+:root {
+  --labbridge-border: #dcdfe6;
+  --labbridge-bg: #f5f6f7;
+  --labbridge-text: #303133;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+}
+
+body {
+  font-family:
+    'Helvetica Neue',
+    Arial,
+    'PingFang SC',
+    'Hiragino Sans GB',
+    'Microsoft YaHei',
+    sans-serif;
+  background: var(--labbridge-bg);
+  color: var(--labbridge-text);
+  -webkit-font-smoothing: antialiased;
+}
+
+#app {
+  height: 100vh;
+}
