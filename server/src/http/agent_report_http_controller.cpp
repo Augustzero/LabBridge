@@ -10,12 +10,7 @@
 namespace labbridge::server {
 namespace {
 
-constexpr std::string_view kComponent = "agent-report-http";
-
-class RequestValidationError final : public std::runtime_error {
-public:
-    using std::runtime_error::runtime_error;
-};
+using http::RequestValidationError;
 
 std::string field_path(const std::string& object_path, const std::string& field) {
     return object_path.empty() ? field : object_path + "." + field;
@@ -243,11 +238,10 @@ void AgentReportHttpController::register_routes(drogon::HttpAppFramework& app) {
 void AgentReportHttpController::post_raw_file_manifest(
     const drogon::HttpRequestPtr& request,
     ResponseCallback&& callback) const {
-    if (!http::require_json_content_type(request, callback)) {
-        return;
-    }
-
-    try {
+    http::handle_request("agent-report-http", "POST /api/v1/raw-files/manifest", [&] {
+        if (!http::require_json_content_type(request, callback)) {
+            return;
+        }
         const auto parsed = parse_raw_file_manifest(parse_json_body(request));
         const auto result = raw_file_manifest_handler_(parsed);
         if (!result.status.ok) {
@@ -259,24 +253,16 @@ void AgentReportHttpController::post_raw_file_manifest(
         data["raw_file_ids"] = string_array(result.raw_file_ids);
         data["replayed"] = result.replayed;
         callback(http::success_response(drogon::k201Created, std::move(data)));
-    } catch (const RequestValidationError& error) {
-        callback(http::error_response(
-            drogon::k400BadRequest, "invalid_argument", error.what()));
-    } catch (const std::exception& error) {
-        http::handle_unexpected_exception(kComponent, error, callback);
-    } catch (...) {
-        http::handle_unknown_exception(kComponent, callback);
-    }
+    }, callback);
 }
 
 void AgentReportHttpController::post_task_run_report(
     const drogon::HttpRequestPtr& request,
     ResponseCallback&& callback) const {
-    if (!http::require_json_content_type(request, callback)) {
-        return;
-    }
-
-    try {
+    http::handle_request("agent-report-http", "POST /api/v1/task-runs/report", [&] {
+        if (!http::require_json_content_type(request, callback)) {
+            return;
+        }
         const auto parsed = parse_task_run_report(parse_json_body(request));
         const auto result = task_run_report_handler_(parsed);
         if (!result.status.ok) {
@@ -290,14 +276,7 @@ void AgentReportHttpController::post_task_run_report(
         data["alert_ids"] = string_array(result.alert_ids);
         data["replayed"] = result.replayed;
         callback(http::success_response(drogon::k200OK, std::move(data)));
-    } catch (const RequestValidationError& error) {
-        callback(http::error_response(
-            drogon::k400BadRequest, "invalid_argument", error.what()));
-    } catch (const std::exception& error) {
-        http::handle_unexpected_exception(kComponent, error, callback);
-    } catch (...) {
-        http::handle_unknown_exception(kComponent, callback);
-    }
+    }, callback);
 }
 
 }  // namespace labbridge::server

@@ -2,7 +2,6 @@
 
 #include <stdexcept>
 #include <string>
-#include <string_view>
 #include <utility>
 
 namespace labbridge::server {
@@ -10,21 +9,16 @@ namespace {
 
 constexpr std::string_view kComponent = "task-run-http";
 
-class RequestValidationError final : public std::runtime_error {
-public:
-    using std::runtime_error::runtime_error;
-};
-
 std::string required_string(const Json::Value& body, const std::string& field) {
     if (!body.isMember(field)) {
-        throw RequestValidationError(field + " is required");
+        throw http::RequestValidationError(field + " is required");
     }
     if (!body[field].isString()) {
-        throw RequestValidationError(field + " must be a string");
+        throw http::RequestValidationError(field + " must be a string");
     }
     const auto value = body[field].asString();
     if (value.empty()) {
-        throw RequestValidationError(field + " must not be empty");
+        throw http::RequestValidationError(field + " must not be empty");
     }
     return value;
 }
@@ -32,7 +26,8 @@ std::string required_string(const Json::Value& body, const std::string& field) {
 StartTaskRunRequest parse_start_request(const drogon::HttpRequestPtr& request) {
     const auto& body = request->getJsonObject();
     if (!body || !body->isObject()) {
-        throw RequestValidationError("request body must contain a JSON object");
+        throw http::RequestValidationError(
+            "request body must contain a JSON object");
     }
 
     StartTaskRunRequest parsed;
@@ -67,11 +62,10 @@ void TaskRunHttpController::register_routes(drogon::HttpAppFramework& app) {
 void TaskRunHttpController::post_start(
     const drogon::HttpRequestPtr& request,
     ResponseCallback&& callback) const {
-    if (!http::require_json_content_type(request, callback)) {
-        return;
-    }
-
-    try {
+    http::handle_request(kComponent, "POST /api/v1/task-runs/start", [&] {
+        if (!http::require_json_content_type(request, callback)) {
+            return;
+        }
         const auto result = start_handler_(parse_start_request(request));
         if (!result.status.ok) {
             callback(http::status_error_response(result.status));
@@ -82,14 +76,7 @@ void TaskRunHttpController::post_start(
         data["task_run_id"] = result.id;
         data["replayed"] = result.replayed;
         callback(http::success_response(drogon::k201Created, std::move(data)));
-    } catch (const RequestValidationError& error) {
-        callback(http::error_response(
-            drogon::k400BadRequest, "invalid_argument", error.what()));
-    } catch (const std::exception& error) {
-        http::handle_unexpected_exception(kComponent, error, callback);
-    } catch (...) {
-        http::handle_unknown_exception(kComponent, callback);
-    }
+    }, callback);
 }
 
 }  // namespace labbridge::server

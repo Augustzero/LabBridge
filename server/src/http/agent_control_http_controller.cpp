@@ -1,9 +1,9 @@
 #include "labbridge/server/http/agent_control_http_controller.h"
+#include "labbridge/server/http/http_dto_serialization.h"
 
 #include <memory>
 #include <stdexcept>
 #include <string>
-#include <string_view>
 #include <utility>
 
 namespace labbridge::server {
@@ -11,24 +11,19 @@ namespace {
 
 constexpr std::string_view kComponent = "agent-control-http";
 
-class RequestValidationError final : public std::runtime_error {
-public:
-    using std::runtime_error::runtime_error;
-};
-
 void require_object(const Json::Value& value, const std::string& path) {
     if (!value.isObject()) {
-        throw RequestValidationError(path + " must be an object");
+        throw http::RequestValidationError(path + " must be an object");
     }
 }
 
 std::string required_string(const Json::Value& object,
                             const std::string& field) {
     if (!object.isMember(field)) {
-        throw RequestValidationError(field + " is required");
+        throw http::RequestValidationError(field + " is required");
     }
     if (!object[field].isString()) {
-        throw RequestValidationError(field + " must be a string");
+        throw http::RequestValidationError(field + " must be a string");
     }
     return object[field].asString();
 }
@@ -36,7 +31,8 @@ std::string required_string(const Json::Value& object,
 const Json::Value& parse_json_body(const drogon::HttpRequestPtr& request) {
     const auto& body = request->getJsonObject();
     if (!body) {
-        throw RequestValidationError("request body must contain valid JSON");
+        throw http::RequestValidationError(
+            "request body must contain valid JSON");
     }
     require_object(*body, "request body");
     return *body;
@@ -58,43 +54,15 @@ labbridge::core::NodeHeartbeat parse_heartbeat(const Json::Value& body) {
     return heartbeat;
 }
 
-std::string node_status(labbridge::core::NodeStatus status) {
-    return status == labbridge::core::NodeStatus::Online ? "online" : "offline";
-}
-std::string source_type(labbridge::core::SourceType type) {
-    switch (type) {
-        case labbridge::core::SourceType::LocalDirectory:
-            return "local_directory";
-        case labbridge::core::SourceType::Ftp:
-            return "ftp";
-        case labbridge::core::SourceType::Oracle:
-            return "oracle";
-    }
-    throw std::runtime_error("unsupported data source type");
-}
-
-Json::Value stored_json_object(const std::string& text,
-                               const std::string& field) {
-    Json::CharReaderBuilder builder;
-    auto reader = std::unique_ptr<Json::CharReader>{builder.newCharReader()};
-    Json::Value value;
-    std::string errors;
-    if (!reader->parse(
-            text.data(), text.data() + text.size(), &value, &errors) ||
-        !value.isObject()) {
-        throw std::runtime_error(field + " must contain a JSON object");
-    }
-    return value;
-}
-
 Json::Value data_source_json(const DataSourceRecord& data_source) {
     Json::Value value;
     value["id"] = data_source.id;
     value["node_code"] = data_source.node_code;
-    value["source_type"] = source_type(data_source.source_type);
+    value["source_type"] =
+        http::source_type(data_source.source_type);
     value["name"] = data_source.name;
     value["config"] =
-        stored_json_object(data_source.config_json, "data source config");
+        http::stored_json_object(data_source.config_json, "data source config");
     return value;
 }
 
@@ -123,7 +91,7 @@ Json::Value qc_rule_json(const TaskQcRuleBinding& binding) {
     value["rule_type"] = binding.rule_type;
     value["name"] = binding.name;
     value["config"] =
-        stored_json_object(binding.rule_config_json, "QC rule config");
+        http::stored_json_object(binding.rule_config_json, "QC rule config");
     return value;
 }
 
@@ -134,7 +102,7 @@ Json::Value config_json(const AgentConfigResult& result) {
     data["node"]["node_code"] = node.info.node_code;
     data["node"]["name"] = node.info.name;
     data["node"]["agent_version"] = node.info.agent_version;
-    data["node"]["status"] = node_status(node.status);
+    data["node"]["status"] = http::node_status(node.status);
     data["node"]["last_heartbeat_at"] = node.last_heartbeat_at;
 
     data["data_sources"] = Json::Value{Json::arrayValue};
@@ -195,11 +163,10 @@ void AgentControlHttpController::register_routes(drogon::HttpAppFramework& app) 
 void AgentControlHttpController::post_register(
     const drogon::HttpRequestPtr& request,
     ResponseCallback&& callback) const {
-    if (!http::require_json_content_type(request, callback)) {
-        return;
-    }
-
-    try {
+    http::handle_request(kComponent, "POST /api/v1/agents/register", [&] {
+        if (!http::require_json_content_type(request, callback)) {
+            return;
+        }
         const auto node = parse_registration(parse_json_body(request));
         const auto status = register_node_handler_(node);
         if (!status.ok) {
@@ -211,24 +178,16 @@ void AgentControlHttpController::post_register(
         data["node_code"] = node.node_code;
         data["status"] = "offline";
         callback(http::success_response(drogon::k201Created, std::move(data)));
-    } catch (const RequestValidationError& error) {
-        callback(http::error_response(
-            drogon::k400BadRequest, "invalid_argument", error.what()));
-    } catch (const std::exception& error) {
-        http::handle_unexpected_exception(kComponent, error, callback);
-    } catch (...) {
-        http::handle_unknown_exception(kComponent, callback);
-    }
+    }, callback);
 }
 
 void AgentControlHttpController::post_heartbeat(
     const drogon::HttpRequestPtr& request,
     ResponseCallback&& callback) const {
-    if (!http::require_json_content_type(request, callback)) {
-        return;
-    }
-
-    try {
+    http::handle_request(kComponent, "POST /api/v1/agents/heartbeat", [&] {
+        if (!http::require_json_content_type(request, callback)) {
+            return;
+        }
         const auto heartbeat = parse_heartbeat(parse_json_body(request));
         const auto status = heartbeat_handler_(heartbeat);
         if (!status.ok) {
@@ -241,20 +200,13 @@ void AgentControlHttpController::post_heartbeat(
         data["status"] = "online";
         data["reported_at"] = heartbeat.reported_at;
         callback(http::success_response(drogon::k200OK, std::move(data)));
-    } catch (const RequestValidationError& error) {
-        callback(http::error_response(
-            drogon::k400BadRequest, "invalid_argument", error.what()));
-    } catch (const std::exception& error) {
-        http::handle_unexpected_exception(kComponent, error, callback);
-    } catch (...) {
-        http::handle_unknown_exception(kComponent, callback);
-    }
+    }, callback);
 }
 
 void AgentControlHttpController::get_config(
     const std::string& node_code,
     ResponseCallback&& callback) const {
-    try {
+    http::handle_request(kComponent, "GET /api/v1/agents/{nodeCode}/config", [&] {
         const auto result = find_config_handler_(node_code);
         if (!result.status.ok) {
             callback(http::status_error_response(result.status));
@@ -265,11 +217,7 @@ void AgentControlHttpController::get_config(
         }
         callback(http::success_response(
             drogon::k200OK, config_json(result)));
-    } catch (const std::exception& error) {
-        http::handle_unexpected_exception(kComponent, error, callback);
-    } catch (...) {
-        http::handle_unknown_exception(kComponent, callback);
-    }
+    }, callback);
 }
 
 }  // namespace labbridge::server
