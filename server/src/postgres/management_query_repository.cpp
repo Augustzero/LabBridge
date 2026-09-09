@@ -27,8 +27,12 @@ void add_cursor(
 void add_limit(
     std::string& sql,
     SqlParams& params,
+    const std::string& qualified_id,
     const ManagementPageRequest& page) {
-    sql += " ORDER BY id DESC LIMIT " +
+    // 排序必须限定到 bigint 列：裸列名 id 会优先解析为 SELECT 输出别名
+    // （<表>.id::text），按字典序排序，与游标的数值比较不一致，
+    // id 跨位数边界时会出现首项错序和翻页丢项。
+    sql += " ORDER BY " + qualified_id + " DESC LIMIT " +
            bind(params, std::to_string(page.fetch_limit)) + "::integer";
 }
 
@@ -266,7 +270,7 @@ PostgresManagementQueryRepository::list_nodes(
                    : " AND NOT " + online;
     }
     add_cursor(sql, params, "n.id", page);
-    add_limit(sql, params, page);
+    add_limit(sql, params, "n.id", page);
 
     std::vector<NodeRecord> records;
     for (const auto& row : session_.query_all(sql, params)) {
@@ -355,7 +359,7 @@ PostgresManagementQueryRepository::list_data_sources_by_node(
                "::boolean";
     }
     add_cursor(sql, params, "ds.id", page);
-    add_limit(sql, params, page);
+    add_limit(sql, params, "ds.id", page);
 
     std::vector<DataSourceRecord> records;
     for (const auto& row : session_.query_all(sql, params)) {
@@ -381,7 +385,7 @@ PostgresManagementQueryRepository::list_qc_rules(
                "::boolean";
     }
     add_cursor(sql, params, "qr.id", page);
-    add_limit(sql, params, page);
+    add_limit(sql, params, "qr.id", page);
 
     std::vector<QcRuleRecord> records;
     for (const auto& row : session_.query_all(sql, params)) {
@@ -409,7 +413,7 @@ PostgresManagementQueryRepository::list_tasks_by_node(
     }
     add_cursor(sql, params, "t.id", page);
     sql += " GROUP BY t.id, n.node_code";
-    add_limit(sql, params, page);
+    add_limit(sql, params, "t.id", page);
 
     std::vector<TaskRecord> records;
     for (const auto& row : session_.query_all(sql, params)) {
@@ -454,7 +458,7 @@ PostgresManagementQueryRepository::list_task_runs_by_node(
                bind(params, storage::to_storage(*filter.status));
     }
     add_cursor(sql, params, "tr.id", page);
-    add_limit(sql, params, page);
+    add_limit(sql, params, "tr.id", page);
 
     std::vector<TaskRunRecord> records;
     for (const auto& row : session_.query_all(sql, params)) {
@@ -514,7 +518,7 @@ PostgresManagementQueryRepository::list_raw_files_by_run(
         "JOIN nodes n ON n.id = rf.node_id "
         "WHERE rf.task_run_id = $1::bigint";
     add_cursor(sql, params, "rf.id", page);
-    add_limit(sql, params, page);
+    add_limit(sql, params, "rf.id", page);
 
     std::vector<RawFileRecord> records;
     for (const auto& row : session_.query_all(sql, params)) {
@@ -540,7 +544,7 @@ PostgresManagementQueryRepository::list_parsed_records_by_run(
         " FROM parsed_records pr "
         "WHERE pr.task_run_id = $1::bigint";
     add_cursor(sql, params, "pr.id", page);
-    add_limit(sql, params, page);
+    add_limit(sql, params, "pr.id", page);
 
     std::vector<ParsedRecordRecord> records;
     for (const auto& row : session_.query_all(sql, params)) {
@@ -568,7 +572,7 @@ PostgresManagementQueryRepository::list_qc_results_by_run(
         sql += " AND qr.result = " + bind(params, *filter.result);
     }
     add_cursor(sql, params, "qr.id", page);
-    add_limit(sql, params, page);
+    add_limit(sql, params, "qr.id", page);
 
     std::vector<QcResultRecord> records;
     for (const auto& row : session_.query_all(sql, params)) {
@@ -602,7 +606,7 @@ PostgresManagementQueryRepository::list_alerts_by_node(
                bind(params, *filter.severity);
     }
     add_cursor(sql, params, "a.id", page);
-    add_limit(sql, params, page);
+    add_limit(sql, params, "a.id", page);
 
     std::vector<AlertRecord> records;
     for (const auto& row : session_.query_all(sql, params)) {

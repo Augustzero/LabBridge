@@ -257,6 +257,66 @@ TEST_F(ManagementQueryPostgresTest,
 }
 
 TEST_F(ManagementQueryPostgresTest,
+       KeysetTaskOrderingStaysNumericAcrossPowerOfTen) {
+    PostgresManagementQueryRepository repository{session()};
+    ManagementQueryService service{
+        repository,
+        std::chrono::system_clock::time_point{
+            std::chrono::seconds{1787097600}},
+        60,
+        3600};
+
+    // 显式指定跨 10^12 边界的任务 id，避免依赖测试库序列当前位置：
+    // 12 位的 999999999998/999999999999 与 13 位的 1000000000000。
+    // 若排序错误地按输出别名 id(text) 的字典序进行，"9..." 会排在
+    // "1..." 之前，且第二页的数值游标会丢掉最大 id 的任务。
+    const std::string boundary_node_code = node_code_ + "-boundary";
+    const std::string boundary_node_id = insert_id(
+        "INSERT INTO nodes "
+        "(node_code,name,status,agent_version,last_heartbeat_at) "
+        "VALUES ($1,'Phase 025-01 Boundary','online','0.1.0',"
+        "'2026-08-19T00:00:00Z') RETURNING id::text AS id",
+        {boundary_node_code});
+    const std::string boundary_source_id = insert_id(
+        "INSERT INTO data_sources "
+        "(node_id,source_type,name,config_json,enabled) "
+        "VALUES ($1::bigint,'local_directory','boundary-source',"
+        "jsonb_build_object('root_path','/tmp/phase02501/boundary',"
+        "'extension','.csv'),true) RETURNING id::text AS id",
+        {boundary_node_id});
+    for (const std::string task_id :
+         {"999999999998", "999999999999", "1000000000000"}) {
+        session().execute(
+            "INSERT INTO tasks "
+            "(id,node_id,data_source_id,name,task_type,schedule_expr,"
+            "parser_type,qc_profile,enabled) "
+            "VALUES ($1::bigint,$2::bigint,$3::bigint,$4,"
+            "'local_file_import','* * * * *','csv_observation',"
+            "'phase02501',true)",
+            {task_id,
+             boundary_node_id,
+             boundary_source_id,
+             "boundary-task-" + task_id});
+    }
+
+    const auto first = service.list_tasks(
+        {boundary_node_code, std::nullopt, {2, std::nullopt}});
+    ASSERT_TRUE(first.status.ok);
+    ASSERT_EQ(first.page.items.size(), 2U);
+    EXPECT_EQ(first.page.items[0].id, "1000000000000");
+    EXPECT_EQ(first.page.items[1].id, "999999999999");
+    ASSERT_TRUE(first.page.next_cursor.has_value());
+    EXPECT_EQ(*first.page.next_cursor, "999999999999");
+
+    const auto second = service.list_tasks(
+        {boundary_node_code, std::nullopt,
+         {2, first.page.next_cursor}});
+    ASSERT_TRUE(second.status.ok);
+    ASSERT_EQ(second.page.items.size(), 1U);
+    EXPECT_EQ(second.page.items.front().id, "999999999998");
+}
+
+TEST_F(ManagementQueryPostgresTest,
        ReturnsStaleSummaryAndPagedEvidenceWithoutWritingRun) {
     PostgresManagementQueryRepository repository{session()};
     ManagementQueryService service{

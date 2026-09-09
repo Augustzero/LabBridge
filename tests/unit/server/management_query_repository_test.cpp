@@ -43,7 +43,7 @@ TEST(PostgresManagementQueryRepositoryTest,
               std::string::npos);
     EXPECT_NE(statement.sql.find("n.id < $3::bigint"),
               std::string::npos);
-    EXPECT_NE(statement.sql.find("ORDER BY id DESC LIMIT $4::integer"),
+    EXPECT_NE(statement.sql.find("ORDER BY n.id DESC LIMIT $4::integer"),
               std::string::npos);
     EXPECT_EQ(
         statement.params,
