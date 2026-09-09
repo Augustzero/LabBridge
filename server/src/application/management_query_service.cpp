@@ -1,10 +1,10 @@
 #include "labbridge/server/application/management_query_service.h"
 
+#include "labbridge/server/application/id_validation.h"
+#include "labbridge/core/utc_time.h"
+
 #include <algorithm>
 #include <charconv>
-#include <ctime>
-#include <iomanip>
-#include <limits>
 #include <sstream>
 #include <utility>
 
@@ -13,20 +13,6 @@ namespace {
 
 using labbridge::core::Status;
 using labbridge::core::StatusCode;
-
-bool is_positive_id(const std::string& value) {
-    if (value.empty()) {
-        return false;
-    }
-    unsigned long long parsed = 0;
-    const auto result = std::from_chars(
-        value.data(), value.data() + value.size(), parsed);
-    return result.ec == std::errc{} &&
-           result.ptr == value.data() + value.size() &&
-           parsed > 0 &&
-           parsed <= static_cast<unsigned long long>(
-               std::numeric_limits<long long>::max());
-}
 
 Status validate_page(const PageInput& page) {
     if (page.limit < 1 || page.limit > 100) {
@@ -111,16 +97,6 @@ std::optional<std::chrono::system_clock::time_point> parse_utc_timestamp(
         *hour * 3600 + *minute * 60 + *second;
     return std::chrono::system_clock::time_point{
         std::chrono::seconds{seconds}};
-}
-
-std::string format_utc_timestamp(
-    std::chrono::system_clock::time_point time) {
-    const auto raw = std::chrono::system_clock::to_time_t(time);
-    std::tm utc{};
-    gmtime_r(&raw, &utc);
-    std::ostringstream output;
-    output << std::put_time(&utc, "%Y-%m-%dT%H:%M:%SZ");
-    return output.str();
 }
 
 labbridge::core::NodeStatus effective_status(
@@ -221,7 +197,7 @@ ManagementPageResult<ManagementNode> ManagementQueryService::list_nodes(
 
     NodeListFilter filter{
         status,
-        format_utc_timestamp(now_),
+        labbridge::core::format_utc_timestamp(now_),
         node_offline_after_seconds_,
     };
     auto records = repository_.list_nodes(

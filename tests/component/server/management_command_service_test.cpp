@@ -81,7 +81,7 @@ TEST_F(ManagementCommandServiceTest,
     EXPECT_EQ(configs_.find_task_qc_rule_ids(result.id),
               (std::vector<std::string>{timestamp_id, required_id}));
 
-    labbridge::server::ConfigService projection_service{nodes_, configs_};
+    labbridge::server::ConfigService projection_service{configs_};
     const auto projection =
         projection_service.find_executable_config("node-a");
     ASSERT_EQ(projection.tasks.size(), 1U);
@@ -139,7 +139,7 @@ TEST_F(ManagementCommandServiceTest,
     ASSERT_TRUE(task.status.ok) << task.status.message;
 
     ASSERT_TRUE(service_.set_task_enabled(task.id, false).status.ok);
-    labbridge::server::ConfigService projection_service{nodes_, configs_};
+    labbridge::server::ConfigService projection_service{configs_};
     EXPECT_TRUE(
         projection_service.find_executable_config("node-a").tasks.empty());
 

@@ -71,26 +71,4 @@ TEST(PostgresQcRepositoryTest, CreateResultMapsOutcome) {
                   "missing station_code"}));
 }
 
-TEST(PostgresQcRepositoryTest, FindResultsMapsRows) {
-    RecordingSqlSession session;
-    session.on_query_all = [](const std::string&, const auto&) {
-        return std::vector<SqlRow>{SqlRow{
-            {"id", "1301"},
-            {"parsed_record_id", "901"},
-            {"qc_rule_id", "1201"},
-            {"level", "warning"},
-            {"result", "warning"},
-            {"message", "near upper limit"},
-        }};
-    };
-    PostgresQcRepository repository{session};
-
-    const auto results = repository.find_results_by_parsed_record("901");
-
-    ASSERT_EQ(results.size(), 1U);
-    EXPECT_EQ(results.front().qc_rule_id, "1201");
-    EXPECT_EQ(results.front().level, "warning");
-    EXPECT_EQ(results.front().message, "near upper limit");
-}
-
 }  // namespace

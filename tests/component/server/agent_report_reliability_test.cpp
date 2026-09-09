@@ -1,4 +1,5 @@
 #include "support/server/in_memory_repositories.h"
+#include "support/server/test_config_seed.h"
 #include "labbridge/core/version.h"
 #include "labbridge/server/application/agent_report_service.h"
 #include "labbridge/server/application/alert_service.h"
@@ -66,14 +67,14 @@ TEST(AgentReportReliabilityTest, PreservesTransactionAndIdempotencyBehavior) {
     labbridge::server::InMemoryAgentReportReceiptRepository receipt_repository;
 
     labbridge::server::NodeService node_service{node_repository};
-    labbridge::server::ConfigService config_service{node_repository, config_repository};
+    labbridge::server::ConfigService config_service{config_repository};
     labbridge::server::TaskRunService task_run_service{
         config_repository,
         task_run_repository};
     labbridge::server::ResultService result_service{
         task_run_repository,
         result_repository};
-    labbridge::server::QcService qc_service{result_repository, qc_repository};
+    labbridge::server::QcService qc_service{qc_repository};
     labbridge::server::AlertService alert_service{
         task_run_repository,
         result_repository,
@@ -91,31 +92,17 @@ TEST(AgentReportReliabilityTest, PreservesTransactionAndIdempotencyBehavior) {
                {node_code, "phase18-report-node", labbridge::core::kVersion})
                .ok);
 
-    const auto data_source = config_service.create_data_source({
-        node_code,
-        labbridge::core::SourceType::LocalDirectory,
-        "phase18 local csv dir",
-        "{}",
-        true,
-    });
-    ASSERT_TRUE(data_source.status.ok);
-
-    const auto task = config_service.create_task({
-        node_code,
-        data_source.id,
-        "phase18 reliable report",
-        "collect_parse_qc",
-        "* * * * *",
-        "csv_observation",
-        "basic",
-        true,
-    });
-    ASSERT_TRUE(task.status.ok);
+    const auto data_source_id =
+        labbridge::server::test_support::create_local_csv_data_source(
+            config_repository, node_code, "phase18 local csv dir");
+    const auto task_id = labbridge::server::test_support::create_csv_task(
+        config_repository, node_code, data_source_id,
+        "phase18 reliable report");
 
     const auto started = task_run_service.start({
         node_code,
-        task.id,
-        "2026-07-17 10:01:00+08",
+        task_id,
+        "2026-07-17T02:01:00Z",
         "agent_report",
     });
     ASSERT_TRUE(started.status.ok);
@@ -129,7 +116,7 @@ TEST(AgentReportReliabilityTest, PreservesTransactionAndIdempotencyBehavior) {
         "phase18-hash",
         "/archive/phase18/phase18_observation.csv",
         512,
-        "2026-07-17 10:00:00+08",
+        "2026-07-17T02:00:00Z",
         {},
     });
 
@@ -149,7 +136,9 @@ TEST(AgentReportReliabilityTest, PreservesTransactionAndIdempotencyBehavior) {
     ASSERT_TRUE(manifest_replay.status.ok);
     ASSERT_TRUE(manifest_replay.replayed);
     ASSERT_TRUE(manifest_replay.raw_file_ids == manifest.raw_file_ids);
-    ASSERT_TRUE(result_service.find_raw_files(started.id).size() == 1);
+    ASSERT_TRUE(result_repository
+                    .find_raw_file(manifest.raw_file_ids.front())
+                    .has_value());
 
     auto manifest_conflict = manifest_request;
     manifest_conflict.files.front().storage_path = "/archive/phase18/other.csv";
@@ -171,7 +160,7 @@ TEST(AgentReportReliabilityTest, PreservesTransactionAndIdempotencyBehavior) {
     report_request.node_code = node_code;
     report_request.idempotency_key = "phase18-report";
     report_request.status = labbridge::core::TaskRunStatus::Failed;
-    report_request.finished_at = "2026-07-17 10:03:00+08";
+    report_request.finished_at = "2026-07-17T02:03:00Z";
     report_request.items_total = 1;
     report_request.items_failed = 1;
     report_request.error_summary = "qc failed";
@@ -180,7 +169,7 @@ TEST(AgentReportReliabilityTest, PreservesTransactionAndIdempotencyBehavior) {
         {
             "station-a",
             "device-a",
-            "2026-07-17 10:00:00+08",
+            "2026-07-17T02:00:00Z",
             "{\"temperature\":48.5}",
         },
         {},
@@ -210,7 +199,9 @@ TEST(AgentReportReliabilityTest, PreservesTransactionAndIdempotencyBehavior) {
     ASSERT_TRUE(report_replay.parsed_record_ids == report.parsed_record_ids);
     ASSERT_TRUE(report_replay.qc_result_ids == report.qc_result_ids);
     ASSERT_TRUE(report_replay.alert_ids == report.alert_ids);
-    ASSERT_TRUE(result_service.find_parsed_records(started.id).size() == 1);
+    ASSERT_TRUE(result_repository
+                    .find_parsed_record(report.parsed_record_ids.front())
+                    .has_value());
 
     auto report_conflict = report_request;
     report_conflict.error_summary = "different request";

@@ -47,24 +47,6 @@ std::string PostgresAlertRepository::create(AlertRecord alert) {
     return storage::value_or_empty(*row, "id");
 }
 
-std::optional<AlertRecord> PostgresAlertRepository::find_by_id(
-    const std::string& alert_id) const {
-    static const std::string sql =
-        "SELECT a.id::text AS id, COALESCE(n.node_code, '') AS node_code, "
-        "COALESCE(a.task_run_id::text, '') AS task_run_id, a.alert_type, a.severity, "
-        "a.message, a.status "
-        "FROM alerts a "
-        "LEFT JOIN nodes n ON n.id = a.node_id "
-        "WHERE a.id = $1::bigint "
-        "LIMIT 1";
-
-    const auto row = session_.query_one(sql, {alert_id});
-    if (!row.has_value()) {
-        return std::nullopt;
-    }
-    return to_alert_record(*row);
-}
-
 std::vector<AlertRecord> PostgresAlertRepository::find_by_node(
     const std::string& node_code) const {
     static const std::string sql =

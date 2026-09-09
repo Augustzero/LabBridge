@@ -75,13 +75,9 @@ public:
     std::string create_raw_file(RawFileRecord raw_file) override;
     std::optional<RawFileRecord> find_raw_file(
         const std::string& raw_file_id) const override;
-    std::vector<RawFileRecord> find_raw_files_by_run(
-        const std::string& task_run_id) const override;
     std::string create_parsed_record(ParsedRecordRecord parsed_record) override;
     std::optional<ParsedRecordRecord> find_parsed_record(
         const std::string& parsed_record_id) const override;
-    std::vector<ParsedRecordRecord> find_parsed_records_by_run(
-        const std::string& task_run_id) const override;
 
 private:
     int next_raw_file_id_{1};
@@ -98,8 +94,6 @@ public:
     std::string create_result(QcResultRecord result) override;
     std::optional<QcResultRecord> find_result(
         const std::string& qc_result_id) const override;
-    std::vector<QcResultRecord> find_results_by_parsed_record(
-        const std::string& parsed_record_id) const override;
 
 private:
     int next_qc_rule_id_{1};
@@ -111,8 +105,6 @@ private:
 class InMemoryAlertRepository final : public IAlertRepository {
 public:
     std::string create(AlertRecord alert) override;
-    std::optional<AlertRecord> find_by_id(
-        const std::string& alert_id) const override;
     std::vector<AlertRecord> find_by_node(
         const std::string& node_code) const override;
     std::vector<AlertRecord> find_by_task_run(

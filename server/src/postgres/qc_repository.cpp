@@ -54,10 +54,9 @@ std::string PostgresQcRepository::create_rule(QcRuleRecord rule) {
 std::optional<QcRuleRecord> PostgresQcRepository::find_rule(const std::string& qc_rule_id) const {
     static const std::string sql =
         "SELECT id::text AS id, name, rule_type, rule_config_json::text AS rule_config_json, "
-        "CASE WHEN enabled THEN 'true' ELSE 'false' END AS enabled, "
-        "to_char(created_at AT TIME ZONE 'UTC', "
-        "'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS created_at "
-        "FROM qc_rules "
+        "CASE WHEN enabled THEN 'true' ELSE 'false' END AS enabled, " +
+        storage::utc_column("created_at", "created_at") +
+        " FROM qc_rules "
         "WHERE id = $1::bigint "
         "LIMIT 1";
 
@@ -102,22 +101,6 @@ std::optional<QcResultRecord> PostgresQcRepository::find_result(
         return std::nullopt;
     }
     return to_result_record(*row);
-}
-
-std::vector<QcResultRecord> PostgresQcRepository::find_results_by_parsed_record(
-    const std::string& parsed_record_id) const {
-    static const std::string sql =
-        "SELECT id::text AS id, parsed_record_id::text AS parsed_record_id, "
-        "qc_rule_id::text AS qc_rule_id, level, result, COALESCE(message, '') AS message "
-        "FROM qc_results "
-        "WHERE parsed_record_id = $1::bigint "
-        "ORDER BY id";
-
-    std::vector<QcResultRecord> results;
-    for (const auto& row : session_.query_all(sql, {parsed_record_id})) {
-        results.push_back(to_result_record(row));
-    }
-    return results;
 }
 
 }  // namespace labbridge::server

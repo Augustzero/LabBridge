@@ -7,6 +7,7 @@
 #include "labbridge/server/postgres/task_run_repository.h"
 #include "labbridge/server/postgres/storage_mapping.h"
 #include "labbridge/server/application/task_run_service.h"
+#include "support/server/test_config_seed.h"
 
 #include <cassert>
 #include <cstdlib>
@@ -25,7 +26,7 @@ int main() {
     labbridge::server::PostgresConfigRepository config_repository{session};
     labbridge::server::PostgresTaskRunRepository task_run_repository{session};
     labbridge::server::NodeService node_service{node_repository};
-    labbridge::server::ConfigService config_service{node_repository, config_repository};
+    labbridge::server::ConfigService config_service{config_repository};
     labbridge::server::TaskRunService task_run_service{config_repository, task_run_repository};
 
     const std::string node_code = "lab-node-real-flow-007";
@@ -40,47 +41,35 @@ int main() {
     const auto heartbeat_status = node_service.accept_heartbeat({
         node_code,
         labbridge::core::kVersion,
-        "2026-05-25 10:00:00+08",
+        "2026-05-25T02:00:00Z",
     });
     assert(heartbeat_status.ok);
 
-    const auto data_source = config_service.create_data_source({
-        node_code,
-        labbridge::core::SourceType::LocalDirectory,
-        "phase7 local csv dir",
-        R"({"path":"tests/fixtures/agent","pattern":"*.csv"})",
-        true,
-    });
-    assert(data_source.status.ok);
-    assert(!data_source.id.empty());
+    const auto data_source =
+        labbridge::server::test_support::create_local_csv_data_source(
+            config_repository, node_code, "phase7 local csv dir",
+            R"({"path":"tests/fixtures/agent","pattern":"*.csv"})");
+    assert(!data_source.empty());
 
-    const auto stored_data_source = config_repository.find_data_source(data_source.id);
+    const auto stored_data_source = config_repository.find_data_source(data_source);
     assert(stored_data_source.has_value());
     assert(stored_data_source->node_code == node_code);
     assert(stored_data_source->name == "phase7 local csv dir");
 
-    const auto task = config_service.create_task({
-        node_code,
-        data_source.id,
-        "phase7 collect local csv",
-        "collect_parse_qc",
-        "* * * * *",
-        "csv_observation",
-        "basic",
-        true,
-    });
-    assert(task.status.ok);
-    assert(!task.id.empty());
+    const auto task = labbridge::server::test_support::create_csv_task(
+        config_repository, node_code, data_source,
+        "phase7 collect local csv");
+    assert(!task.empty());
 
-    const auto stored_task = config_repository.find_task(task.id);
+    const auto stored_task = config_repository.find_task(task);
     assert(stored_task.has_value());
     assert(stored_task->node_code == node_code);
-    assert(stored_task->data_source_id == data_source.id);
+    assert(stored_task->data_source_id == data_source);
 
     const auto enabled_tasks = config_service.find_enabled_tasks(node_code);
     bool found_task = false;
     for (const auto& enabled_task : enabled_tasks) {
-        if (enabled_task.id == task.id) {
+        if (enabled_task.id == task) {
             found_task = true;
             break;
         }
@@ -89,8 +78,8 @@ int main() {
 
     const auto started = task_run_service.start({
         node_code,
-        task.id,
-        "2026-05-25 10:01:00+08",
+        task,
+        "2026-05-25T02:01:00Z",
         "manual",
     });
     assert(started.status.ok);
@@ -103,7 +92,7 @@ int main() {
     const auto finish_status = task_run_service.finish({
         started.id,
         labbridge::core::TaskRunStatus::Succeeded,
-        "2026-05-25 10:02:00+08",
+        "2026-05-25T02:02:00Z",
         2,
         2,
         0,
@@ -127,13 +116,13 @@ int main() {
         "JOIN nodes n ON n.id = tr.node_id "
         "WHERE n.node_code = $1 AND ds.id = $2::bigint AND t.id = $3::bigint AND tr.id = $4::bigint "
         "LIMIT 1",
-        {node_code, data_source.id, task.id, started.id});
+        {node_code, data_source, task, started.id});
 
     assert(persisted.has_value());
     assert(labbridge::server::storage::value_or_empty(*persisted, "node_code") == node_code);
     assert(labbridge::server::storage::value_or_empty(*persisted, "data_source_id") ==
-           data_source.id);
-    assert(labbridge::server::storage::value_or_empty(*persisted, "task_id") == task.id);
+           data_source);
+    assert(labbridge::server::storage::value_or_empty(*persisted, "task_id") == task);
     assert(labbridge::server::storage::value_or_empty(*persisted, "task_run_id") == started.id);
     assert(labbridge::server::storage::value_or_empty(*persisted, "status") == "succeeded");
 

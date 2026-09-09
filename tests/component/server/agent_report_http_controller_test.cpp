@@ -1,11 +1,10 @@
 #include "support/server/in_memory_repositories.h"
+#include "support/server/test_config_seed.h"
 #include "labbridge/core/version.h"
 #include "labbridge/server/http/agent_report_http_controller.h"
 #include "labbridge/server/application/alert_service.h"
-#include "labbridge/server/application/config_service.h"
 #include "labbridge/server/application/node_service.h"
 #include "labbridge/server/application/qc_service.h"
-#include "labbridge/server/application/query_service.h"
 #include "labbridge/server/application/result_service.h"
 #include "labbridge/server/application/task_run_service.h"
 
@@ -164,14 +163,13 @@ TEST(AgentReportHttpControllerTest, MapsManifestReportReplayAndErrors) {
     labbridge::server::InMemoryAgentReportReceiptRepository receipt_repository;
 
     labbridge::server::NodeService node_service{node_repository};
-    labbridge::server::ConfigService config_service{node_repository, config_repository};
     labbridge::server::TaskRunService task_run_service{
         config_repository,
         task_run_repository};
     labbridge::server::ResultService result_service{
         task_run_repository,
         result_repository};
-    labbridge::server::QcService qc_service{result_repository, qc_repository};
+    labbridge::server::QcService qc_service{qc_repository};
     labbridge::server::AlertService alert_service{
         task_run_repository,
         result_repository,
@@ -183,13 +181,6 @@ TEST(AgentReportHttpControllerTest, MapsManifestReportReplayAndErrors) {
         qc_service,
         alert_service,
         receipt_repository};
-    labbridge::server::ControlPlaneQueryService query_service{
-        node_repository,
-        config_repository,
-        task_run_repository,
-        result_repository,
-        qc_repository,
-        alert_repository};
 
     labbridge::server::AgentReportHttpController controller{
         [&agent_report_service](
@@ -234,31 +225,20 @@ TEST(AgentReportHttpControllerTest, MapsManifestReportReplayAndErrors) {
                {other_node_code, "phase17-http-other-node", labbridge::core::kVersion})
                .ok);
 
-    const auto data_source = config_service.create_data_source({
-        node_code,
-        labbridge::core::SourceType::LocalDirectory,
-        "phase17 local csv dir",
-        "{}",
-        true,
-    });
-    EXPECT_TRUE(data_source.status.ok);
+    const auto data_source =
+        labbridge::server::test_support::create_local_csv_data_source(
+            config_repository, node_code, "phase17 local csv dir");
+    EXPECT_FALSE(data_source.empty());
 
-    const auto task = config_service.create_task({
-        node_code,
-        data_source.id,
-        "phase17 HTTP reported csv",
-        "collect_parse_qc",
-        "* * * * *",
-        "csv_observation",
-        "basic",
-        true,
-    });
-    EXPECT_TRUE(task.status.ok);
+    const auto task = labbridge::server::test_support::create_csv_task(
+        config_repository, node_code, data_source,
+        "phase17 HTTP reported csv");
+    EXPECT_FALSE(task.empty());
 
     const auto started = task_run_service.start({
         node_code,
-        task.id,
-        "2026-07-16 10:01:00+08",
+        task,
+        "2026-07-16T02:01:00Z",
         "http_report",
     });
     EXPECT_TRUE(started.status.ok);
@@ -336,16 +316,25 @@ TEST(AgentReportHttpControllerTest, MapsManifestReportReplayAndErrors) {
     EXPECT_TRUE(report_replay_json["data"]["parsed_record_ids"] ==
            report_json["data"]["parsed_record_ids"]);
 
-    const auto detail = query_service.find_task_run_detail(node_code, started.id);
-    EXPECT_TRUE(detail.status.ok);
-    EXPECT_TRUE(detail.task_run.has_value());
-    EXPECT_TRUE(detail.task_run->status == labbridge::core::TaskRunStatus::Failed);
-    EXPECT_TRUE(detail.raw_files.size() == 1);
-    EXPECT_TRUE(detail.parsed_records.size() == 1);
-    EXPECT_TRUE(detail.qc_results.size() == 2);
-    EXPECT_TRUE(detail.alerts.size() == 1);
-    EXPECT_TRUE(detail.raw_files.front().id == raw_file_id);
-    EXPECT_TRUE(detail.parsed_records.front().raw_file_id == raw_file_id);
+    // repository 逐对象回验，替代已删除的查询聚合服务。
+    const auto finished = task_run_service.find_run(started.id);
+    ASSERT_TRUE(finished.has_value());
+    EXPECT_TRUE(finished->status == labbridge::core::TaskRunStatus::Failed);
+    const auto stored_raw_file = result_repository.find_raw_file(raw_file_id);
+    ASSERT_TRUE(stored_raw_file.has_value());
+    EXPECT_TRUE(stored_raw_file->id == raw_file_id);
+    const auto parsed_record_id =
+        report_json["data"]["parsed_record_ids"][Json::ArrayIndex{0}].asString();
+    const auto stored_record =
+        result_repository.find_parsed_record(parsed_record_id);
+    ASSERT_TRUE(stored_record.has_value());
+    EXPECT_TRUE(stored_record->raw_file_id == raw_file_id);
+    for (const auto& qc_result_id :
+         report_json["data"]["qc_result_ids"]) {
+        EXPECT_TRUE(
+            qc_repository.find_result(qc_result_id.asString()).has_value());
+    }
+    EXPECT_TRUE(alert_repository.find_by_task_run(started.id).size() == 1);
 
     labbridge::server::AgentReportHttpController throwing_controller{
         [](const labbridge::server::RawFileManifestRequest&)

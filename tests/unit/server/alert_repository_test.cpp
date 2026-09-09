@@ -42,22 +42,6 @@ TEST(PostgresAlertRepositoryTest, CreateDefaultsEmptyStatusToOpen) {
     EXPECT_EQ(statement.params[5], "open");
 }
 
-TEST(PostgresAlertRepositoryTest, FindByIdMapsAlert) {
-    RecordingSqlSession session;
-    session.on_query_one = [](const std::string&, const auto&) {
-        return std::optional<SqlRow>{alert_row()};
-    };
-    PostgresAlertRepository repository{session};
-
-    const auto alert = repository.find_by_id("1401");
-
-    ASSERT_TRUE(alert.has_value());
-    EXPECT_EQ(alert->node_code, "unit-node");
-    EXPECT_EQ(alert->task_run_id, "501");
-    EXPECT_EQ(alert->severity, "warning");
-    EXPECT_EQ(alert->status, "open");
-}
-
 TEST(PostgresAlertRepositoryTest, FindByNodeMapsRows) {
     RecordingSqlSession session;
     session.on_query_all = [](const std::string&, const auto&) {

@@ -16,7 +16,7 @@ public:
           node_repository_(session_),
           config_repository_(session_),
           node_service_(node_repository_),
-          config_service_(node_repository_, config_repository_),
+          config_service_(config_repository_),
           agent_control_service_(node_service_, config_service_) {}
 
     AgentControlService& agent_control_service() {

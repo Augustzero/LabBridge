@@ -17,15 +17,6 @@ std::string InMemoryAlertRepository::create(AlertRecord alert) {
     return id;
 }
 
-std::optional<AlertRecord> InMemoryAlertRepository::find_by_id(
-    const std::string& alert_id) const {
-    const auto iter = alerts_.find(alert_id);
-    if (iter == alerts_.end()) {
-        return std::nullopt;
-    }
-    return iter->second;
-}
-
 std::vector<AlertRecord> InMemoryAlertRepository::find_by_node(
     const std::string& node_code) const {
     std::vector<AlertRecord> alerts;

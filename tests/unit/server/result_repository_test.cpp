@@ -85,29 +85,4 @@ TEST(PostgresResultRepositoryTest, CreateParsedRecordMapsObservationFields) {
     EXPECT_EQ(statement.params[5], R"({"temperature":21.5})");
 }
 
-TEST(PostgresResultRepositoryTest, FindParsedRecordsMapsRows) {
-    RecordingSqlSession session;
-    session.on_query_all = [](const std::string&, const auto&) {
-        return std::vector<SqlRow>{SqlRow{
-            {"id", "901"},
-            {"raw_file_id", "801"},
-            {"task_run_id", "501"},
-            {"station_code", "station-a"},
-            {"device_code", "device-a"},
-            {"record_time", "2026-08-11 10:00:00"},
-            {"payload_json", R"({"temperature":21.5})"},
-            {"parse_status", "parsed"},
-        }};
-    };
-    PostgresResultRepository repository{session};
-
-    const auto records = repository.find_parsed_records_by_run("501");
-
-    ASSERT_EQ(records.size(), 1U);
-    EXPECT_EQ(records.front().raw_file_id, "801");
-    EXPECT_EQ(records.front().record.station_code, "station-a");
-    EXPECT_EQ(records.front().record.payload_json,
-              R"({"temperature":21.5})");
-}
-
 }  // namespace

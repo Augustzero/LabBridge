@@ -41,15 +41,4 @@ std::optional<QcResultRecord> InMemoryQcRepository::find_result(
     return iter->second;
 }
 
-std::vector<QcResultRecord> InMemoryQcRepository::find_results_by_parsed_record(
-    const std::string& parsed_record_id) const {
-    std::vector<QcResultRecord> results;
-    for (const auto& [id, result] : results_) {
-        if (result.parsed_record_id == parsed_record_id) {
-            results.push_back(result);
-        }
-    }
-    return results;
-}
-
 }  // namespace labbridge::server

@@ -30,7 +30,7 @@ public:
           receipt_repository_(session_),
           task_run_service_(config_repository_, task_run_repository_),
           result_service_(task_run_repository_, result_repository_),
-          qc_service_(result_repository_, qc_repository_),
+          qc_service_(qc_repository_),
           alert_service_(
               task_run_repository_, result_repository_, qc_repository_, alert_repository_),
           agent_report_service_(

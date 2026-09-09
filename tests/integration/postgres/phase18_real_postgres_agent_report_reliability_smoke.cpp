@@ -1,5 +1,4 @@
 #include "labbridge/core/version.h"
-#include "labbridge/server/application/config_service.h"
 #include "labbridge/server/postgres/libpq_sql_session.h"
 #include "labbridge/server/application/node_service.h"
 #include "labbridge/server/postgres/agent_report_executor.h"
@@ -9,9 +8,9 @@
 #include "labbridge/server/postgres/result_repository.h"
 #include "labbridge/server/postgres/task_run_repository.h"
 #include "labbridge/server/application/qc_service.h"
-#include "labbridge/server/application/result_service.h"
 #include "labbridge/server/postgres/storage_mapping.h"
 #include "labbridge/server/application/task_run_service.h"
+#include "support/server/test_config_seed.h"
 
 #include <cassert>
 #include <cstdlib>
@@ -103,42 +102,25 @@ int main() {
     labbridge::server::PostgresQcRepository qc_repository{session};
 
     labbridge::server::NodeService node_service{node_repository};
-    labbridge::server::ConfigService config_service{
-        node_repository,
-        config_repository};
     labbridge::server::TaskRunService task_run_service{
         config_repository,
         task_run_repository};
-    labbridge::server::ResultService result_service{
-        task_run_repository,
-        result_repository};
-    labbridge::server::QcService qc_service{result_repository, qc_repository};
+    labbridge::server::QcService qc_service{qc_repository};
 
     const std::string node_code = "lab-node-real-report-018";
     assert(node_service.register_node(
                {node_code, "phase18-real-report-node", labbridge::core::kVersion})
                .ok);
 
-    const auto data_source = config_service.create_data_source({
-        node_code,
-        labbridge::core::SourceType::LocalDirectory,
-        "phase18 real local csv dir",
-        "{}",
-        true,
-    });
-    assert(data_source.status.ok);
+    const auto data_source =
+        labbridge::server::test_support::create_local_csv_data_source(
+            config_repository, node_code, "phase18 real local csv dir");
+    assert(!data_source.empty());
 
-    const auto task = config_service.create_task({
-        node_code,
-        data_source.id,
-        "phase18 reliable real report",
-        "collect_parse_qc",
-        "* * * * *",
-        "csv_observation",
-        "basic",
-        true,
-    });
-    assert(task.status.ok);
+    const auto task = labbridge::server::test_support::create_csv_task(
+        config_repository, node_code, data_source,
+        "phase18 reliable real report");
+    assert(!task.empty());
 
     const auto rule = qc_service.create_rule({
         "phase18 real temperature range",
@@ -152,7 +134,7 @@ int main() {
 
     const auto rollback_run = task_run_service.start({
         node_code,
-        task.id,
+        task,
         "2026-07-17 11:01:00+08",
         "phase18_rollback",
     });
@@ -252,7 +234,7 @@ int main() {
 
     const auto concurrent_manifest_run = task_run_service.start({
         node_code,
-        task.id,
+        task,
         "2026-07-17 11:10:00+08",
         "phase18_concurrent_manifest",
     });
@@ -285,7 +267,7 @@ int main() {
 
     const auto concurrent_report_run = task_run_service.start({
         node_code,
-        task.id,
+        task,
         "2026-07-17 11:20:00+08",
         "phase18_concurrent_report",
     });

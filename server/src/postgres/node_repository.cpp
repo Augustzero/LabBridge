@@ -31,9 +31,9 @@ void PostgresNodeRepository::upsert(NodeRecord node) {
 
 std::optional<NodeRecord> PostgresNodeRepository::find_by_code(const std::string& node_code) const {
     static const std::string sql =
-        "SELECT node_code, name, status, agent_version, "
-        "COALESCE(to_char(last_heartbeat_at, 'YYYY-MM-DD HH24:MI:SS'), '') AS last_heartbeat_at "
-        "FROM nodes WHERE node_code = $1 LIMIT 1";
+        "SELECT node_code, name, status, agent_version, " +
+        storage::utc_column("last_heartbeat_at", "last_heartbeat_at") +
+        " FROM nodes WHERE node_code = $1 LIMIT 1";
 
     const auto row = session_.query_one(sql, {node_code});
     if (!row.has_value()) {

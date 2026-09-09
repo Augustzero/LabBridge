@@ -1,4 +1,5 @@
 #include "support/server/in_memory_repositories.h"
+#include "support/server/test_config_seed.h"
 #include "labbridge/core/version.h"
 #include "labbridge/server/http/agent_control_http_controller.h"
 #include "labbridge/server/application/agent_control_service.h"
@@ -128,9 +129,7 @@ TEST(AgentControlHttpControllerTest, MapsRegistrationHeartbeatConfigAndErrors) {
     labbridge::server::InMemoryNodeRepository node_repository;
     labbridge::server::InMemoryConfigRepository config_repository;
     labbridge::server::NodeService node_service{node_repository};
-    labbridge::server::ConfigService config_service{
-        node_repository,
-        config_repository};
+    labbridge::server::ConfigService config_service{config_repository};
     labbridge::server::AgentControlService agent_control_service{
         node_service,
         config_service};
@@ -204,38 +203,23 @@ TEST(AgentControlHttpControllerTest, MapsRegistrationHeartbeatConfigAndErrors) {
     EXPECT_TRUE(response_json(heartbeat_response)["data"]["status"].asString() ==
            "online");
 
-    const auto data_source = config_service.create_data_source({
-        node_code,
-        labbridge::core::SourceType::LocalDirectory,
-        "phase19 local directory",
-        R"({"path":"tests/fixtures/agent","pattern":"*.csv"})",
-        true,
-    });
-    EXPECT_TRUE(data_source.status.ok);
+    const auto data_source =
+        labbridge::server::test_support::create_local_csv_data_source(
+            config_repository, node_code, "phase19 local directory",
+            R"({"path":"tests/fixtures/agent","pattern":"*.csv"})");
+    EXPECT_FALSE(data_source.empty());
 
-    const auto enabled_task = config_service.create_task({
-        node_code,
-        data_source.id,
-        "phase19 enabled task",
-        "collect_parse_qc",
-        "*/5 * * * *",
-        "csv_observation",
-        "basic",
-        true,
-    });
-    EXPECT_TRUE(enabled_task.status.ok);
+    const auto enabled_task =
+        labbridge::server::test_support::create_csv_task(
+            config_repository, node_code, data_source,
+            "phase19 enabled task");
+    EXPECT_FALSE(enabled_task.empty());
 
-    const auto disabled_task = config_service.create_task({
-        node_code,
-        data_source.id,
-        "phase19 disabled task",
-        "collect_parse_qc",
-        "* * * * *",
-        "csv_observation",
-        "basic",
-        false,
-    });
-    EXPECT_TRUE(disabled_task.status.ok);
+    const auto disabled_task =
+        labbridge::server::test_support::create_csv_task(
+            config_repository, node_code, data_source,
+            "phase19 disabled task", false);
+    EXPECT_FALSE(disabled_task.empty());
 
     assert_error(
         invoke_config(controller, ""),
@@ -257,9 +241,9 @@ TEST(AgentControlHttpControllerTest, MapsRegistrationHeartbeatConfigAndErrors) {
     EXPECT_TRUE(config["tasks"].isArray());
     EXPECT_TRUE(config["tasks"].size() == 1);
     EXPECT_TRUE(config["tasks"][Json::ArrayIndex{0}]["id"].asString() ==
-           enabled_task.id);
+           enabled_task);
     EXPECT_TRUE(config["tasks"][Json::ArrayIndex{0}]["data_source_id"].asString() ==
-           data_source.id);
+           data_source);
     EXPECT_TRUE(config["tasks"][Json::ArrayIndex{0}]["enabled"].asBool());
 
     labbridge::server::AgentControlHttpController throwing_controller{

@@ -22,7 +22,6 @@ public:
     virtual ~IAlertRepository() = default;
 
     virtual std::string create(AlertRecord alert) = 0;
-    virtual std::optional<AlertRecord> find_by_id(const std::string& alert_id) const = 0;
     virtual std::vector<AlertRecord> find_by_node(const std::string& node_code) const = 0;
     virtual std::vector<AlertRecord> find_by_task_run(const std::string& task_run_id) const = 0;
 };

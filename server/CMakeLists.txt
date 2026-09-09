@@ -7,7 +7,6 @@ add_library(labbridge_server_domain
     src/application/management_command_service.cpp
     src/application/node_service.cpp
     src/application/qc_service.cpp
-    src/application/query_service.cpp
     src/application/result_service.cpp
     src/application/task_run_service.cpp
 )

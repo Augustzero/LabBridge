@@ -32,14 +32,6 @@ void add_limit(
            bind(params, std::to_string(page.fetch_limit)) + "::integer";
 }
 
-std::string utc_column(
-    const std::string& expression,
-    const std::string& alias) {
-    return "COALESCE(to_char(" + expression +
-           " AT TIME ZONE 'UTC', "
-           "'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'), '') AS " + alias;
-}
-
 NodeRecord to_node(const SqlRow& row) {
     NodeRecord node;
     node.id = storage::value_or_empty(row, "id");
@@ -219,8 +211,8 @@ std::string task_columns() {
         "t.name, t.task_type, t.schedule_expr, t.parser_type, "
         "COALESCE(t.qc_profile, '') AS qc_profile, "
         "CASE WHEN t.enabled THEN 'true' ELSE 'false' END AS enabled, " +
-        utc_column("t.created_at", "created_at") + ", " +
-        utc_column("t.updated_at", "updated_at") + ", "
+        storage::utc_column("t.created_at", "created_at") + ", " +
+        storage::utc_column("t.updated_at", "updated_at") + ", "
         "COALESCE(string_agg(tqr.qc_rule_id::text, ',' "
         "ORDER BY tqr.sort_order, tqr.qc_rule_id), '') AS qc_rule_ids ";
 }
@@ -229,15 +221,15 @@ std::string task_run_columns() {
     return
         "tr.id::text AS id, tr.task_id::text AS task_id, "
         "n.node_code, tr.status, " +
-        utc_column("tr.started_at", "started_at") + ", " +
-        utc_column("tr.finished_at", "finished_at") + ", "
+        storage::utc_column("tr.started_at", "started_at") + ", " +
+        storage::utc_column("tr.finished_at", "finished_at") + ", "
         "tr.items_total::text AS items_total, "
         "tr.items_success::text AS items_success, "
         "tr.items_failed::text AS items_failed, "
         "COALESCE(tr.error_summary, '') AS error_summary, "
         "tr.trigger_type, "
         "COALESCE(tr.execution_key, '') AS execution_key, " +
-        utc_column("tr.scheduled_for", "scheduled_for") + " ";
+        storage::utc_column("tr.scheduled_for", "scheduled_for") + " ";
 }
 
 }  // namespace
@@ -254,9 +246,9 @@ PostgresManagementQueryRepository::list_nodes(
     std::string sql =
         "SELECT n.id::text AS id, n.node_code, n.name, n.status, "
         "COALESCE(n.agent_version, '') AS agent_version, " +
-        utc_column("n.last_heartbeat_at", "last_heartbeat_at") + ", " +
-        utc_column("n.created_at", "created_at") + ", " +
-        utc_column("n.updated_at", "updated_at") +
+        storage::utc_column("n.last_heartbeat_at", "last_heartbeat_at") + ", " +
+        storage::utc_column("n.created_at", "created_at") + ", " +
+        storage::utc_column("n.updated_at", "updated_at") +
         " FROM nodes n WHERE true";
 
     if (filter.effective_status.has_value()) {
@@ -289,9 +281,9 @@ PostgresManagementQueryRepository::find_node_summary(
     const std::string sql =
         "SELECT n.id::text AS id, n.node_code, n.name, n.status, "
         "COALESCE(n.agent_version, '') AS agent_version, " +
-        utc_column("n.last_heartbeat_at", "last_heartbeat_at") + ", " +
-        utc_column("n.created_at", "created_at") + ", " +
-        utc_column("n.updated_at", "updated_at") + ", "
+        storage::utc_column("n.last_heartbeat_at", "last_heartbeat_at") + ", " +
+        storage::utc_column("n.created_at", "created_at") + ", " +
+        storage::utc_column("n.updated_at", "updated_at") + ", "
         "(SELECT count(*) FROM tasks t "
         " WHERE t.node_id = n.id AND t.enabled)::text "
         "AS enabled_task_count, "
@@ -304,7 +296,7 @@ PostgresManagementQueryRepository::find_node_summary(
         "COALESCE(latest.id::text, '') AS latest_run_id, "
         "COALESCE(latest.task_id::text, '') AS latest_task_id, "
         "COALESCE(latest.status, '') AS latest_status, " +
-        utc_column("latest.started_at", "latest_started_at") +
+        storage::utc_column("latest.started_at", "latest_started_at") +
         " FROM nodes n "
         "LEFT JOIN LATERAL ("
         " SELECT tr.id, tr.task_id, tr.status, tr.started_at"
@@ -352,8 +344,8 @@ PostgresManagementQueryRepository::list_data_sources_by_node(
         "SELECT ds.id::text AS id, n.node_code, ds.source_type, "
         "ds.name, ds.config_json::text AS config_json, "
         "CASE WHEN ds.enabled THEN 'true' ELSE 'false' END AS enabled, " +
-        utc_column("ds.created_at", "created_at") + ", " +
-        utc_column("ds.updated_at", "updated_at") +
+        storage::utc_column("ds.created_at", "created_at") + ", " +
+        storage::utc_column("ds.updated_at", "updated_at") +
         " FROM data_sources ds "
         "JOIN nodes n ON n.id = ds.node_id "
         "WHERE n.node_code = $1";
@@ -381,7 +373,7 @@ PostgresManagementQueryRepository::list_qc_rules(
         "SELECT qr.id::text AS id, qr.name, qr.rule_type, "
         "qr.rule_config_json::text AS rule_config_json, "
         "CASE WHEN qr.enabled THEN 'true' ELSE 'false' END AS enabled, " +
-        utc_column("qr.created_at", "created_at") +
+        storage::utc_column("qr.created_at", "created_at") +
         " FROM qc_rules qr WHERE true";
     if (filter.enabled.has_value()) {
         sql += " AND qr.enabled = " +
@@ -515,9 +507,9 @@ PostgresManagementQueryRepository::list_raw_files_by_run(
         "rf.task_run_id::text AS task_run_id, n.node_code, "
         "rf.original_name, COALESCE(rf.file_hash, '') AS file_hash, "
         "rf.storage_path, rf.size_bytes::text AS size_bytes, " +
-        utc_column("rf.source_mtime", "source_mtime") + ", "
+        storage::utc_column("rf.source_mtime", "source_mtime") + ", "
         "rf.ingest_status, " +
-        utc_column("rf.created_at", "created_at") +
+        storage::utc_column("rf.created_at", "created_at") +
         " FROM raw_files rf "
         "JOIN nodes n ON n.id = rf.node_id "
         "WHERE rf.task_run_id = $1::bigint";
@@ -542,9 +534,9 @@ PostgresManagementQueryRepository::list_parsed_records_by_run(
         "pr.task_run_id::text AS task_run_id, "
         "COALESCE(pr.station_code, '') AS station_code, "
         "COALESCE(pr.device_code, '') AS device_code, " +
-        utc_column("pr.record_time", "record_time") + ", "
+        storage::utc_column("pr.record_time", "record_time") + ", "
         "pr.payload_json::text AS payload_json, pr.parse_status, " +
-        utc_column("pr.created_at", "created_at") +
+        storage::utc_column("pr.created_at", "created_at") +
         " FROM parsed_records pr "
         "WHERE pr.task_run_id = $1::bigint";
     add_cursor(sql, params, "pr.id", page);
@@ -568,7 +560,7 @@ PostgresManagementQueryRepository::list_qc_results_by_run(
         "qr.qc_rule_id::text AS qc_rule_id, "
         "pr.task_run_id::text AS task_run_id, "
         "qr.level, qr.result, COALESCE(qr.message, '') AS message, " +
-        utc_column("qr.created_at", "created_at") +
+        storage::utc_column("qr.created_at", "created_at") +
         " FROM qc_results qr "
         "JOIN parsed_records pr ON pr.id = qr.parsed_record_id "
         "WHERE pr.task_run_id = $1::bigint";
@@ -594,7 +586,7 @@ PostgresManagementQueryRepository::list_alerts_by_node(
         "SELECT a.id::text AS id, n.node_code, "
         "COALESCE(a.task_run_id::text, '') AS task_run_id, "
         "a.alert_type, a.severity, a.message, a.status, " +
-        utc_column("a.created_at", "created_at") +
+        storage::utc_column("a.created_at", "created_at") +
         " FROM alerts a "
         "JOIN nodes n ON n.id = a.node_id "
         "WHERE n.node_code = $1";

@@ -9,6 +9,7 @@
 #include "labbridge/server/application/result_service.h"
 #include "labbridge/server/postgres/storage_mapping.h"
 #include "labbridge/server/application/task_run_service.h"
+#include "support/server/test_config_seed.h"
 
 #include <cassert>
 #include <cstdlib>
@@ -28,7 +29,7 @@ int main() {
     labbridge::server::PostgresTaskRunRepository task_run_repository{session};
     labbridge::server::PostgresResultRepository result_repository{session};
     labbridge::server::NodeService node_service{node_repository};
-    labbridge::server::ConfigService config_service{node_repository, config_repository};
+    labbridge::server::ConfigService config_service{config_repository};
     labbridge::server::TaskRunService task_run_service{config_repository, task_run_repository};
     labbridge::server::ResultService result_service{task_run_repository, result_repository};
 
@@ -44,37 +45,25 @@ int main() {
     const auto heartbeat_status = node_service.accept_heartbeat({
         node_code,
         labbridge::core::kVersion,
-        "2026-05-26 10:00:00+08",
+        "2026-05-26T02:00:00Z",
     });
     assert(heartbeat_status.ok);
 
-    const auto data_source = config_service.create_data_source({
-        node_code,
-        labbridge::core::SourceType::LocalDirectory,
-        "phase9 local csv dir",
-        R"({"path":"tests/fixtures/agent","pattern":"*.csv"})",
-        true,
-    });
-    assert(data_source.status.ok);
-    assert(!data_source.id.empty());
+    const auto data_source =
+        labbridge::server::test_support::create_local_csv_data_source(
+            config_repository, node_code, "phase9 local csv dir",
+            R"({"path":"tests/fixtures/agent","pattern":"*.csv"})");
+    assert(!data_source.empty());
 
-    const auto task = config_service.create_task({
-        node_code,
-        data_source.id,
-        "phase9 collect local csv",
-        "collect_parse_qc",
-        "* * * * *",
-        "csv_observation",
-        "basic",
-        true,
-    });
-    assert(task.status.ok);
-    assert(!task.id.empty());
+    const auto task = labbridge::server::test_support::create_csv_task(
+        config_repository, node_code, data_source,
+        "phase9 collect local csv");
+    assert(!task.empty());
 
     const auto started = task_run_service.start({
         node_code,
-        task.id,
-        "2026-05-26 10:01:00+08",
+        task,
+        "2026-05-26T02:01:00Z",
         "manual",
     });
     assert(started.status.ok);
@@ -87,7 +76,7 @@ int main() {
         "phase9-hash-001",
         "/archive/phase9/sample_observation.csv",
         128,
-        "2026-05-26 09:59:00+08",
+        "2026-05-26T01:59:00Z",
         "collected",
     });
     assert(raw_file.status.ok);
@@ -99,60 +88,50 @@ int main() {
     assert(stored_raw_file->node_code == node_code);
     assert(stored_raw_file->original_name == "sample_observation.csv");
 
-    const auto first_record = result_service.record_parsed_record({
-        started.id,
-        raw_file.id,
-        {
-            "station-a",
-            "device-a",
-            "2026-05-26 10:00:00+08",
-            R"({"temperature":21.5,"humidity":62})",
-        },
-        "parsed",
-    });
+    const auto record_parsed = [&](const std::string& device_code) {
+        return result_service.record_parsed_record(
+            {
+                started.id,
+                raw_file.id,
+                {
+                    "station-a",
+                    device_code,
+                    "2026-05-26T02:00:00Z",
+                    R"({"temperature":21.5,"humidity":62})",
+                },
+                "parsed",
+            },
+            *stored_raw_file);
+    };
+
+    const auto first_record = record_parsed("device-a");
     assert(first_record.status.ok);
     assert(!first_record.id.empty());
 
-    const auto second_record = result_service.record_parsed_record({
-        started.id,
-        raw_file.id,
-        {
-            "station-a",
-            "device-b",
-            "2026-05-26 10:05:00+08",
-            R"({"temperature":22.1,"humidity":60})",
-        },
-        "parsed",
-    });
+    const auto second_record = record_parsed("device-b");
     assert(second_record.status.ok);
     assert(!second_record.id.empty());
 
-    const auto parsed_records = result_service.find_parsed_records(started.id);
-    assert(parsed_records.size() >= 2);
+    const auto persisted_first =
+        result_repository.find_parsed_record(first_record.id);
+    assert(persisted_first.has_value());
+    assert(persisted_first->raw_file_id == raw_file.id);
+    assert(persisted_first->record.device_code == "device-a");
+    assert(persisted_first->record.payload_json.find("temperature") !=
+           std::string::npos);
 
-    bool found_first_record = false;
-    bool found_second_record = false;
-    for (const auto& parsed_record : parsed_records) {
-        if (parsed_record.id == first_record.id) {
-            found_first_record = true;
-            assert(parsed_record.raw_file_id == raw_file.id);
-            assert(parsed_record.record.device_code == "device-a");
-            assert(parsed_record.record.payload_json.find("temperature") != std::string::npos);
-        }
-        if (parsed_record.id == second_record.id) {
-            found_second_record = true;
-            assert(parsed_record.raw_file_id == raw_file.id);
-            assert(parsed_record.record.device_code == "device-b");
-            assert(parsed_record.record.payload_json.find("humidity") != std::string::npos);
-        }
-    }
-    assert(found_first_record);
-    assert(found_second_record);
+    const auto persisted_second =
+        result_repository.find_parsed_record(second_record.id);
+    assert(persisted_second.has_value());
+    assert(persisted_second->raw_file_id == raw_file.id);
+    assert(persisted_second->record.device_code == "device-b");
+    assert(persisted_second->record.payload_json.find("humidity") !=
+           std::string::npos);
 
     const auto finish_status = task_run_service.finish({
         started.id,
         labbridge::core::TaskRunStatus::Succeeded,
-        "2026-05-26 10:06:00+08",
+        "2026-05-26T02:06:00Z",
         2,
         2,
         0,

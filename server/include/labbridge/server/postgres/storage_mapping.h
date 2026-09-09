@@ -8,6 +8,14 @@
 
 namespace labbridge::server::storage {
 
+// 统一的 UTC 秒级时间戳读取表达式（YYYY-MM-DDTHH:MM:SSZ，空值为空串）。
+inline std::string utc_column(const std::string& expression,
+                              const std::string& alias) {
+    return "COALESCE(to_char(" + expression +
+           " AT TIME ZONE 'UTC', "
+           "'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'), '') AS " + alias;
+}
+
 inline std::string value_or_empty(const SqlRow& row, const std::string& key) {
     const auto iter = row.find(key);
     if (iter == row.end()) {

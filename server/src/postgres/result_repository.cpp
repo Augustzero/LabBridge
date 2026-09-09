@@ -71,8 +71,8 @@ std::optional<RawFileRecord> PostgresResultRepository::find_raw_file(
     static const std::string sql =
         "SELECT rf.id::text AS id, rf.task_run_id::text AS task_run_id, n.node_code, "
         "rf.original_name, COALESCE(rf.file_hash, '') AS file_hash, rf.storage_path, "
-        "rf.size_bytes::text AS size_bytes, "
-        "COALESCE(to_char(rf.source_mtime, 'YYYY-MM-DD HH24:MI:SS'), '') AS source_mtime, "
+        "rf.size_bytes::text AS size_bytes, " +
+        storage::utc_column("rf.source_mtime", "source_mtime") + ", "
         "rf.ingest_status "
         "FROM raw_files rf "
         "JOIN nodes n ON n.id = rf.node_id "
@@ -84,26 +84,6 @@ std::optional<RawFileRecord> PostgresResultRepository::find_raw_file(
         return std::nullopt;
     }
     return to_raw_file_record(*row);
-}
-
-std::vector<RawFileRecord> PostgresResultRepository::find_raw_files_by_run(
-    const std::string& task_run_id) const {
-    static const std::string sql =
-        "SELECT rf.id::text AS id, rf.task_run_id::text AS task_run_id, n.node_code, "
-        "rf.original_name, COALESCE(rf.file_hash, '') AS file_hash, rf.storage_path, "
-        "rf.size_bytes::text AS size_bytes, "
-        "COALESCE(to_char(rf.source_mtime, 'YYYY-MM-DD HH24:MI:SS'), '') AS source_mtime, "
-        "rf.ingest_status "
-        "FROM raw_files rf "
-        "JOIN nodes n ON n.id = rf.node_id "
-        "WHERE rf.task_run_id = $1::bigint "
-        "ORDER BY rf.id";
-
-    std::vector<RawFileRecord> records;
-    for (const auto& row : session_.query_all(sql, {task_run_id})) {
-        records.push_back(to_raw_file_record(row));
-    }
-    return records;
 }
 
 std::string PostgresResultRepository::create_parsed_record(ParsedRecordRecord parsed_record) {
@@ -138,8 +118,8 @@ std::optional<ParsedRecordRecord> PostgresResultRepository::find_parsed_record(
     static const std::string sql =
         "SELECT pr.id::text AS id, COALESCE(pr.raw_file_id::text, '') AS raw_file_id, "
         "pr.task_run_id::text AS task_run_id, COALESCE(pr.station_code, '') AS station_code, "
-        "COALESCE(pr.device_code, '') AS device_code, "
-        "COALESCE(to_char(pr.record_time, 'YYYY-MM-DD HH24:MI:SS'), '') AS record_time, "
+        "COALESCE(pr.device_code, '') AS device_code, " +
+        storage::utc_column("pr.record_time", "record_time") + ", "
         "pr.payload_json::text AS payload_json, pr.parse_status "
         "FROM parsed_records pr "
         "WHERE pr.id = $1::bigint "
@@ -150,25 +130,6 @@ std::optional<ParsedRecordRecord> PostgresResultRepository::find_parsed_record(
         return std::nullopt;
     }
     return to_parsed_record(*row);
-}
-
-std::vector<ParsedRecordRecord> PostgresResultRepository::find_parsed_records_by_run(
-    const std::string& task_run_id) const {
-    static const std::string sql =
-        "SELECT pr.id::text AS id, COALESCE(pr.raw_file_id::text, '') AS raw_file_id, "
-        "pr.task_run_id::text AS task_run_id, COALESCE(pr.station_code, '') AS station_code, "
-        "COALESCE(pr.device_code, '') AS device_code, "
-        "COALESCE(to_char(pr.record_time, 'YYYY-MM-DD HH24:MI:SS'), '') AS record_time, "
-        "pr.payload_json::text AS payload_json, pr.parse_status "
-        "FROM parsed_records pr "
-        "WHERE pr.task_run_id = $1::bigint "
-        "ORDER BY pr.id";
-
-    std::vector<ParsedRecordRecord> records;
-    for (const auto& row : session_.query_all(sql, {task_run_id})) {
-        records.push_back(to_parsed_record(row));
-    }
-    return records;
 }
 
 }  // namespace labbridge::server

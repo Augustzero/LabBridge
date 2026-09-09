@@ -3,12 +3,15 @@
 #include "labbridge/core/models.h"
 #include "labbridge/core/result.h"
 #include "labbridge/server/repositories/agent_report_receipt_repository.h"
+#include "labbridge/server/repositories/task_run_repository.h"
 #include "labbridge/server/application/alert_service.h"
 #include "labbridge/server/application/qc_service.h"
 #include "labbridge/server/application/result_service.h"
 #include "labbridge/server/application/task_run_service.h"
 
+#include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace labbridge::server {
@@ -83,8 +86,13 @@ public:
     TaskRunReportResult accept_task_run_report(const TaskRunReportRequest& request);
 
 private:
-    labbridge::core::Status validate_task_run_node(const std::string& task_run_id,
-                                                   const std::string& node_code) const;
+    // 校验 task run 存在且属于节点；失败时 record 为空。
+    struct TaskRunOwnership {
+        labbridge::core::Status status;
+        std::optional<TaskRunRecord> record;
+    };
+    TaskRunOwnership validate_task_run_node(const std::string& task_run_id,
+                                            const std::string& node_code) const;
 
     TaskRunService& task_run_service_;
     ResultService& result_service_;

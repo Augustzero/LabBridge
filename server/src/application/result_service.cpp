@@ -47,7 +47,9 @@ ResultCreateResult ResultService::record_raw_file(const RecordRawFileRequest& re
     return {labbridge::core::Status::success(), id};
 }
 
-ResultCreateResult ResultService::record_parsed_record(const RecordParsedRecordRequest& request) {
+ResultCreateResult ResultService::record_parsed_record(
+    const RecordParsedRecordRequest& request,
+    const RawFileRecord& verified_raw_file) {
     if (request.task_run_id.empty()) {
         return {labbridge::core::Status::failure("task_run_id is required"), {}};
     }
@@ -57,17 +59,7 @@ ResultCreateResult ResultService::record_parsed_record(const RecordParsedRecordR
     if (request.record.payload_json.empty()) {
         return {labbridge::core::Status::failure("payload_json is required"), {}};
     }
-
-    const auto task_run = task_run_repository_.find_by_id(request.task_run_id);
-    if (!task_run.has_value()) {
-        return {labbridge::core::Status::failure(labbridge::core::StatusCode::NotFound, "task run is not found"), {}};
-    }
-
-    const auto raw_file = result_repository_.find_raw_file(request.raw_file_id);
-    if (!raw_file.has_value()) {
-        return {labbridge::core::Status::failure(labbridge::core::StatusCode::NotFound, "raw file is not found"), {}};
-    }
-    if (raw_file->task_run_id != request.task_run_id) {
+    if (verified_raw_file.task_run_id != request.task_run_id) {
         return {labbridge::core::Status::failure(
                     labbridge::core::StatusCode::Conflict,
                     "raw file does not belong to task run"),
@@ -84,19 +76,12 @@ ResultCreateResult ResultService::record_parsed_record(const RecordParsedRecordR
     return {labbridge::core::Status::success(), id};
 }
 
-std::vector<RawFileRecord> ResultService::find_raw_files(const std::string& task_run_id) const {
-    if (task_run_id.empty()) {
-        return {};
+std::optional<RawFileRecord> ResultService::find_raw_file(
+    const std::string& raw_file_id) const {
+    if (raw_file_id.empty()) {
+        return std::nullopt;
     }
-    return result_repository_.find_raw_files_by_run(task_run_id);
-}
-
-std::vector<ParsedRecordRecord> ResultService::find_parsed_records(
-    const std::string& task_run_id) const {
-    if (task_run_id.empty()) {
-        return {};
-    }
-    return result_repository_.find_parsed_records_by_run(task_run_id);
+    return result_repository_.find_raw_file(raw_file_id);
 }
 
 }  // namespace labbridge::server

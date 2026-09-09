@@ -13,6 +13,7 @@
 #include "labbridge/server/application/result_service.h"
 #include "labbridge/server/postgres/storage_mapping.h"
 #include "labbridge/server/application/task_run_service.h"
+#include "support/server/test_config_seed.h"
 
 #include <cassert>
 #include <cstdlib>
@@ -34,10 +35,10 @@ int main() {
     labbridge::server::PostgresQcRepository qc_repository{session};
     labbridge::server::PostgresAlertRepository alert_repository{session};
     labbridge::server::NodeService node_service{node_repository};
-    labbridge::server::ConfigService config_service{node_repository, config_repository};
+    labbridge::server::ConfigService config_service{config_repository};
     labbridge::server::TaskRunService task_run_service{config_repository, task_run_repository};
     labbridge::server::ResultService result_service{task_run_repository, result_repository};
-    labbridge::server::QcService qc_service{result_repository, qc_repository};
+    labbridge::server::QcService qc_service{qc_repository};
     labbridge::server::AlertService alert_service{
         task_run_repository,
         result_repository,
@@ -60,33 +61,21 @@ int main() {
     });
     assert(heartbeat_status.ok);
 
-    const auto data_source = config_service.create_data_source({
-        node_code,
-        labbridge::core::SourceType::LocalDirectory,
-        "phase13 local csv dir",
-        R"({"path":"tests/fixtures/agent","pattern":"*.csv"})",
-        true,
-    });
-    assert(data_source.status.ok);
-    assert(!data_source.id.empty());
+    const auto data_source =
+        labbridge::server::test_support::create_local_csv_data_source(
+            config_repository, node_code, "phase13 local csv dir",
+            R"({"path":"tests/fixtures/agent","pattern":"*.csv"})");
+    assert(!data_source.empty());
 
-    const auto task = config_service.create_task({
-        node_code,
-        data_source.id,
-        "phase13 collect local csv",
-        "collect_parse_qc",
-        "* * * * *",
-        "csv_observation",
-        "basic",
-        true,
-    });
-    assert(task.status.ok);
-    assert(!task.id.empty());
+    const auto task = labbridge::server::test_support::create_csv_task(
+        config_repository, node_code, data_source,
+        "phase13 collect local csv");
+    assert(!task.empty());
 
     const auto started = task_run_service.start({
         node_code,
-        task.id,
-        "2026-05-28 10:01:00+08",
+        task,
+        "2026-05-28T02:01:00Z",
         "manual",
     });
     assert(started.status.ok);
@@ -99,23 +88,28 @@ int main() {
         "phase13-hash-001",
         "/archive/phase13/sample_observation.csv",
         128,
-        "2026-05-28 09:59:00+08",
+        "2026-05-28T01:59:00Z",
         "collected",
     });
     assert(raw_file.status.ok);
     assert(!raw_file.id.empty());
 
-    const auto parsed_record = result_service.record_parsed_record({
-        started.id,
-        raw_file.id,
+    const auto stored_raw_file = result_repository.find_raw_file(raw_file.id);
+    assert(stored_raw_file.has_value());
+
+    const auto parsed_record = result_service.record_parsed_record(
         {
-            "station-a",
-            "device-a",
-            "2026-05-28 10:00:00+08",
-            R"({"temperature":48.5,"humidity":62})",
+            started.id,
+            raw_file.id,
+            {
+                "station-a",
+                "device-a",
+                "2026-05-28T02:00:00Z",
+                R"({"temperature":48.5,"humidity":62})",
+            },
+            "parsed",
         },
-        "parsed",
-    });
+        *stored_raw_file);
     assert(parsed_record.status.ok);
     assert(!parsed_record.id.empty());
 
@@ -136,9 +130,9 @@ int main() {
         "humidity is in range",
     });
     assert(pass_result.status.ok);
-    assert(!pass_result.id.empty());
+    assert(!pass_result.record.id.empty());
 
-    const auto pass_alert = alert_service.create_from_qc_result({pass_result.id});
+    const auto pass_alert = alert_service.create_from_qc_result({pass_result.record.id});
     assert(!pass_alert.status.ok);
 
     const auto warning_result = qc_service.record_result({
@@ -149,9 +143,9 @@ int main() {
         "temperature is near upper limit",
     });
     assert(warning_result.status.ok);
-    assert(!warning_result.id.empty());
+    assert(!warning_result.record.id.empty());
 
-    const auto warning_alert = alert_service.create_from_qc_result({warning_result.id});
+    const auto warning_alert = alert_service.create_from_qc_result({warning_result.record.id});
     assert(warning_alert.status.ok);
     assert(!warning_alert.id.empty());
 
@@ -163,9 +157,9 @@ int main() {
         "temperature is outside configured range",
     });
     assert(failed_result.status.ok);
-    assert(!failed_result.id.empty());
+    assert(!failed_result.record.id.empty());
 
-    const auto failed_alert = alert_service.create_from_qc_result({failed_result.id});
+    const auto failed_alert = alert_service.create_from_qc_result({failed_result.record.id});
     assert(failed_alert.status.ok);
     assert(!failed_alert.id.empty());
 
@@ -180,7 +174,7 @@ int main() {
     });
     assert(finish_status.ok);
 
-    const auto run_alerts = alert_service.find_alerts_by_task_run(started.id);
+    const auto run_alerts = alert_repository.find_by_task_run(started.id);
     bool found_warning_alert = false;
     bool found_failed_alert = false;
     for (const auto& alert : run_alerts) {
@@ -203,7 +197,7 @@ int main() {
     assert(found_warning_alert);
     assert(found_failed_alert);
 
-    const auto node_alerts = alert_service.find_alerts_by_node(node_code);
+    const auto node_alerts = alert_repository.find_by_node(node_code);
     bool found_node_warning_alert = false;
     bool found_node_failed_alert = false;
     for (const auto& alert : node_alerts) {

@@ -402,7 +402,7 @@ add_labbridge_postgres_test(
 add_labbridge_postgres_test(
     executable_config_postgres_test
     SOURCES integration/postgres/executable_config_postgres_test.cpp
-    LINK_LIBRARIES GTest::gtest labbridge_server_postgres
+    LINK_LIBRARIES GTest::gtest labbridge_server_postgres labbridge_server_test_support
 )
 
 add_labbridge_postgres_test(
@@ -470,23 +470,16 @@ add_labbridge_test(
 )
 
 add_labbridge_test(
-    control_plane_query_test
-    SOURCES component/server/control_plane_query_test.cpp
-    LINK_LIBRARIES GTest::gtest_main labbridge_server_test_support
-    LABELS component
-)
-
-add_labbridge_test(
-    archive_trace_query_test
-    SOURCES component/server/archive_trace_query_test.cpp
-    LINK_LIBRARIES GTest::gtest_main labbridge_server_test_support
-    LABELS component
-)
-
-add_labbridge_test(
     agent_report_service_test
     SOURCES component/server/agent_report_service_test.cpp
     LINK_LIBRARIES GTest::gtest_main labbridge_server_test_support
+    LABELS component
+)
+
+add_labbridge_test(
+    agent_report_sql_budget_test
+    SOURCES component/server/agent_report_sql_budget_test.cpp
+    LINK_LIBRARIES GTest::gtest_main labbridge_server_postgres labbridge_server_test_support
     LABELS component
 )
 
@@ -514,32 +507,22 @@ add_labbridge_test(
 add_labbridge_smoke(
     labbridge_phase7_real_postgres_control_flow_smoke
     integration/postgres/phase7_real_postgres_control_flow_smoke.cpp
-    POSTGRES REAL_POSTGRES
+    POSTGRES REAL_POSTGRES SERVER_SUPPORT
 )
 add_labbridge_smoke(
     labbridge_phase9_real_postgres_result_flow_smoke
     integration/postgres/phase9_real_postgres_result_flow_smoke.cpp
-    POSTGRES REAL_POSTGRES
+    POSTGRES REAL_POSTGRES SERVER_SUPPORT
 )
 add_labbridge_smoke(
     labbridge_phase11_real_postgres_qc_flow_smoke
     integration/postgres/phase11_real_postgres_qc_flow_smoke.cpp
-    POSTGRES REAL_POSTGRES
+    POSTGRES REAL_POSTGRES SERVER_SUPPORT
 )
 add_labbridge_smoke(
     labbridge_phase13_real_postgres_alert_flow_smoke
     integration/postgres/phase13_real_postgres_alert_flow_smoke.cpp
-    POSTGRES REAL_POSTGRES
-)
-add_labbridge_smoke(
-    labbridge_phase14_real_postgres_query_flow_smoke
-    integration/postgres/phase14_real_postgres_query_flow_smoke.cpp
-    POSTGRES REAL_POSTGRES
-)
-add_labbridge_smoke(
-    labbridge_phase15_real_postgres_archive_trace_smoke
-    integration/postgres/phase15_real_postgres_archive_trace_smoke.cpp
-    POSTGRES REAL_POSTGRES
+    POSTGRES REAL_POSTGRES SERVER_SUPPORT
 )
 add_labbridge_smoke(
     labbridge_phase16_real_postgres_agent_report_service_smoke
@@ -549,17 +532,17 @@ add_labbridge_smoke(
 add_labbridge_smoke(
     labbridge_phase17_real_postgres_http_agent_report_smoke
     integration/postgres/phase17_real_postgres_http_agent_report_smoke.cpp
-    HTTP POSTGRES REAL_POSTGRES
+    HTTP POSTGRES REAL_POSTGRES SERVER_SUPPORT
 )
 add_labbridge_smoke(
     labbridge_phase18_real_postgres_agent_report_reliability_smoke
     integration/postgres/phase18_real_postgres_agent_report_reliability_smoke.cpp
-    POSTGRES REAL_POSTGRES
+    POSTGRES REAL_POSTGRES SERVER_SUPPORT
 )
 add_labbridge_smoke(
     labbridge_phase19_real_postgres_http_agent_control_smoke
     integration/postgres/phase19_real_postgres_http_agent_control_smoke.cpp
-    HTTP POSTGRES REAL_POSTGRES
+    HTTP POSTGRES REAL_POSTGRES SERVER_SUPPORT
 )
 
 get_property(

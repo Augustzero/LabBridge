@@ -100,6 +100,14 @@ public:
             return labbridge::server::SqlRow{{"id", "1301"}};
         }
 
+        if (sql.find("FROM qc_results") != std::string::npos &&
+            sql.find("WHERE id") != std::string::npos) {
+            if (qc_result_row.empty() || qc_result_row["id"] != params[0]) {
+                return std::nullopt;
+            }
+            return qc_result_row;
+        }
+
         return std::nullopt;
     }
 
@@ -107,21 +115,6 @@ public:
         const std::string& sql,
         const labbridge::server::SqlParams& params) override {
         queried.push_back({sql, params});
-
-        if (sql.find("FROM qc_results") != std::string::npos) {
-            if (qc_result_row.empty() || qc_result_row["parsed_record_id"] != params[0]) {
-                return {};
-            }
-            return {qc_result_row};
-        }
-
-        if (sql.find("FROM parsed_records") != std::string::npos) {
-            if (parsed_record_row.empty() || parsed_record_row["task_run_id"] != params[0]) {
-                return {};
-            }
-            return {parsed_record_row};
-        }
-
         return {};
     }
 
@@ -136,13 +129,13 @@ public:
 
 }  // namespace
 
-TEST(QcServiceTest, PersistsOnlyEnabledRuleResults) {
+TEST(QcServiceTest, PersistsRuleResultsAndReturnsFullRecord) {
     RecordingSqlSession session;
     labbridge::server::InMemoryTaskRunRepository task_run_repository;
     labbridge::server::PostgresResultRepository result_repository(session);
     labbridge::server::PostgresQcRepository qc_repository(session);
     labbridge::server::ResultService result_service(task_run_repository, result_repository);
-    labbridge::server::QcService qc_service(result_repository, qc_repository);
+    labbridge::server::QcService qc_service(qc_repository);
 
     labbridge::server::TaskRunRecord task_run;
     task_run.task_id = "401";
@@ -163,35 +156,22 @@ TEST(QcServiceTest, PersistsOnlyEnabledRuleResults) {
     });
     EXPECT_TRUE(raw_file.status.ok);
 
-    const auto parsed_record = result_service.record_parsed_record({
-        task_run_id,
-        raw_file.id,
+    const auto stored_raw_file = result_service.find_raw_file(raw_file.id);
+    ASSERT_TRUE(stored_raw_file.has_value());
+    const auto parsed_record = result_service.record_parsed_record(
         {
-            "station-a",
-            "device-a",
-            "2026-05-27 10:00:00+08",
-            R"({"temperature":21.5})",
+            task_run_id,
+            raw_file.id,
+            {
+                "station-a",
+                "device-a",
+                "2026-05-27 10:00:00+08",
+                R"({"temperature":21.5})",
+            },
+            "parsed",
         },
-        "parsed",
-    });
+        *stored_raw_file);
     EXPECT_TRUE(parsed_record.status.ok);
-
-    const auto disabled_rule = qc_service.create_rule({
-        "disabled required fields",
-        "required_fields",
-        R"({"required":["station_code","device_code","record_time"]})",
-        false,
-    });
-    EXPECT_TRUE(disabled_rule.status.ok);
-
-    const auto disabled_result = qc_service.record_result({
-        parsed_record.id,
-        disabled_rule.id,
-        "failed",
-        "failed",
-        "disabled rule should not record",
-    });
-    EXPECT_TRUE(!disabled_result.status.ok);
 
     const auto rule = qc_service.create_rule({
         "required fields",
@@ -202,14 +182,15 @@ TEST(QcServiceTest, PersistsOnlyEnabledRuleResults) {
     EXPECT_TRUE(rule.status.ok);
     EXPECT_TRUE(rule.id == "1201");
 
-    const auto missing_record_result = qc_service.record_result({
-        "999999",
+    // 缺失必要字段时仍会在服务边界拒绝。
+    const auto invalid_result = qc_service.record_result({
+        parsed_record.id,
         rule.id,
-        "failed",
-        "failed",
-        "missing parsed record",
+        {},
+        "passed",
+        "level is required",
     });
-    EXPECT_TRUE(!missing_record_result.status.ok);
+    EXPECT_TRUE(!invalid_result.status.ok);
 
     const auto qc_result = qc_service.record_result({
         parsed_record.id,
@@ -219,15 +200,19 @@ TEST(QcServiceTest, PersistsOnlyEnabledRuleResults) {
         "required fields are present",
     });
     EXPECT_TRUE(qc_result.status.ok);
-    EXPECT_TRUE(qc_result.id == "1301");
+    // 返回完整记录，告警生成无需再回读。
+    EXPECT_TRUE(qc_result.record.id == "1301");
+    EXPECT_TRUE(qc_result.record.parsed_record_id == parsed_record.id);
+    EXPECT_TRUE(qc_result.record.qc_rule_id == rule.id);
+    EXPECT_TRUE(qc_result.record.level == "pass");
+    EXPECT_TRUE(qc_result.record.result == "passed");
     EXPECT_TRUE(session.queried.back().sql.find("INSERT INTO qc_results") != std::string::npos);
     EXPECT_TRUE(session.queried.back().params[2] == "pass");
 
-    const auto results = qc_service.find_results(parsed_record.id);
-    EXPECT_TRUE(results.size() == 1);
-    EXPECT_TRUE(results.front().parsed_record_id == parsed_record.id);
-    EXPECT_TRUE(results.front().qc_rule_id == rule.id);
-    EXPECT_TRUE(results.front().level == "pass");
-    EXPECT_TRUE(results.front().result == "passed");
-
+    const auto persisted = qc_repository.find_result(qc_result.record.id);
+    ASSERT_TRUE(persisted.has_value());
+    EXPECT_TRUE(persisted->parsed_record_id == parsed_record.id);
+    EXPECT_TRUE(persisted->qc_rule_id == rule.id);
+    EXPECT_TRUE(persisted->level == "pass");
+    EXPECT_TRUE(persisted->result == "passed");
 }

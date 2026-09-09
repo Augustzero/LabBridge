@@ -6,6 +6,7 @@
 #include "labbridge/server/postgres/node_repository.h"
 #include "labbridge/server/postgres/qc_repository.h"
 #include "labbridge/server/postgres/storage_mapping.h"
+#include "support/server/test_config_seed.h"
 
 #include <gtest/gtest.h>
 
@@ -65,7 +66,7 @@ TEST_F(ExecutableConfigPostgresTest,
     labbridge::server::PostgresConfigRepository configs{session()};
     labbridge::server::PostgresQcRepository qc{session()};
     labbridge::server::NodeService node_service{nodes};
-    labbridge::server::ConfigService config_service{nodes, configs};
+    labbridge::server::ConfigService config_service{configs};
     labbridge::server::AgentControlService service{
         node_service,
         config_service};
@@ -75,45 +76,26 @@ TEST_F(ExecutableConfigPostgresTest,
         "phase022 PostgreSQL node",
         "0.1.0",
     }).ok);
-    const auto source = config_service.create_data_source({
-        node_code(),
-        labbridge::core::SourceType::LocalDirectory,
-        "phase022 enabled source",
-        R"({"root_path":"/data/incoming","extension":".csv"})",
-        true,
-    });
-    const auto disabled_source = config_service.create_data_source({
-        node_code(),
-        labbridge::core::SourceType::LocalDirectory,
-        "phase022 disabled source",
-        R"({"root_path":"/data/disabled","extension":".csv"})",
-        false,
-    });
-    ASSERT_TRUE(source.status.ok);
-    ASSERT_TRUE(disabled_source.status.ok);
+    const auto source =
+        labbridge::server::test_support::create_local_csv_data_source(
+            configs, node_code(), "phase022 enabled source",
+            R"({"root_path":"/data/incoming","extension":".csv"})");
+    const auto disabled_source =
+        labbridge::server::test_support::create_local_csv_data_source(
+            configs, node_code(), "phase022 disabled source",
+            R"({"root_path":"/data/disabled","extension":".csv"})",
+            false);
+    ASSERT_FALSE(source.empty());
+    ASSERT_FALSE(disabled_source.empty());
 
-    const auto task = config_service.create_task({
-        node_code(),
-        source.id,
-        "phase022 executable task",
-        "local_file_import",
-        "*/5 * * * *",
-        "csv_observation",
-        "basic",
-        true,
-    });
-    const auto incomplete_task = config_service.create_task({
-        node_code(),
-        disabled_source.id,
-        "phase022 incomplete task",
-        "local_file_import",
-        "*/5 * * * *",
-        "csv_observation",
-        "basic",
-        true,
-    });
-    ASSERT_TRUE(task.status.ok);
-    ASSERT_TRUE(incomplete_task.status.ok);
+    const auto task = labbridge::server::test_support::create_csv_task(
+        configs, node_code(), source, "phase022 executable task");
+    const auto incomplete_task =
+        labbridge::server::test_support::create_csv_task(
+            configs, node_code(), disabled_source,
+            "phase022 incomplete task");
+    ASSERT_FALSE(task.empty());
+    ASSERT_FALSE(incomplete_task.empty());
 
     const auto timestamp_rule = qc.create_rule({
         {},
@@ -136,21 +118,21 @@ TEST_F(ExecutableConfigPostgresTest,
         "{}",
         false,
     });
-    configs.bind_task_qc_rule(task.id, timestamp_rule, 20);
-    configs.bind_task_qc_rule(task.id, required_rule, 10);
-    configs.bind_task_qc_rule(task.id, disabled_rule, 0);
-    configs.bind_task_qc_rule(task.id, required_rule, 5);
+    configs.bind_task_qc_rule(task, timestamp_rule, 20);
+    configs.bind_task_qc_rule(task, required_rule, 10);
+    configs.bind_task_qc_rule(task, disabled_rule, 0);
+    configs.bind_task_qc_rule(task, required_rule, 5);
 
     const auto projection = service.find_config(node_code());
     ASSERT_TRUE(projection.status.ok);
     ASSERT_EQ(projection.enabled_tasks.size(), 1U);
     ASSERT_EQ(projection.data_sources.size(), 1U);
     ASSERT_EQ(projection.task_qc_rules.size(), 2U);
-    EXPECT_EQ(projection.enabled_tasks.front().id, task.id);
+    EXPECT_EQ(projection.enabled_tasks.front().id, task);
     EXPECT_EQ(
         projection.enabled_tasks.front().qc_rule_ids,
         (std::vector<std::string>{required_rule, timestamp_rule}));
-    EXPECT_EQ(projection.data_sources.front().id, source.id);
+    EXPECT_EQ(projection.data_sources.front().id, source);
     EXPECT_EQ(projection.task_qc_rules[0].sort_order, 5);
     EXPECT_EQ(projection.task_qc_rules[1].sort_order, 20);
 
@@ -158,7 +140,7 @@ TEST_F(ExecutableConfigPostgresTest,
         "SELECT count(*)::text AS count "
         "FROM task_qc_rules WHERE task_id = $1::bigint "
         "AND qc_rule_id = $2::bigint",
-        {task.id, required_rule});
+        {task, required_rule});
     ASSERT_TRUE(binding_count.has_value());
     EXPECT_EQ(
         labbridge::server::storage::value_or_empty(
@@ -167,7 +149,7 @@ TEST_F(ExecutableConfigPostgresTest,
 
     session().execute("SAVEPOINT invalid_binding", {});
     EXPECT_THROW(
-        configs.bind_task_qc_rule(task.id, "999999999999", 30),
+        configs.bind_task_qc_rule(task, "999999999999", 30),
         std::runtime_error);
     session().execute("ROLLBACK TO SAVEPOINT invalid_binding", {});
 }

@@ -7,7 +7,6 @@
 #include "labbridge/server/repositories/task_run_repository.h"
 
 #include <string>
-#include <vector>
 
 namespace labbridge::server {
 
@@ -30,11 +29,21 @@ public:
     AlertCreateResult create_from_qc_result(const CreateAlertFromQcResultRequest& request);
     AlertCreateResult create_from_qc_result_if_needed(
         const CreateAlertFromQcResultRequest& request);
-    std::vector<AlertRecord> find_alerts_by_node(const std::string& node_code) const;
-    std::vector<AlertRecord> find_alerts_by_task_run(const std::string& task_run_id) const;
+
+    // 上报链路已持有完整 qc 结果与归属信息，直接落库；
+    // 结果不需要告警时返回成功且 id 为空。
+    AlertCreateResult create_alert(const QcResultRecord& qc_result,
+                                   const std::string& task_run_id,
+                                   const std::string& node_code);
 
 private:
-    AlertCreateResult create_alert(const QcResultRecord& qc_result);
+    // 共享实现：按 qc_result_id 回读并判断是否产生告警，only_fail 决定
+    // “不产生告警”返回 Conflict 还是成功空返回。
+    AlertCreateResult create_from_lookup(const CreateAlertFromQcResultRequest& request,
+                                         bool only_fail);
+    AlertCreateResult write_alert(const QcResultRecord& qc_result,
+                                  const std::string& task_run_id,
+                                  const std::string& node_code);
 
     ITaskRunRepository& task_run_repository_;
     IResultRepository& result_repository_;

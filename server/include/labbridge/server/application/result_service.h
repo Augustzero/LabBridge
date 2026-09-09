@@ -5,7 +5,6 @@
 #include "labbridge/server/repositories/task_run_repository.h"
 
 #include <string>
-#include <vector>
 
 namespace labbridge::server {
 
@@ -37,9 +36,12 @@ public:
     ResultService(ITaskRunRepository& task_run_repository, IResultRepository& result_repository);
 
     ResultCreateResult record_raw_file(const RecordRawFileRequest& request);
-    ResultCreateResult record_parsed_record(const RecordParsedRecordRequest& request);
-    std::vector<RawFileRecord> find_raw_files(const std::string& task_run_id) const;
-    std::vector<ParsedRecordRecord> find_parsed_records(const std::string& task_run_id) const;
+    // verified_raw_file 为调用方在本请求作用域内已校验归属的原始文件，
+    // 避免同一 run 的多条记录重复回读。
+    ResultCreateResult record_parsed_record(
+        const RecordParsedRecordRequest& request,
+        const RawFileRecord& verified_raw_file);
+    std::optional<RawFileRecord> find_raw_file(const std::string& raw_file_id) const;
 
 private:
     ITaskRunRepository& task_run_repository_;

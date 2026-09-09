@@ -11,9 +11,9 @@
 #include "labbridge/server/postgres/result_repository.h"
 #include "labbridge/server/postgres/task_run_repository.h"
 #include "labbridge/server/application/qc_service.h"
-#include "labbridge/server/application/query_service.h"
 #include "labbridge/server/postgres/storage_mapping.h"
 #include "labbridge/server/application/task_run_service.h"
+#include "support/server/test_config_seed.h"
 
 #include <drogon/HttpRequest.h>
 #include <drogon/HttpResponse.h>
@@ -79,51 +79,31 @@ int main() {
     labbridge::server::PostgresAlertRepository alert_repository{session};
 
     labbridge::server::NodeService node_service{node_repository};
-    labbridge::server::ConfigService config_service{
-        node_repository,
-        config_repository};
     labbridge::server::TaskRunService task_run_service{
         config_repository,
         task_run_repository};
-    labbridge::server::QcService qc_service{result_repository, qc_repository};
-    labbridge::server::ControlPlaneQueryService query_service{
-        node_repository,
-        config_repository,
-        task_run_repository,
-        result_repository,
-        qc_repository,
-        alert_repository};
+    labbridge::server::QcService qc_service{qc_repository};
 
     const std::string node_code = "lab-node-real-http-report-017";
     assert(node_service.register_node(
                {node_code, "phase17-real-http-node", labbridge::core::kVersion})
                .ok);
 
-    const auto data_source = config_service.create_data_source({
-        node_code,
-        labbridge::core::SourceType::LocalDirectory,
-        "phase17 real HTTP local csv dir",
-        "{}",
-        true,
-    });
-    assert(data_source.status.ok);
+    const auto data_source =
+        labbridge::server::test_support::create_local_csv_data_source(
+            config_repository, node_code,
+            "phase17 real HTTP local csv dir");
+    assert(!data_source.empty());
 
-    const auto task = config_service.create_task({
-        node_code,
-        data_source.id,
-        "phase17 real HTTP reported csv",
-        "collect_parse_qc",
-        "* * * * *",
-        "csv_observation",
-        "basic",
-        true,
-    });
-    assert(task.status.ok);
+    const auto task = labbridge::server::test_support::create_csv_task(
+        config_repository, node_code, data_source,
+        "phase17 real HTTP reported csv");
+    assert(!task.empty());
 
     const auto started = task_run_service.start({
         node_code,
-        task.id,
-        "2026-07-16 11:01:00+08",
+        task,
+        "2026-07-16T03:01:00Z",
         "http_report",
     });
     assert(started.status.ok);
@@ -213,17 +193,22 @@ int main() {
     assert(report_json["data"]["parsed_record_ids"].size() == 1);
     assert(report_json["data"]["qc_result_ids"].size() == 2);
     assert(report_json["data"]["alert_ids"].size() == 1);
+    const auto parsed_record_id =
+        report_json["data"]["parsed_record_ids"][Json::ArrayIndex{0}].asString();
 
-    const auto detail = query_service.find_task_run_detail(node_code, started.id);
-    assert(detail.status.ok);
-    assert(detail.task_run.has_value());
-    assert(detail.task_run->status == labbridge::core::TaskRunStatus::Failed);
-    assert(detail.raw_files.size() == 1);
-    assert(detail.parsed_records.size() == 1);
-    assert(detail.qc_results.size() == 2);
-    assert(detail.alerts.size() == 1);
-    assert(detail.raw_files.front().id == raw_file_id);
-    assert(detail.parsed_records.front().raw_file_id == raw_file_id);
+    // 通过 repository 回验写入结果，替代已删除的查询聚合服务。
+    const auto finished = task_run_service.find_run(started.id);
+    assert(finished.has_value());
+    assert(finished->status == labbridge::core::TaskRunStatus::Failed);
+    const auto persisted_raw_file =
+        result_repository.find_raw_file(raw_file_id);
+    assert(persisted_raw_file.has_value());
+    assert(persisted_raw_file->id == raw_file_id);
+    const auto persisted_record =
+        result_repository.find_parsed_record(parsed_record_id);
+    assert(persisted_record.has_value());
+    assert(persisted_record->raw_file_id == raw_file_id);
+    assert(alert_repository.find_by_task_run(started.id).size() == 1);
 
     const auto persisted = session.query_one(
         "SELECT n.node_code, tr.id::text AS task_run_id, tr.status, "

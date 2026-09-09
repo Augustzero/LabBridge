@@ -1,5 +1,7 @@
 #include "labbridge/server/application/agent_report_service.h"
 
+#include "labbridge/server/postgres/storage_mapping.h"
+
 #include <openssl/evp.h>
 
 #include <iomanip>
@@ -67,17 +69,7 @@ private:
 };
 
 std::string task_run_status_value(labbridge::core::TaskRunStatus status) {
-    switch (status) {
-        case labbridge::core::TaskRunStatus::Pending:
-            return "pending";
-        case labbridge::core::TaskRunStatus::Running:
-            return "running";
-        case labbridge::core::TaskRunStatus::Succeeded:
-            return "succeeded";
-        case labbridge::core::TaskRunStatus::Failed:
-            return "failed";
-    }
-    throw std::runtime_error("unsupported task run status");
+    return storage::to_storage(status);
 }
 
 std::string manifest_fingerprint(const RawFileManifestRequest& request) {
@@ -159,9 +151,10 @@ RawFileManifestResult AgentReportService::accept_raw_file_manifest(
         return {idempotency_status, {}};
     }
 
-    const auto ownership_status = validate_task_run_node(request.task_run_id, request.node_code);
-    if (!ownership_status.ok) {
-        return {ownership_status, {}};
+    const auto ownership =
+        validate_task_run_node(request.task_run_id, request.node_code);
+    if (!ownership.status.ok) {
+        return {ownership.status, {}};
     }
 
     const auto receipt = receipt_repository_.claim({
@@ -215,9 +208,10 @@ TaskRunReportResult AgentReportService::accept_task_run_report(
         return {idempotency_status, {}, {}, {}};
     }
 
-    const auto ownership_status = validate_task_run_node(request.task_run_id, request.node_code);
-    if (!ownership_status.ok) {
-        return {ownership_status, {}, {}, {}};
+    const auto ownership =
+        validate_task_run_node(request.task_run_id, request.node_code);
+    if (!ownership.status.ok) {
+        return {ownership.status, {}, {}, {}};
     }
     if (!is_terminal_status(request.status)) {
         return {
@@ -249,17 +243,8 @@ TaskRunReportResult AgentReportService::accept_task_run_report(
         return {claim_error(receipt.state), {}, {}, {}};
     }
 
-    const auto task_run = task_run_service_.find_run(request.task_run_id);
-    if (!task_run.has_value()) {
-        return {
-            labbridge::core::Status::failure(
-                labbridge::core::StatusCode::NotFound,
-                "task run is not found"),
-            {},
-            {},
-            {},
-        };
-    }
+    // validate_task_run_node 已回读 run，这里直接复用结果。
+    const auto& task_run = ownership.record;
     if (is_terminal_status(task_run->status)) {
         return {
             labbridge::core::Status::failure(
@@ -271,15 +256,89 @@ TaskRunReportResult AgentReportService::accept_task_run_report(
         };
     }
 
+    // 空 ID 属于请求参数缺失（400），必须先于存在性查询，避免退化为 404。
+    for (const auto& parsed : request.parsed_records) {
+        if (parsed.raw_file_id.empty()) {
+            return {
+                labbridge::core::Status::failure("raw_file_id is required"),
+                {},
+                {},
+                {},
+            };
+        }
+        for (const auto& qc : parsed.qc_results) {
+            if (qc.qc_rule_id.empty()) {
+                return {
+                    labbridge::core::Status::failure("qc_rule_id is required"),
+                    {},
+                    {},
+                    {},
+                };
+            }
+        }
+    }
+
+    // 一次性加载并校验本报告涉及的全部 QC 规则（存在 + enabled）。
+    std::unordered_map<std::string, QcRuleRecord> qc_rules;
+    for (const auto& parsed : request.parsed_records) {
+        for (const auto& qc : parsed.qc_results) {
+            if (qc_rules.count(qc.qc_rule_id) != 0U) {
+                continue;
+            }
+            const auto rule = qc_service_.find_rule(qc.qc_rule_id);
+            if (!rule.has_value()) {
+                return {labbridge::core::Status::failure(
+                            labbridge::core::StatusCode::NotFound,
+                            "qc rule is not found"),
+                        {},
+                        {},
+                        {}};
+            }
+            if (!rule->enabled) {
+                return {labbridge::core::Status::failure(
+                            labbridge::core::StatusCode::Conflict,
+                            "qc rule is disabled"),
+                        {},
+                        {},
+                        {}};
+            }
+            qc_rules.emplace(qc.qc_rule_id, std::move(*rule));
+        }
+    }
+
     TaskRunReportResult result;
     result.status = labbridge::core::Status::success();
+    // 同一 run 的多条记录常共享 raw file，按 raw_file_id 缓存已校验文件。
+    std::unordered_map<std::string, RawFileRecord> verified_raw_files;
     for (const auto& parsed : request.parsed_records) {
-        const auto parsed_record = result_service_.record_parsed_record({
-            request.task_run_id,
-            parsed.raw_file_id,
-            parsed.record,
-            parsed.parse_status,
-        });
+        auto raw_file = verified_raw_files.find(parsed.raw_file_id);
+        if (raw_file == verified_raw_files.end()) {
+            auto stored = result_service_.find_raw_file(parsed.raw_file_id);
+            if (!stored.has_value()) {
+                result.status = labbridge::core::Status::failure(
+                    labbridge::core::StatusCode::NotFound,
+                    "raw file is not found");
+                return result;
+            }
+            if (stored->task_run_id != request.task_run_id) {
+                result.status = labbridge::core::Status::failure(
+                    labbridge::core::StatusCode::Conflict,
+                    "raw file does not belong to task run");
+                return result;
+            }
+            raw_file = verified_raw_files
+                           .emplace(parsed.raw_file_id, std::move(*stored))
+                           .first;
+        }
+
+        const auto parsed_record = result_service_.record_parsed_record(
+            {
+                request.task_run_id,
+                parsed.raw_file_id,
+                parsed.record,
+                parsed.parse_status,
+            },
+            raw_file->second);
         if (!parsed_record.status.ok) {
             result.status = parsed_record.status;
             return result;
@@ -298,10 +357,10 @@ TaskRunReportResult AgentReportService::accept_task_run_report(
                 result.status = qc_result.status;
                 return result;
             }
-            result.qc_result_ids.push_back(qc_result.id);
+            result.qc_result_ids.push_back(qc_result.record.id);
 
-            const auto alert =
-                alert_service_.create_from_qc_result_if_needed({qc_result.id});
+            const auto alert = alert_service_.create_alert(
+                qc_result.record, request.task_run_id, request.node_code);
             if (!alert.status.ok) {
                 result.status = alert.status;
                 return result;
@@ -334,28 +393,33 @@ TaskRunReportResult AgentReportService::accept_task_run_report(
     return result;
 }
 
-labbridge::core::Status AgentReportService::validate_task_run_node(
+AgentReportService::TaskRunOwnership
+AgentReportService::validate_task_run_node(
     const std::string& task_run_id,
     const std::string& node_code) const {
     if (task_run_id.empty()) {
-        return labbridge::core::Status::failure("task_run_id is required");
+        return {labbridge::core::Status::failure("task_run_id is required"),
+                std::nullopt};
     }
     if (node_code.empty()) {
-        return labbridge::core::Status::failure("node_code is required");
+        return {labbridge::core::Status::failure("node_code is required"),
+                std::nullopt};
     }
 
     const auto task_run = task_run_service_.find_run(task_run_id);
     if (!task_run.has_value()) {
-        return labbridge::core::Status::failure(
-            labbridge::core::StatusCode::NotFound,
-            "task run is not found");
+        return {labbridge::core::Status::failure(
+                    labbridge::core::StatusCode::NotFound,
+                    "task run is not found"),
+                std::nullopt};
     }
     if (task_run->node_code != node_code) {
-        return labbridge::core::Status::failure(
-            labbridge::core::StatusCode::Conflict,
-            "task run does not belong to node");
+        return {labbridge::core::Status::failure(
+                    labbridge::core::StatusCode::Conflict,
+                    "task run does not belong to node"),
+                std::nullopt};
     }
-    return labbridge::core::Status::success();
+    return {labbridge::core::Status::success(), std::move(task_run)};
 }
 
 }  // namespace labbridge::server

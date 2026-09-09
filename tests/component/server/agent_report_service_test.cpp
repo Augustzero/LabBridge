@@ -1,11 +1,11 @@
 #include "support/server/in_memory_repositories.h"
+#include "support/server/test_config_seed.h"
 #include "labbridge/core/version.h"
 #include "labbridge/server/application/agent_report_service.h"
 #include "labbridge/server/application/alert_service.h"
 #include "labbridge/server/application/config_service.h"
 #include "labbridge/server/application/node_service.h"
 #include "labbridge/server/application/qc_service.h"
-#include "labbridge/server/application/query_service.h"
 #include "labbridge/server/application/result_service.h"
 #include "labbridge/server/application/task_run_service.h"
 
@@ -24,37 +24,6 @@ bool contains_id(const std::vector<std::string>& ids, const std::string& id) {
     return false;
 }
 
-bool contains_qc_result(const std::vector<labbridge::server::QcResultRecord>& results,
-                        const std::string& qc_result_id) {
-    for (const auto& result : results) {
-        if (result.id == qc_result_id) {
-            return true;
-        }
-    }
-    return false;
-}
-
-bool contains_alert(const std::vector<labbridge::server::AlertRecord>& alerts,
-                    const std::string& alert_id) {
-    for (const auto& alert : alerts) {
-        if (alert.id == alert_id) {
-            return true;
-        }
-    }
-    return false;
-}
-
-const labbridge::server::RawFileRecord* find_raw_file(
-    const std::vector<labbridge::server::RawFileRecord>& raw_files,
-    const std::string& raw_file_id) {
-    for (const auto& raw_file : raw_files) {
-        if (raw_file.id == raw_file_id) {
-            return &raw_file;
-        }
-    }
-    return nullptr;
-}
-
 }  // namespace
 
 TEST(AgentReportServiceTest, ProcessesManifestAndTaskRunReport) {
@@ -67,10 +36,10 @@ TEST(AgentReportServiceTest, ProcessesManifestAndTaskRunReport) {
     labbridge::server::InMemoryAgentReportReceiptRepository receipt_repository;
 
     labbridge::server::NodeService node_service{node_repository};
-    labbridge::server::ConfigService config_service{node_repository, config_repository};
+    labbridge::server::ConfigService config_service{config_repository};
     labbridge::server::TaskRunService task_run_service{config_repository, task_run_repository};
     labbridge::server::ResultService result_service{task_run_repository, result_repository};
-    labbridge::server::QcService qc_service{result_repository, qc_repository};
+    labbridge::server::QcService qc_service{qc_repository};
     labbridge::server::AlertService alert_service{
         task_run_repository,
         result_repository,
@@ -82,13 +51,6 @@ TEST(AgentReportServiceTest, ProcessesManifestAndTaskRunReport) {
         qc_service,
         alert_service,
         receipt_repository};
-    labbridge::server::ControlPlaneQueryService query_service{
-        node_repository,
-        config_repository,
-        task_run_repository,
-        result_repository,
-        qc_repository,
-        alert_repository};
 
     const std::string node_code = "lab-node-report-016";
     const std::string other_node_code = "lab-node-report-016-other";
@@ -98,34 +60,20 @@ TEST(AgentReportServiceTest, ProcessesManifestAndTaskRunReport) {
     ASSERT_TRUE(node_service.accept_heartbeat({
                node_code,
                labbridge::core::kVersion,
-               "2026-06-02 10:00:00+08",
+               "2026-06-02T02:00:00Z",
            }).ok);
 
-    const auto data_source = config_service.create_data_source({
-        node_code,
-        labbridge::core::SourceType::LocalDirectory,
-        "phase16 local csv dir",
-        "{}",
-        true,
-    });
-    ASSERT_TRUE(data_source.status.ok);
-
-    const auto task = config_service.create_task({
-        node_code,
-        data_source.id,
-        "phase16 agent reported csv",
-        "collect_parse_qc",
-        "* * * * *",
-        "csv_observation",
-        "basic",
-        true,
-    });
-    ASSERT_TRUE(task.status.ok);
+    const auto data_source_id =
+        labbridge::server::test_support::create_local_csv_data_source(
+            config_repository, node_code, "phase16 local csv dir");
+    const auto task_id = labbridge::server::test_support::create_csv_task(
+        config_repository, node_code, data_source_id,
+        "phase16 agent reported csv");
 
     const auto started = task_run_service.start({
         node_code,
-        task.id,
-        "2026-06-02 10:01:00+08",
+        task_id,
+        "2026-06-02T02:01:00Z",
         "agent_report",
     });
     ASSERT_TRUE(started.status.ok);
@@ -148,7 +96,7 @@ TEST(AgentReportServiceTest, ProcessesManifestAndTaskRunReport) {
                 "phase16-hash-archived",
                 "/archive/phase16/phase16_observation.csv",
                 256,
-                "2026-06-02 09:59:00+08",
+                "2026-06-02T01:59:00Z",
                 "archived",
             },
         },
@@ -169,7 +117,7 @@ TEST(AgentReportServiceTest, ProcessesManifestAndTaskRunReport) {
         node_code,
         "phase16-invalid-status-report",
         labbridge::core::TaskRunStatus::Running,
-        "2026-06-02 10:03:00+08",
+        "2026-06-02T02:03:00Z",
         1,
         0,
         1,
@@ -178,12 +126,12 @@ TEST(AgentReportServiceTest, ProcessesManifestAndTaskRunReport) {
     });
     ASSERT_TRUE(!invalid_status_report.status.ok);
 
-    const auto report = agent_report_service.accept_task_run_report({
+    const auto unknown_rule_report = agent_report_service.accept_task_run_report({
         started.id,
         node_code,
-        "phase16-report",
+        "phase16-unknown-rule-report",
         labbridge::core::TaskRunStatus::Failed,
-        "2026-06-02 10:03:00+08",
+        "2026-06-02T02:03:00Z",
         1,
         0,
         1,
@@ -194,7 +142,97 @@ TEST(AgentReportServiceTest, ProcessesManifestAndTaskRunReport) {
                 {
                     "station-a",
                     "device-a",
-                    "2026-06-02 10:00:00+08",
+                    "2026-06-02T02:00:00Z",
+                    "[48.5]",
+                },
+                "parsed",
+                {
+                    {"999999", "failed", "failed", "unknown rule"},
+                },
+            },
+        },
+    });
+    ASSERT_TRUE(!unknown_rule_report.status.ok);
+    ASSERT_TRUE(unknown_rule_report.status.code ==
+               labbridge::core::StatusCode::NotFound);
+
+    // 空 ID 属于参数缺失（400），不得因先查库而退化为 404。
+    const auto empty_rule_report = agent_report_service.accept_task_run_report({
+        started.id,
+        node_code,
+        "phase16-empty-rule-report",
+        labbridge::core::TaskRunStatus::Failed,
+        "2026-06-02T02:03:00Z",
+        1,
+        0,
+        1,
+        "qc failed",
+        {
+            {
+                manifest.raw_file_ids.front(),
+                {
+                    "station-a",
+                    "device-a",
+                    "2026-06-02T02:00:00Z",
+                    "[48.5]",
+                },
+                "parsed",
+                {
+                    {"", "failed", "failed", "empty rule id"},
+                },
+            },
+        },
+    });
+    ASSERT_TRUE(!empty_rule_report.status.ok);
+    ASSERT_TRUE(empty_rule_report.status.code ==
+                labbridge::core::StatusCode::InvalidArgument);
+
+    const auto empty_raw_file_report =
+        agent_report_service.accept_task_run_report({
+            started.id,
+            node_code,
+            "phase16-empty-raw-file-report",
+            labbridge::core::TaskRunStatus::Failed,
+            "2026-06-02T02:03:00Z",
+            1,
+            0,
+            1,
+            "qc failed",
+            {
+                {
+                    "",
+                    {
+                        "station-a",
+                        "device-a",
+                        "2026-06-02T02:00:00Z",
+                        "[48.5]",
+                    },
+                    "parsed",
+                    {},
+                },
+            },
+        });
+    ASSERT_TRUE(!empty_raw_file_report.status.ok);
+    ASSERT_TRUE(empty_raw_file_report.status.code ==
+                labbridge::core::StatusCode::InvalidArgument);
+
+    const auto report = agent_report_service.accept_task_run_report({
+        started.id,
+        node_code,
+        "phase16-report",
+        labbridge::core::TaskRunStatus::Failed,
+        "2026-06-02T02:03:00Z",
+        1,
+        0,
+        1,
+        "qc failed",
+        {
+            {
+                manifest.raw_file_ids.front(),
+                {
+                    "station-a",
+                    "device-a",
+                    "2026-06-02T02:00:00Z",
                     "[48.5]",
                 },
                 "parsed",
@@ -210,29 +248,33 @@ TEST(AgentReportServiceTest, ProcessesManifestAndTaskRunReport) {
     ASSERT_TRUE(report.qc_result_ids.size() == 2);
     ASSERT_TRUE(report.alert_ids.size() == 1);
 
-    const auto detail = query_service.find_task_run_detail(node_code, started.id);
-    ASSERT_TRUE(detail.status.ok);
-    ASSERT_TRUE(detail.task_run.has_value());
-    ASSERT_TRUE(detail.task_run->status == labbridge::core::TaskRunStatus::Failed);
-    ASSERT_TRUE(detail.task_run->items_total == 1);
-    ASSERT_TRUE(detail.task_run->items_failed == 1);
-    ASSERT_TRUE(detail.raw_files.size() == 1);
-    ASSERT_TRUE(detail.parsed_records.size() == 1);
-    ASSERT_TRUE(contains_qc_result(detail.qc_results, report.qc_result_ids.front()));
-    ASSERT_TRUE(contains_qc_result(detail.qc_results, report.qc_result_ids.back()));
-    ASSERT_TRUE(contains_alert(detail.alerts, report.alert_ids.front()));
+    // 逐对象回验：run 终态、raw file、parsed record、qc result、alert。
+    const auto finished = task_run_service.find_run(started.id);
+    ASSERT_TRUE(finished.has_value());
+    ASSERT_TRUE(finished->status == labbridge::core::TaskRunStatus::Failed);
+    ASSERT_TRUE(finished->items_total == 1);
+    ASSERT_TRUE(finished->items_failed == 1);
 
-    const auto* raw_file = find_raw_file(detail.raw_files, manifest.raw_file_ids.front());
-    ASSERT_TRUE(raw_file != nullptr);
+    const auto raw_file = result_repository.find_raw_file(manifest.raw_file_ids.front());
+    ASSERT_TRUE(raw_file.has_value());
     ASSERT_TRUE(raw_file->node_code == node_code);
     ASSERT_TRUE(raw_file->storage_path == "/archive/phase16/phase16_observation.csv");
     ASSERT_TRUE(raw_file->ingest_status == "archived");
 
-    ASSERT_TRUE(contains_id(report.parsed_record_ids, detail.parsed_records.front().id));
-    ASSERT_TRUE(detail.parsed_records.front().raw_file_id == manifest.raw_file_ids.front());
+    const auto parsed_record =
+        result_repository.find_parsed_record(report.parsed_record_ids.front());
+    ASSERT_TRUE(parsed_record.has_value());
+    ASSERT_TRUE(parsed_record->raw_file_id == manifest.raw_file_ids.front());
 
-    const auto node_overview = query_service.find_node_overview(node_code);
-    ASSERT_TRUE(node_overview.status.ok);
-    ASSERT_TRUE(contains_alert(node_overview.alerts, report.alert_ids.front()));
+    for (const auto& qc_result_id : report.qc_result_ids) {
+        const auto qc_result = qc_repository.find_result(qc_result_id);
+        ASSERT_TRUE(qc_result.has_value());
+        ASSERT_TRUE(qc_result->parsed_record_id == parsed_record->id);
+    }
 
+    const auto node_alerts = alert_repository.find_by_node(node_code);
+    ASSERT_TRUE(node_alerts.size() == 1);
+    ASSERT_TRUE(contains_id(
+        std::vector<std::string>{node_alerts.front().id},
+        report.alert_ids.front()));
 }

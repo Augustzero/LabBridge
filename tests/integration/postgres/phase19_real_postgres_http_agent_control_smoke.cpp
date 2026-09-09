@@ -6,6 +6,7 @@
 #include "labbridge/server/postgres/config_repository.h"
 #include "labbridge/server/postgres/node_repository.h"
 #include "labbridge/server/postgres/storage_mapping.h"
+#include "support/server/test_config_seed.h"
 
 #include <drogon/HttpRequest.h>
 #include <drogon/HttpResponse.h>
@@ -111,42 +112,24 @@ int main() {
     labbridge::server::LibpqSqlSession session{connection_info};
     labbridge::server::PostgresNodeRepository node_repository{session};
     labbridge::server::PostgresConfigRepository config_repository{session};
-    labbridge::server::ConfigService config_service{
-        node_repository,
-        config_repository};
 
-    const auto data_source = config_service.create_data_source({
-        node_code,
-        labbridge::core::SourceType::LocalDirectory,
-        "phase19 real local directory",
-        R"({"path":"/data/incoming","pattern":"*.csv"})",
-        true,
-    });
-    assert(data_source.status.ok);
+    const auto data_source =
+        labbridge::server::test_support::create_local_csv_data_source(
+            config_repository, node_code, "phase19 real local directory",
+            R"({"path":"/data/incoming","pattern":"*.csv"})");
+    assert(!data_source.empty());
 
-    const auto enabled_task = config_service.create_task({
-        node_code,
-        data_source.id,
-        "phase19 real enabled task",
-        "collect_parse_qc",
-        "*/5 * * * *",
-        "csv_observation",
-        "basic",
-        true,
-    });
-    assert(enabled_task.status.ok);
+    const auto enabled_task =
+        labbridge::server::test_support::create_csv_task(
+            config_repository, node_code, data_source,
+            "phase19 real enabled task");
+    assert(!enabled_task.empty());
 
-    const auto disabled_task = config_service.create_task({
-        node_code,
-        data_source.id,
-        "phase19 real disabled task",
-        "collect_parse_qc",
-        "* * * * *",
-        "csv_observation",
-        "basic",
-        false,
-    });
-    assert(disabled_task.status.ok);
+    const auto disabled_task =
+        labbridge::server::test_support::create_csv_task(
+            config_repository, node_code, data_source,
+            "phase19 real disabled task", false);
+    assert(!disabled_task.empty());
 
     Json::Value heartbeat;
     heartbeat["node_code"] = node_code;
@@ -163,8 +146,8 @@ int main() {
     assert(config["node"]["node_code"].asString() == node_code);
     assert(config["node"]["status"].asString() == "online");
     assert(!config["node"]["last_heartbeat_at"].asString().empty());
-    assert(contains_task(config["tasks"], enabled_task.id));
-    assert(!contains_task(config["tasks"], disabled_task.id));
+    assert(contains_task(config["tasks"], enabled_task));
+    assert(!contains_task(config["tasks"], disabled_task));
 
     const auto missing_response =
         invoke_config(controller, "lab-node-real-agent-control-019-missing");

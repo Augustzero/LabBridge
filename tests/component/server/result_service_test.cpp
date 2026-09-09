@@ -59,6 +59,13 @@ public:
             return raw_file_row;
         }
 
+        if (sql.find("FROM parsed_records pr") != std::string::npos) {
+            if (parsed_record_row.empty() || parsed_record_row["id"] != params[0]) {
+                return std::nullopt;
+            }
+            return parsed_record_row;
+        }
+
         return std::nullopt;
     }
 
@@ -66,13 +73,7 @@ public:
         const std::string& sql,
         const labbridge::server::SqlParams& params) override {
         queried.push_back({sql, params});
-        if (sql.find("FROM parsed_records") == std::string::npos || parsed_record_row.empty()) {
-            return {};
-        }
-        if (parsed_record_row["task_run_id"] != params[0]) {
-            return {};
-        }
-        return {parsed_record_row};
+        return {};
     }
 
     std::vector<RecordedStatement> executed;
@@ -123,39 +124,49 @@ TEST(ResultServiceTest, PersistsAndReadsRawAndParsedResults) {
     EXPECT_TRUE(session.queried.back().sql.find("INSERT INTO raw_files") != std::string::npos);
     EXPECT_TRUE(session.queried.back().params[1] == "lab-node-result-008");
 
-    const auto missing_raw_file_record = result_service.record_parsed_record({
-        task_run_id,
-        "missing-raw-file",
-        {
-            "station-a",
-            "device-a",
-            "2026-05-26 10:00:00+08",
-            R"({"temperature":21.5})",
-        },
-        "parsed",
-    });
-    EXPECT_TRUE(!missing_raw_file_record.status.ok);
+    const auto stored_raw_file = result_service.find_raw_file(raw_file.id);
+    ASSERT_TRUE(stored_raw_file.has_value());
 
-    const auto parsed_record = result_service.record_parsed_record({
-        task_run_id,
-        raw_file.id,
+    // 调用方传入归属其他 run 的 raw file 时必须拒绝。
+    auto foreign_raw_file = *stored_raw_file;
+    foreign_raw_file.task_run_id = "other-run";
+    const auto foreign_record = result_service.record_parsed_record(
         {
-            "station-a",
-            "device-a",
-            "2026-05-26 10:00:00+08",
-            R"({"temperature":21.5})",
+            task_run_id,
+            raw_file.id,
+            {
+                "station-a",
+                "device-a",
+                "2026-05-26 10:00:00+08",
+                R"({"temperature":21.5})",
+            },
+            "parsed",
         },
-        "parsed",
-    });
+        foreign_raw_file);
+    EXPECT_TRUE(!foreign_record.status.ok);
+
+    const auto parsed_record = result_service.record_parsed_record(
+        {
+            task_run_id,
+            raw_file.id,
+            {
+                "station-a",
+                "device-a",
+                "2026-05-26 10:00:00+08",
+                R"({"temperature":21.5})",
+            },
+            "parsed",
+        },
+        *stored_raw_file);
     EXPECT_TRUE(parsed_record.status.ok);
     EXPECT_TRUE(parsed_record.id == "901");
     EXPECT_TRUE(session.queried.back().sql.find("INSERT INTO parsed_records") != std::string::npos);
     EXPECT_TRUE(session.queried.back().params[5] == R"({"temperature":21.5})");
 
-    const auto parsed_records = result_service.find_parsed_records(task_run_id);
-    EXPECT_TRUE(parsed_records.size() == 1);
-    EXPECT_TRUE(parsed_records.front().raw_file_id == raw_file.id);
-    EXPECT_TRUE(parsed_records.front().record.station_code == "station-a");
-    EXPECT_TRUE(parsed_records.front().record.payload_json == R"({"temperature":21.5})");
-
+    const auto persisted_record =
+        result_repository.find_parsed_record(parsed_record.id);
+    ASSERT_TRUE(persisted_record.has_value());
+    EXPECT_TRUE(persisted_record->raw_file_id == raw_file.id);
+    EXPECT_TRUE(persisted_record->record.station_code == "station-a");
+    EXPECT_TRUE(persisted_record->record.payload_json == R"({"temperature":21.5})");
 }

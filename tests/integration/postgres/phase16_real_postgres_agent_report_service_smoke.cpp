@@ -1,4 +1,5 @@
 #include "support/server/in_memory_repositories.h"
+#include "support/server/test_config_seed.h"
 #include "labbridge/core/version.h"
 #include "labbridge/server/application/agent_report_service.h"
 #include "labbridge/server/application/alert_service.h"
@@ -12,7 +13,6 @@
 #include "labbridge/server/postgres/result_repository.h"
 #include "labbridge/server/postgres/task_run_repository.h"
 #include "labbridge/server/application/qc_service.h"
-#include "labbridge/server/application/query_service.h"
 #include "labbridge/server/application/result_service.h"
 #include "labbridge/server/postgres/storage_mapping.h"
 #include "labbridge/server/application/task_run_service.h"
@@ -22,30 +22,6 @@
 #include <iostream>
 #include <string>
 #include <vector>
-
-namespace {
-
-bool contains_qc_result(const std::vector<labbridge::server::QcResultRecord>& results,
-                        const std::string& qc_result_id) {
-    for (const auto& result : results) {
-        if (result.id == qc_result_id) {
-            return true;
-        }
-    }
-    return false;
-}
-
-bool contains_alert(const std::vector<labbridge::server::AlertRecord>& alerts,
-                    const std::string& alert_id) {
-    for (const auto& alert : alerts) {
-        if (alert.id == alert_id) {
-            return true;
-        }
-    }
-    return false;
-}
-
-}  // namespace
 
 int main() {
     const char* connection_info = std::getenv("LABBRIDGE_DATABASE_URL");
@@ -64,10 +40,9 @@ int main() {
     labbridge::server::InMemoryAgentReportReceiptRepository receipt_repository;
 
     labbridge::server::NodeService node_service{node_repository};
-    labbridge::server::ConfigService config_service{node_repository, config_repository};
     labbridge::server::TaskRunService task_run_service{config_repository, task_run_repository};
     labbridge::server::ResultService result_service{task_run_repository, result_repository};
-    labbridge::server::QcService qc_service{result_repository, qc_repository};
+    labbridge::server::QcService qc_service{qc_repository};
     labbridge::server::AlertService alert_service{
         task_run_repository,
         result_repository,
@@ -79,13 +54,6 @@ int main() {
         qc_service,
         alert_service,
         receipt_repository};
-    labbridge::server::ControlPlaneQueryService query_service{
-        node_repository,
-        config_repository,
-        task_run_repository,
-        result_repository,
-        qc_repository,
-        alert_repository};
 
     const std::string node_code = "lab-node-real-report-016";
     const std::string other_node_code = "lab-node-real-report-016-other";
@@ -95,36 +63,23 @@ int main() {
     assert(node_service.accept_heartbeat({
                node_code,
                labbridge::core::kVersion,
-               "2026-06-02 10:00:00+08",
+               "2026-06-02T02:00:00Z",
            }).ok);
 
-    const auto data_source = config_service.create_data_source({
-        node_code,
-        labbridge::core::SourceType::LocalDirectory,
-        "phase16 local csv dir",
-        "{}",
-        true,
-    });
-    assert(data_source.status.ok);
-    assert(!data_source.id.empty());
+    const auto data_source =
+        labbridge::server::test_support::create_local_csv_data_source(
+            config_repository, node_code, "phase16 local csv dir");
+    assert(!data_source.empty());
 
-    const auto task = config_service.create_task({
-        node_code,
-        data_source.id,
-        "phase16 agent reported csv",
-        "collect_parse_qc",
-        "* * * * *",
-        "csv_observation",
-        "basic",
-        true,
-    });
-    assert(task.status.ok);
-    assert(!task.id.empty());
+    const auto task = labbridge::server::test_support::create_csv_task(
+        config_repository, node_code, data_source,
+        "phase16 agent reported csv");
+    assert(!task.empty());
 
     const auto started = task_run_service.start({
         node_code,
-        task.id,
-        "2026-06-02 10:01:00+08",
+        task,
+        "2026-06-02T02:01:00Z",
         "agent_report",
     });
     assert(started.status.ok);
@@ -148,7 +103,7 @@ int main() {
                 "phase16-real-hash-archived",
                 "/archive/phase16/phase16_observation.csv",
                 256,
-                "2026-06-02 09:59:00+08",
+                "2026-06-02T01:59:00Z",
                 "archived",
             },
         },
@@ -170,7 +125,7 @@ int main() {
         node_code,
         "phase16-real-report",
         labbridge::core::TaskRunStatus::Failed,
-        "2026-06-02 10:03:00+08",
+        "2026-06-02T02:03:00Z",
         1,
         0,
         1,
@@ -181,7 +136,7 @@ int main() {
                 {
                     "station-a",
                     "device-a",
-                    "2026-06-02 10:00:00+08",
+                    "2026-06-02T02:00:00Z",
                     "[48.5]",
                 },
                 "parsed",
@@ -197,15 +152,18 @@ int main() {
     assert(report.qc_result_ids.size() == 2);
     assert(report.alert_ids.size() == 1);
 
-    const auto detail = query_service.find_task_run_detail(node_code, started.id);
-    assert(detail.status.ok);
-    assert(detail.task_run.has_value());
-    assert(detail.task_run->status == labbridge::core::TaskRunStatus::Failed);
-    assert(detail.raw_files.size() == 1);
-    assert(detail.parsed_records.size() == 1);
-    assert(contains_qc_result(detail.qc_results, report.qc_result_ids.front()));
-    assert(contains_qc_result(detail.qc_results, report.qc_result_ids.back()));
-    assert(contains_alert(detail.alerts, report.alert_ids.front()));
+    // 逐对象回验，替代已删除的查询聚合服务。
+    const auto finished = task_run_service.find_run(started.id);
+    assert(finished.has_value());
+    assert(finished->status == labbridge::core::TaskRunStatus::Failed);
+    assert(result_repository.find_raw_file(manifest.raw_file_ids.front())
+               .has_value());
+    assert(result_repository
+               .find_parsed_record(report.parsed_record_ids.front())
+               .has_value());
+    assert(qc_repository.find_result(report.qc_result_ids.front()).has_value());
+    assert(qc_repository.find_result(report.qc_result_ids.back()).has_value());
+    assert(alert_repository.find_by_task_run(started.id).size() == 1);
 
     const auto persisted = session.query_one(
         "SELECT n.node_code, tr.id::text AS task_run_id, tr.status, "

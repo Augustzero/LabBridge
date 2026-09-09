@@ -1,15 +1,14 @@
 #include "labbridge/server/application/management_command_service.h"
 
+#include "labbridge/server/application/id_validation.h"
+
 #include "labbridge/core/cron_schedule.h"
 
 #include <nlohmann/json.hpp>
 
 #include <cctype>
-#include <charconv>
-#include <limits>
 #include <optional>
 #include <stdexcept>
-#include <system_error>
 #include <unordered_set>
 #include <utility>
 
@@ -45,20 +44,6 @@ bool is_blank(const std::string& value) {
         }
     }
     return true;
-}
-
-bool is_positive_id(const std::string& value) {
-    if (value.empty()) {
-        return false;
-    }
-    unsigned long long parsed = 0;
-    const auto result = std::from_chars(
-        value.data(), value.data() + value.size(), parsed);
-    return result.ec == std::errc{} &&
-           result.ptr == value.data() + value.size() &&
-           parsed > 0 &&
-           parsed <= static_cast<unsigned long long>(
-               std::numeric_limits<long long>::max());
 }
 
 bool is_supported_rule_type(const std::string& rule_type) {
@@ -285,6 +270,9 @@ ManagementCommandResult ManagementCommandService::set_task_enabled(
     return successful_result(task_id, std::move(updated_task));
 }
 
+// 校验存量依赖的可执行性（node / data source / qc rule）。
+// task_type / parser / cron / 数量在 create_task 请求级已校验，
+// enable 路径的存量任务创建时也已通过同一校验，这里不再重查。
 Status ManagementCommandService::validate_task_dependencies(
     const TaskRecord& task,
     const std::vector<std::string>& qc_rule_ids) const {
@@ -315,19 +303,6 @@ Status ManagementCommandService::validate_task_dependencies(
         !source_config->at("extension").is_string() ||
         source_config->at("extension").get<std::string>() != ".csv") {
         return conflict("data source config is not executable by CSV tasks");
-    }
-    if (task.task_type != "local_file_import" ||
-        task.parser_type != "csv_observation") {
-        return conflict("task type or parser is not executable");
-    }
-    try {
-        static_cast<void>(
-            labbridge::core::CronSchedule::parse(task.schedule_expr));
-    } catch (const std::invalid_argument&) {
-        return conflict("task schedule is not executable");
-    }
-    if (qc_rule_ids.empty() || qc_rule_ids.size() > kMaximumQcRulesPerTask) {
-        return conflict("task must bind 1 to 5 QC rules");
     }
     for (const auto& qc_rule_id : qc_rule_ids) {
         const auto rule = qc_repository_.find_rule(qc_rule_id);

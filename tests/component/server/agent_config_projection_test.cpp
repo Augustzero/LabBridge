@@ -3,6 +3,7 @@
 #include "labbridge/server/application/node_service.h"
 #include "labbridge/server/http/agent_control_http_controller.h"
 #include "support/server/in_memory_repositories.h"
+#include "support/server/test_config_seed.h"
 
 #include <gtest/gtest.h>
 
@@ -29,53 +30,33 @@ TEST(AgentConfigProjectionTest, ReturnsOnlyCompleteEnabledProjection) {
     labbridge::server::InMemoryNodeRepository nodes;
     labbridge::server::InMemoryConfigRepository configs;
     labbridge::server::NodeService node_service{nodes};
-    labbridge::server::ConfigService config_service{nodes, configs};
+    labbridge::server::ConfigService config_service{configs};
     labbridge::server::AgentControlService service{
         node_service,
         config_service};
 
     ASSERT_TRUE(service.register_node({"node-22", "Node 22", "0.1.0"}).ok);
-    const auto enabled_source = config_service.create_data_source({
-        "node-22",
-        labbridge::core::SourceType::LocalDirectory,
-        "enabled source",
-        R"({"root_path":"/data/incoming","extension":".csv"})",
-        true,
-    });
-    const auto disabled_source = config_service.create_data_source({
-        "node-22",
-        labbridge::core::SourceType::LocalDirectory,
-        "disabled source",
-        R"({"root_path":"/data/disabled","extension":".csv"})",
-        false,
-    });
-    ASSERT_TRUE(enabled_source.status.ok);
-    ASSERT_TRUE(disabled_source.status.ok);
+    const auto enabled_source = labbridge::server::test_support::
+        create_local_csv_data_source(
+            configs, "node-22", "enabled source",
+            R"({"root_path":"/data/incoming","extension":".csv"})");
+    const auto disabled_source = labbridge::server::test_support::
+        create_local_csv_data_source(
+            configs, "node-22", "disabled source",
+            R"({"root_path":"/data/disabled","extension":".csv"})",
+            false);
+    ASSERT_FALSE(enabled_source.empty());
+    ASSERT_FALSE(disabled_source.empty());
 
-    const auto task = config_service.create_task({
-        "node-22",
-        enabled_source.id,
-        "executable task",
-        "local_file_import",
-        "*/5 * * * *",
-        "csv_observation",
-        "basic",
-        true,
-    });
-    const auto incomplete_task = config_service.create_task({
-        "node-22",
-        disabled_source.id,
-        "incomplete task",
-        "local_file_import",
-        "*/5 * * * *",
-        "csv_observation",
-        "basic",
-        true,
-    });
-    ASSERT_TRUE(task.status.ok);
-    ASSERT_TRUE(incomplete_task.status.ok);
+    const auto task = labbridge::server::test_support::create_csv_task(
+        configs, "node-22", enabled_source, "executable task");
+    const auto incomplete_task =
+        labbridge::server::test_support::create_csv_task(
+            configs, "node-22", disabled_source, "incomplete task");
+    ASSERT_FALSE(task.empty());
+    ASSERT_FALSE(incomplete_task.empty());
     configs.add_task_qc_rule_projection({
-        task.id,
+        task,
         "rule-22",
         "required_fields",
         "required fields",
@@ -88,10 +69,10 @@ TEST(AgentConfigProjectionTest, ReturnsOnlyCompleteEnabledProjection) {
     ASSERT_EQ(projection.enabled_tasks.size(), 1U);
     ASSERT_EQ(projection.data_sources.size(), 1U);
     ASSERT_EQ(projection.task_qc_rules.size(), 1U);
-    EXPECT_EQ(projection.enabled_tasks.front().id, task.id);
+    EXPECT_EQ(projection.enabled_tasks.front().id, task);
     EXPECT_EQ(projection.enabled_tasks.front().qc_rule_ids,
               std::vector<std::string>{"rule-22"});
-    EXPECT_EQ(projection.data_sources.front().id, enabled_source.id);
+    EXPECT_EQ(projection.data_sources.front().id, enabled_source);
 
     labbridge::server::AgentControlHttpController controller{
         [&service](const labbridge::core::NodeInfo& node) {

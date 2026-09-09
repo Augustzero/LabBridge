@@ -79,6 +79,17 @@ LibpqSqlSession::LibpqSqlSession(const std::string& connection_info) {
         }
         throw error;
     }
+
+    // TIMESTAMPTZ 的无偏移字符串写入与 to_char 读取都按会话时区解释，
+    // 必须固定为 UTC，否则非 UTC 库上时间整体偏移。
+    ResultGuard timezone(PQexec(connection_, "SET TIME ZONE 'UTC'"));
+    if (timezone.get() == nullptr ||
+        PQresultStatus(timezone.get()) != PGRES_COMMAND_OK) {
+        auto error = make_error(connection_, "failed to set session timezone to UTC");
+        PQfinish(connection_);
+        connection_ = nullptr;
+        throw error;
+    }
 }
 
 LibpqSqlSession::~LibpqSqlSession() {

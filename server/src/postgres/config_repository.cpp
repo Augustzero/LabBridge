@@ -79,12 +79,10 @@ std::optional<DataSourceRecord> PostgresConfigRepository::find_data_source(
     static const std::string sql =
         "SELECT ds.id::text AS id, n.node_code, ds.source_type, ds.name, "
         "ds.config_json::text AS config_json, "
-        "CASE WHEN ds.enabled THEN 'true' ELSE 'false' END AS enabled, "
-        "to_char(ds.created_at AT TIME ZONE 'UTC', "
-        "'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS created_at, "
-        "to_char(ds.updated_at AT TIME ZONE 'UTC', "
-        "'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS updated_at "
-        "FROM data_sources ds "
+        "CASE WHEN ds.enabled THEN 'true' ELSE 'false' END AS enabled, " +
+        storage::utc_column("ds.created_at", "created_at") + ", " +
+        storage::utc_column("ds.updated_at", "updated_at") +
+        " FROM data_sources ds "
         "JOIN nodes n ON n.id = ds.node_id "
         "WHERE ds.id = $1::bigint "
         "LIMIT 1";
@@ -128,12 +126,10 @@ std::optional<TaskRecord> PostgresConfigRepository::find_task(const std::string&
         "SELECT t.id::text AS id, n.node_code, t.data_source_id::text AS data_source_id, "
         "t.name, t.task_type, t.schedule_expr, t.parser_type, "
         "COALESCE(t.qc_profile, '') AS qc_profile, "
-        "CASE WHEN t.enabled THEN 'true' ELSE 'false' END AS enabled, "
-        "to_char(t.created_at AT TIME ZONE 'UTC', "
-        "'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS created_at, "
-        "to_char(t.updated_at AT TIME ZONE 'UTC', "
-        "'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS updated_at "
-        "FROM tasks t "
+        "CASE WHEN t.enabled THEN 'true' ELSE 'false' END AS enabled, " +
+        storage::utc_column("t.created_at", "created_at") + ", " +
+        storage::utc_column("t.updated_at", "updated_at") +
+        " FROM tasks t "
         "JOIN nodes n ON n.id = t.node_id "
         "WHERE t.id = $1::bigint "
         "LIMIT 1";

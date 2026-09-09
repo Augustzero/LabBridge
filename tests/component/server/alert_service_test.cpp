@@ -31,12 +31,6 @@ public:
         return repository_.find_result(qc_result_id);
     }
 
-    std::vector<labbridge::server::QcResultRecord>
-    find_results_by_parsed_record(
-        const std::string& parsed_record_id) const override {
-        return repository_.find_results_by_parsed_record(parsed_record_id);
-    }
-
     mutable int find_result_calls{0};
 
 private:

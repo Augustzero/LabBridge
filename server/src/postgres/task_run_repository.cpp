@@ -95,17 +95,14 @@ ScheduledTaskRunStart PostgresTaskRunRepository::create_or_find_scheduled(
 
     // INSERT 在并发冲突时会等待首次事务结束；下一条语句的新快照可读取其结果。
     static const std::string existing_sql =
-        "SELECT tr.id::text AS id, tr.task_id::text AS task_id, n.node_code, tr.status, "
-        "COALESCE(to_char(tr.started_at AT TIME ZONE 'UTC', "
-        "'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'), '') AS started_at, "
-        "COALESCE(to_char(tr.finished_at AT TIME ZONE 'UTC', "
-        "'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'), '') AS finished_at, "
+        "SELECT tr.id::text AS id, tr.task_id::text AS task_id, n.node_code, tr.status, " +
+        storage::utc_column("tr.started_at", "started_at") + ", " +
+        storage::utc_column("tr.finished_at", "finished_at") + ", "
         "tr.items_total::text AS items_total, tr.items_success::text AS items_success, "
         "tr.items_failed::text AS items_failed, COALESCE(tr.error_summary, '') AS error_summary, "
-        "tr.trigger_type, COALESCE(tr.execution_key, '') AS execution_key, "
-        "COALESCE(to_char(tr.scheduled_for AT TIME ZONE 'UTC', "
-        "'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'), '') AS scheduled_for "
-        "FROM task_runs tr "
+        "tr.trigger_type, COALESCE(tr.execution_key, '') AS execution_key, " +
+        storage::utc_column("tr.scheduled_for", "scheduled_for") +
+        " FROM task_runs tr "
         "JOIN nodes n ON n.id = tr.node_id "
         "WHERE n.node_code = $1 AND tr.execution_key = $2 "
         "LIMIT 1";
@@ -120,15 +117,14 @@ ScheduledTaskRunStart PostgresTaskRunRepository::create_or_find_scheduled(
 std::optional<TaskRunRecord> PostgresTaskRunRepository::find_by_id(
     const std::string& task_run_id) const {
     static const std::string sql =
-        "SELECT tr.id::text AS id, tr.task_id::text AS task_id, n.node_code, tr.status, "
-        "COALESCE(to_char(tr.started_at, 'YYYY-MM-DD HH24:MI:SS'), '') AS started_at, "
-        "COALESCE(to_char(tr.finished_at, 'YYYY-MM-DD HH24:MI:SS'), '') AS finished_at, "
+        "SELECT tr.id::text AS id, tr.task_id::text AS task_id, n.node_code, tr.status, " +
+        storage::utc_column("tr.started_at", "started_at") + ", " +
+        storage::utc_column("tr.finished_at", "finished_at") + ", "
         "tr.items_total::text AS items_total, tr.items_success::text AS items_success, "
         "tr.items_failed::text AS items_failed, COALESCE(tr.error_summary, '') AS error_summary, "
-        "tr.trigger_type, COALESCE(tr.execution_key, '') AS execution_key, "
-        "COALESCE(to_char(tr.scheduled_for AT TIME ZONE 'UTC', "
-        "'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'), '') AS scheduled_for "
-        "FROM task_runs tr "
+        "tr.trigger_type, COALESCE(tr.execution_key, '') AS execution_key, " +
+        storage::utc_column("tr.scheduled_for", "scheduled_for") +
+        " FROM task_runs tr "
         "JOIN nodes n ON n.id = tr.node_id "
         "WHERE tr.id = $1::bigint "
         "LIMIT 1";
