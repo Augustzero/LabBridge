@@ -1,7 +1,7 @@
 #include "labbridge/agent/runtime/agent_runtime.h"
 
-#include "labbridge/agent/bootstrap/utc_time.h"
 #include "labbridge/core/logging.h"
+#include "labbridge/core/utc_time.h"
 
 #include <algorithm>
 #include <sstream>
@@ -120,13 +120,7 @@ PulledAgentConfig AgentRuntime::run() {
                         continue;
                     }
                 } catch (const ControlPlaneClientError& error) {
-                    const auto status = error.http_status();
-                    const bool transient =
-                        error.kind() == ControlPlaneErrorKind::Network ||
-                        error.kind() == ControlPlaneErrorKind::ServerError ||
-                        status == 408 || status == 429 ||
-                        (status >= 500 && status <= 599);
-                    if (!transient) {
+                    if (!error.is_transient()) {
                         throw;
                     }
                     log_control_plane_failure("reconnect", error);
@@ -164,7 +158,7 @@ bool AgentRuntime::reconnect() {
         return false;
     }
     client_.send_heartbeat({node_.node_code, node_.agent_version,
-                            format_utc_timestamp(time_source_.system_now())});
+                            labbridge::core::format_utc_timestamp(time_source_.system_now())});
     if (stop_requested()) {
         return false;
     }
@@ -195,7 +189,7 @@ void AgentRuntime::send_heartbeat() {
         client_.send_heartbeat({
             node_.node_code,
             node_.agent_version,
-            format_utc_timestamp(time_source_.system_now()),
+            labbridge::core::format_utc_timestamp(time_source_.system_now()),
         });
     } catch (const ControlPlaneClientError& error) {
         log_control_plane_failure("heartbeat", error);

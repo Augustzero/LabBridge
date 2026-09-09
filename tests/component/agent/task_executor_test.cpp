@@ -1,5 +1,7 @@
 #include "labbridge/agent/execution/task_executor.h"
+#include "labbridge/agent/execution/reliable_delivery_client.h"
 #include "labbridge/agent/storage/agent_queue_store.h"
+#include "labbridge/core/utc_time.h"
 
 #include <gtest/gtest.h>
 
@@ -50,6 +52,9 @@ public:
         }
         std::filesystem::remove(work_, ignored);
         std::filesystem::remove(inbox_, ignored);
+        std::filesystem::remove(queue_database(), ignored);
+        std::filesystem::remove(queue_database().string() + "-wal", ignored);
+        std::filesystem::remove(queue_database().string() + "-shm", ignored);
         std::filesystem::remove(root_, ignored);
     }
 
@@ -101,6 +106,14 @@ public:
         return work_;
     }
 
+    const std::filesystem::path& root() const {
+        return root_;
+    }
+
+    std::filesystem::path queue_database() const {
+        return root_ / "queue.db";
+    }
+
 private:
     std::filesystem::path root_;
     std::filesystem::path inbox_;
@@ -141,6 +154,13 @@ public:
         const labbridge::agent::TaskRunReportRequest& request) const override {
         events.push_back("report");
         reports.push_back(request);
+        if (fail_next_report_retryable) {
+            fail_next_report_retryable = false;
+            throw labbridge::agent::TaskExecutionClientError{
+                labbridge::agent::TaskExecutionErrorKind::ServerError,
+                "simulated retryable report failure",
+                503};
+        }
         if (fail_next_report) {
             fail_next_report = false;
             throw std::runtime_error("simulated report transport failure");
@@ -154,6 +174,7 @@ public:
     mutable std::vector<labbridge::agent::TaskRunReportRequest> reports;
     mutable int run_sequence{0};
     mutable bool fail_next_report{false};
+    mutable bool fail_next_report_retryable{false};
     std::function<void()> on_start;
     bool return_wrong_manifest_count{false};
 };
@@ -197,45 +218,74 @@ auto fixed_now() {
     };
 }
 
+using QueueExecutor = labbridge::agent::TaskExecutor;
+
+QueueExecutor make_executor(FakeExecutionClient& client,
+                            labbridge::agent::AgentQueueStore& store,
+                            const TemporaryExecutionTree& tree) {
+    return QueueExecutor{
+        client, store, tree.work(), {tree.inbox()}, fixed_now()};
+}
+
 TEST(TaskExecutorTest, StopBeforeStartDoesNotCreateTaskRun) {
     TemporaryExecutionTree tree;
     FakeExecutionClient client;
-    labbridge::agent::TaskExecutor executor{
-        client, tree.work(), {tree.inbox()}, fixed_now()};
+    labbridge::agent::AgentQueueStore store{
+        tree.queue_database().string(), "phase022-node", 10, 100};
+    auto executor = make_executor(client, store, tree);
 
     executor.request_stop();
     executor.execute(scheduled(executable_task(tree.inbox())));
 
     EXPECT_TRUE(client.events.empty());
-    std::cout << "idle_stop start_requests=0 terminal_reports=0" << std::endl;
+    EXPECT_EQ(store.pending_job_count(), 0U);
+    std::cout << "idle_stop start_requests=0 pending_jobs=0" << std::endl;
 }
 
-TEST(TaskExecutorTest, StopAfterStartDrainsOneFailedTerminalReport) {
+TEST(TaskExecutorTest,
+     StopDuringDeliveryKeepsJobPendingAndReplaysAfterRestart) {
     TemporaryExecutionTree tree;
     tree.write_csv(
-        "must-not-be-collected.csv",
+        "must-replay.csv",
         "station_code,device_code,record_time,value\n"
         "ST001,DV001,2026-08-08 08:00:00,42\n");
     FakeExecutionClient client;
-    labbridge::agent::TaskExecutor executor{
-        client, tree.work(), {tree.inbox()}, fixed_now()};
-    client.on_start = [&executor] { executor.request_stop(); };
+    const auto task = executable_task(tree.inbox());
+    {
+        labbridge::agent::AgentQueueStore store{
+            tree.queue_database().string(), task.node_code, 10, 100};
+        labbridge::agent::ReliableDeliveryClient delivery{
+            client, store, std::chrono::seconds{1}, std::chrono::seconds{2}};
+        QueueExecutor executor{
+            delivery, store, tree.work(), {tree.inbox()}, fixed_now()};
+        client.on_start = [&executor] { executor.request_stop(); };
 
-    executor.execute(scheduled(executable_task(tree.inbox())));
+        // 停止发生在 start 之后：作业推进到 manifest_pending 即挂起，
+        // 不伪造任何 failed report。
+        EXPECT_THROW(
+            executor.execute(scheduled(task)),
+            labbridge::agent::DeliveryAbandoned);
 
-    EXPECT_EQ(
-        client.events,
-        (std::vector<std::string>{"start", "report"}));
+        EXPECT_EQ(client.events, (std::vector<std::string>{"start"}));
+        EXPECT_EQ(store.pending_job_count(), 1U);
+        ASSERT_EQ(store.recover_jobs().size(), 1U);
+        EXPECT_EQ(store.recover_jobs().front().stage, "manifest_pending");
+        tree.track_archive(
+            store.recover_jobs().front().manifest_request.files.front().storage_path);
+    }
+
+    labbridge::agent::AgentQueueStore store{
+        tree.queue_database().string(), task.node_code, 10, 100};
+    auto executor = make_executor(client, store, tree);
+    executor.recover_pending_jobs();
+
+    EXPECT_EQ(store.pending_job_count(), 0U);
     ASSERT_EQ(client.reports.size(), 1U);
-    EXPECT_EQ(
-        client.reports.front().status,
-        labbridge::core::TaskRunStatus::Failed);
-    EXPECT_NE(
-        client.reports.front().error_summary.find("collection skipped"),
-        std::string::npos);
-    EXPECT_TRUE(client.manifests.empty());
-    std::cout << "active_stop flow=start->drain_report status=failed "
-              << "manifest_requests=0 terminal_reports=1" << std::endl;
+    EXPECT_EQ(client.reports.front().status,
+              labbridge::core::TaskRunStatus::Succeeded);
+    EXPECT_FALSE(client.reports.front().idempotency_key.empty());
+    std::cout << "active_stop stage=manifest_pending reports=0 replays=1 "
+              << "pending_jobs=0" << std::endl;
 }
 
 TEST(TaskExecutorTest, ArchivesParsesQcAndReportsOneTerminalResult) {
@@ -246,8 +296,9 @@ TEST(TaskExecutorTest, ArchivesParsesQcAndReportsOneTerminalResult) {
         "ST001,DV001,2026-08-08 08:00:00,42\n"
         ",DV002,invalid,43\n");
     FakeExecutionClient client;
-    labbridge::agent::TaskExecutor executor{
-        client, tree.work(), {tree.inbox()}, fixed_now()};
+    labbridge::agent::AgentQueueStore store{
+        tree.queue_database().string(), "phase022-node", 10, 100};
+    auto executor = make_executor(client, store, tree);
 
     executor.execute(scheduled(executable_task(tree.inbox())));
 
@@ -278,6 +329,7 @@ TEST(TaskExecutorTest, ArchivesParsesQcAndReportsOneTerminalResult) {
     EXPECT_EQ(report.parsed_records[0].qc_results[1].qc_rule_id, "22");
     EXPECT_EQ(report.parsed_records[1].qc_results[0].result, "failed");
     EXPECT_EQ(report.parsed_records[1].qc_results[1].result, "failed");
+    EXPECT_EQ(store.pending_job_count(), 0U);
 
     std::cout << "business_flow=start->archive->manifest->parse->qc->report "
               << "run_status=succeeded records=2 qc_results=4 "
@@ -292,8 +344,9 @@ TEST(TaskExecutorTest, ReportsPartialRowFailureWithoutDroppingValidRecords) {
         "ST001,DV001\n"
         "ST002,DV002,2026-08-08 08:00:00,44\n");
     FakeExecutionClient client;
-    labbridge::agent::TaskExecutor executor{
-        client, tree.work(), {tree.inbox()}, fixed_now()};
+    labbridge::agent::AgentQueueStore store{
+        tree.queue_database().string(), "phase022-node", 10, 100};
+    auto executor = make_executor(client, store, tree);
 
     executor.execute(scheduled(executable_task(tree.inbox())));
 
@@ -314,8 +367,9 @@ TEST(TaskExecutorTest, ReportsPartialRowFailureWithoutDroppingValidRecords) {
 TEST(TaskExecutorTest, EmptyDirectorySkipsManifestAndReportsZeroSuccess) {
     TemporaryExecutionTree tree;
     FakeExecutionClient client;
-    labbridge::agent::TaskExecutor executor{
-        client, tree.work(), {tree.inbox()}, fixed_now()};
+    labbridge::agent::AgentQueueStore store{
+        tree.queue_database().string(), "phase022-node", 10, 100};
+    auto executor = make_executor(client, store, tree);
 
     executor.execute(scheduled(executable_task(tree.inbox())));
 
@@ -329,7 +383,7 @@ TEST(TaskExecutorTest, EmptyDirectorySkipsManifestAndReportsZeroSuccess) {
     EXPECT_EQ(client.reports.front().items_total, 0);
 }
 
-TEST(TaskExecutorTest, ManifestIdMismatchProducesOnlyFailedTerminalReport) {
+TEST(TaskExecutorTest, ManifestIdMismatchFailsFastAndKeepsJobPending) {
     TemporaryExecutionTree tree;
     tree.write_csv(
         "mismatch.csv",
@@ -337,23 +391,23 @@ TEST(TaskExecutorTest, ManifestIdMismatchProducesOnlyFailedTerminalReport) {
         "ST001,DV001,2026-08-08 08:00:00,42\n");
     FakeExecutionClient client;
     client.return_wrong_manifest_count = true;
-    labbridge::agent::TaskExecutor executor{
-        client, tree.work(), {tree.inbox()}, fixed_now()};
+    labbridge::agent::AgentQueueStore store{
+        tree.queue_database().string(), "phase022-node", 10, 100};
+    auto executor = make_executor(client, store, tree);
 
-    executor.execute(scheduled(executable_task(tree.inbox())));
+    // 控制面返回的 raw_file_ids 数量与文件计划不一致属于契约违例，
+    // 队列存储以 AgentQueueError fail-fast，作业停留 manifest_pending。
+    EXPECT_THROW(
+        executor.execute(scheduled(executable_task(tree.inbox()))),
+        labbridge::agent::AgentQueueError);
 
     tree.track_archive(client.manifests.front().files.front().storage_path);
     EXPECT_EQ(
         client.events,
-        (std::vector<std::string>{"start", "manifest", "report"}));
-    ASSERT_EQ(client.reports.size(), 1U);
-    EXPECT_EQ(
-        client.reports.front().status,
-        labbridge::core::TaskRunStatus::Failed);
-    EXPECT_TRUE(client.reports.front().parsed_records.empty());
-    EXPECT_NE(
-        client.reports.front().error_summary.find("raw_file_ids count"),
-        std::string::npos);
+        (std::vector<std::string>{"start", "manifest"}));
+    EXPECT_TRUE(client.reports.empty());
+    ASSERT_EQ(store.recover_jobs().size(), 1U);
+    EXPECT_EQ(store.recover_jobs().front().stage, "manifest_pending");
 }
 
 TEST(TaskExecutorTest, AcknowledgedSuccessSkipsUnchangedFileInSameProcess) {
@@ -363,8 +417,9 @@ TEST(TaskExecutorTest, AcknowledgedSuccessSkipsUnchangedFileInSameProcess) {
         "station_code,device_code,record_time,value\n"
         "ST001,DV001,2026-08-08 08:00:00,42\n");
     FakeExecutionClient client;
-    labbridge::agent::TaskExecutor executor{
-        client, tree.work(), {tree.inbox()}, fixed_now()};
+    labbridge::agent::AgentQueueStore store{
+        tree.queue_database().string(), "phase022-node", 10, 100};
+    auto executor = make_executor(client, store, tree);
 
     executor.execute(scheduled(executable_task(tree.inbox())));
     tree.track_archive(client.manifests.front().files.front().storage_path);
@@ -374,15 +429,12 @@ TEST(TaskExecutorTest, AcknowledgedSuccessSkipsUnchangedFileInSameProcess) {
     ASSERT_EQ(client.manifests.size(), 1U);
     ASSERT_EQ(client.reports.size(), 2U);
     EXPECT_EQ(client.reports.back().items_total, 0);
-    executor.forget_task("30");
-    executor.execute(scheduled(executable_task(tree.inbox())));
-    tree.track_archive(client.manifests.back().files.front().storage_path);
-    ASSERT_EQ(client.manifests.size(), 2U);
-    std::cout << "dedup first_manifest_files=1 second_manifest_files=0 "
-              << "after_forget_manifest_files=1" << std::endl;
+    // 指纹去重持久化在 SQLite：同进程与重启后语义一致。
+    std::cout << "dedup first_manifest_files=1 second_manifest_files=0"
+              << std::endl;
 }
 
-TEST(TaskExecutorTest, FailedReportDoesNotMarkFileAsProcessed) {
+TEST(TaskExecutorTest, FailedReportDeliveryReplaysFromPendingStage) {
     TemporaryExecutionTree tree;
     tree.write_csv(
         "retry.csv",
@@ -390,27 +442,66 @@ TEST(TaskExecutorTest, FailedReportDoesNotMarkFileAsProcessed) {
         "ST001,DV001,2026-08-08 08:00:00,42\n");
     FakeExecutionClient client;
     client.fail_next_report = true;
-    labbridge::agent::TaskExecutor executor{
-        client, tree.work(), {tree.inbox()}, fixed_now()};
+    labbridge::agent::AgentQueueStore store{
+        tree.queue_database().string(), "phase022-node", 10, 100};
+    auto executor = make_executor(client, store, tree);
 
+    const auto task = executable_task(tree.inbox());
     EXPECT_THROW(
-        executor.execute(scheduled(executable_task(tree.inbox()))),
-        std::runtime_error);
+        executor.execute(scheduled(task)), std::runtime_error);
     tree.track_archive(client.manifests.front().files.front().storage_path);
-    executor.execute(scheduled(executable_task(tree.inbox())));
+    EXPECT_EQ(store.recover_jobs().front().stage, "report_pending");
+
+    // 报告投递失败不会把文件标记为已处理；同 key 重放从 report_pending 继续。
+    executor.execute(scheduled(task));
     tree.track_archive(client.manifests.back().files.front().storage_path);
 
-    EXPECT_EQ(client.manifests.size(), 2U);
+    EXPECT_EQ(client.manifests.size(), 1U);
+    ASSERT_EQ(client.reports.size(), 2U);
+    EXPECT_EQ(client.reports.front().idempotency_key,
+              client.reports.back().idempotency_key);
+    EXPECT_EQ(store.pending_job_count(), 0U);
+}
+
+TEST(TaskExecutorTest, MissingCollectionDirectoryProducesFailedReport) {
+    TemporaryExecutionTree tree;
+    FakeExecutionClient client;
+    labbridge::agent::AgentQueueStore store{
+        tree.queue_database().string(), "phase022-node", 10, 100};
+    auto executor = make_executor(client, store, tree);
+    auto task = executable_task(tree.inbox());
+    task.data_source.config_json =
+        "{\"root_path\":\"" + (tree.inbox() / "missing-dir").string() +
+        "\",\"extension\":\".csv\"}";
+
+    executor.execute(scheduled(std::move(task)));
+
+    EXPECT_EQ(
+        client.events,
+        (std::vector<std::string>{"start", "report"}));
+    ASSERT_EQ(client.reports.size(), 1U);
+    EXPECT_EQ(client.reports.front().status,
+              labbridge::core::TaskRunStatus::Failed);
+    EXPECT_EQ(client.reports.front().items_total, 1);
+    EXPECT_EQ(client.reports.front().items_failed, 1);
+    EXPECT_NE(client.reports.front().error_summary.find(
+                  "collect failed"),
+              std::string::npos);
+    // 作业以 failed report 收尾，队列无残留 pending。
+    EXPECT_EQ(store.pending_job_count(), 0U);
+    std::cout << "collect_failure report_status=failed items_failed=1 "
+              << "pending_jobs=0" << std::endl;
 }
 
 TEST(TaskExecutorTest, RejectsRemotePathOutsideLocalAllowListAfterStart) {
     TemporaryExecutionTree tree;
     FakeExecutionClient client;
+    labbridge::agent::AgentQueueStore store{
+        tree.queue_database().string(), "phase022-node", 10, 100};
+    auto executor = make_executor(client, store, tree);
     auto task = executable_task(tree.inbox());
     task.data_source.config_json =
         "{\"root_path\":\"/tmp/not-allowed\",\"extension\":\".csv\"}";
-    labbridge::agent::TaskExecutor executor{
-        client, tree.work(), {tree.inbox()}, fixed_now()};
 
     executor.execute(scheduled(std::move(task)));
 
@@ -420,6 +511,7 @@ TEST(TaskExecutorTest, RejectsRemotePathOutsideLocalAllowListAfterStart) {
     EXPECT_EQ(
         client.reports.front().status,
         labbridge::core::TaskRunStatus::Failed);
+    EXPECT_EQ(client.reports.front().items_failed, 1);
     EXPECT_NE(
         client.reports.front().error_summary.find("outside allowed"),
         std::string::npos);
@@ -433,8 +525,9 @@ TEST(TaskExecutorTest, ArchiveFailureProducesFailedTerminalReport) {
         "ST001,DV001,2026-08-08 08:00:00,42\n");
     tree.block_work_directory_with_file();
     FakeExecutionClient client;
-    labbridge::agent::TaskExecutor executor{
-        client, tree.work(), {tree.inbox()}, fixed_now()};
+    labbridge::agent::AgentQueueStore store{
+        tree.queue_database().string(), "phase022-node", 10, 100};
+    auto executor = make_executor(client, store, tree);
 
     executor.execute(scheduled(executable_task(tree.inbox())));
 
@@ -455,8 +548,9 @@ TEST(TaskExecutorTest, InvalidHeaderFailsFileWithoutPublishingRecords) {
         "site,instrument,time,value\n"
         "ST001,DV001,2026-08-08 08:00:00,42\n");
     FakeExecutionClient client;
-    labbridge::agent::TaskExecutor executor{
-        client, tree.work(), {tree.inbox()}, fixed_now()};
+    labbridge::agent::AgentQueueStore store{
+        tree.queue_database().string(), "phase022-node", 10, 100};
+    auto executor = make_executor(client, store, tree);
 
     executor.execute(scheduled(executable_task(tree.inbox())));
 
@@ -470,6 +564,107 @@ TEST(TaskExecutorTest, InvalidHeaderFailsFileWithoutPublishingRecords) {
         std::string::npos);
 }
 
+TEST(TaskExecutorTest, ArchiveConflictMovesJobToRequiresAttention) {
+    TemporaryExecutionTree tree;
+    tree.write_csv(
+        "conflict.csv",
+        "station_code,device_code,record_time,value\n"
+        "ST001,DV001,2026-08-08 08:00:00,42\n");
+    FakeExecutionClient client;
+    labbridge::agent::AgentQueueStore store{
+        tree.queue_database().string(), "phase022-node", 10, 100};
+    auto executor = make_executor(client, store, tree);
+    const auto task = executable_task(tree.inbox());
+
+    // 预置内容与持久化计划不一致的归档目标，模拟外部改动证据文件。
+    const auto archive_path =
+        tree.work() / "archive" / task.id / "run-1" / "1-conflict.csv";
+    std::filesystem::create_directories(archive_path.parent_path());
+    {
+        std::ofstream output{archive_path};
+        output << "tampered evidence";
+    }
+    tree.track_archive(archive_path.string());
+
+    const auto scheduled_for = labbridge::core::format_utc_timestamp(
+        std::chrono::system_clock::time_point{} + 1786176000s);
+    labbridge::agent::StartTaskRunRequest request{
+        task.node_code,
+        task.id,
+        labbridge::agent::make_scheduled_execution_key(
+            task.node_code, task.id, scheduled_for),
+        scheduled_for,
+        "2026-08-08T08:00:01Z",
+        "scheduled",
+    };
+    store.begin_job(task, request);
+    store.accept_start(request.execution_key, "run-1");
+    store.save_file_plan(request.execution_key,
+                         {
+                             {0,
+                              (tree.inbox() / "conflict.csv").string(),
+                              "conflict.csv",
+                              "2026-08-08T08:00:00Z",
+                              0,
+                              std::string(64, '0'),
+                              task.id + "\nfp",
+                              archive_path.string()},
+                         });
+
+    executor.execute(scheduled(task));
+
+    // 作业停留 requires_attention：不再参与恢复，也不产生 report。
+    EXPECT_EQ(client.events, (std::vector<std::string>{}));
+    EXPECT_EQ(store.pending_job_count(), 1U);
+    EXPECT_TRUE(store.recover_jobs().empty());
+    std::cout << "archive_conflict pending_jobs=1 recoverable=0 "
+              << "requires_attention=1" << std::endl;
+}
+
+TEST(TaskExecutorTest, RestoresJobAlreadyRecoveredFromRetryWait) {
+    TemporaryExecutionTree tree;
+    tree.write_csv(
+        "resume.csv",
+        "station_code,device_code,record_time,value\n"
+        "ST001,DV001,2026-08-08 08:00:00,42\n");
+    FakeExecutionClient client;
+    const auto task = executable_task(tree.inbox());
+    {
+        labbridge::agent::AgentQueueStore store{
+            tree.queue_database().string(), task.node_code, 10, 10};
+        labbridge::agent::ReliableDeliveryClient delivery{
+            client, store, std::chrono::seconds{1}, std::chrono::seconds{2}};
+        QueueExecutor executor{
+            delivery, store, tree.work(), {tree.inbox()}, fixed_now()};
+
+        // 报告首次投掷可重试失败 -> retry_wait；等待到期 resume 已把阶段恢复为
+        // report_pending 后，第二次调用抛普通异常，模拟进程在重投完成前被杀。
+        client.fail_next_report_retryable = true;
+        client.fail_next_report = true;
+        EXPECT_THROW(executor.execute(scheduled(task)), std::runtime_error);
+
+        ASSERT_EQ(store.recover_jobs().size(), 1U);
+        EXPECT_EQ(store.recover_jobs().front().stage, "report_pending");
+        tree.track_archive(
+            store.recover_jobs().front().manifest_request.files.front().storage_path);
+    }
+
+    // 重启恢复：作业处于“attempt>0 且阶段已恢复”的幂等边界，
+    // resume 无行可改必须视为已恢复，而不是让 Agent 退出。
+    labbridge::agent::AgentQueueStore store{
+        tree.queue_database().string(), task.node_code, 10, 10};
+    auto executor = make_executor(client, store, tree);
+    executor.recover_pending_jobs();
+
+    EXPECT_EQ(store.pending_job_count(), 0U);
+    // 两次失败调用（可重试 + 模拟中断）后，重启重投成功一次。
+    ASSERT_EQ(client.reports.size(), 3U);
+    EXPECT_EQ(client.reports.back().status,
+              labbridge::core::TaskRunStatus::Succeeded);
+    std::cout << "retry_resume interrupted_stage=report_pending "
+              << "replayed_report=1 pending_jobs=0" << std::endl;
+}
+
 TEST(TaskExecutorTest, FingerprintCapacityEvictsOldestSuccessfulFile) {
     TemporaryExecutionTree tree;
     tree.write_csv(
@@ -481,8 +676,9 @@ TEST(TaskExecutorTest, FingerprintCapacityEvictsOldestSuccessfulFile) {
         "station_code,device_code,record_time,value\n"
         "ST002,DV002,2026-08-08 08:00:00,42\n");
     FakeExecutionClient client;
-    labbridge::agent::TaskExecutor executor{
-        client, tree.work(), {tree.inbox()}, fixed_now(), 1};
+    labbridge::agent::AgentQueueStore store{
+        tree.queue_database().string(), "phase022-node", 10, 1};
+    auto executor = make_executor(client, store, tree);
 
     executor.execute(scheduled(executable_task(tree.inbox())));
     for (const auto& file : client.manifests.front().files) {
@@ -512,8 +708,9 @@ TEST(TaskExecutorTest, BoundsErrorSummaryDetailsAndBytes) {
         "S6,D6\n"
         "S7,D7\n");
     FakeExecutionClient client;
-    labbridge::agent::TaskExecutor executor{
-        client, tree.work(), {tree.inbox()}, fixed_now()};
+    labbridge::agent::AgentQueueStore store{
+        tree.queue_database().string(), "phase022-node", 10, 100};
+    auto executor = make_executor(client, store, tree);
 
     executor.execute(scheduled(executable_task(tree.inbox())));
 
@@ -527,21 +724,20 @@ TEST(TaskExecutorTest, BoundsErrorSummaryDetailsAndBytes) {
         report.error_summary.find("2 additional error(s) omitted"),
         std::string::npos);
 }
-TEST(TaskExecutorTest, RetainsPersistentDedupAcrossDisableAndRecovery) {
+
+TEST(TaskExecutorTest, RetainsPersistentDedupAcrossRestart) {
     TemporaryExecutionTree tree;
     tree.write_csv(
         "reliable.csv",
         "station_code,device_code,record_time,value\n"
         "ST001,DV001,2026-08-08 08:00:00,42\n");
     FakeExecutionClient client;
-    const auto database = (tree.work().parent_path() / "queue.db").string();
     const auto task = executable_task(tree.inbox());
     std::string persisted_fingerprint;
     {
         labbridge::agent::AgentQueueStore store{
-            database, task.node_code, 10, 10};
-        labbridge::agent::TaskExecutor executor{
-            client, store, tree.work(), {tree.inbox()}, fixed_now()};
+            tree.queue_database().string(), task.node_code, 10, 10};
+        auto executor = make_executor(client, store, tree);
         client.fail_next_report = true;
         EXPECT_THROW(executor.execute(scheduled(task)), std::runtime_error);
         ASSERT_EQ(store.recover_jobs().size(), 1U);
@@ -554,27 +750,22 @@ TEST(TaskExecutorTest, RetainsPersistentDedupAcrossDisableAndRecovery) {
     const auto frozen_report = client.reports.front();
     {
         labbridge::agent::AgentQueueStore store{
-            database, task.node_code, 10, 10};
-        labbridge::agent::TaskExecutor executor{
-            client, store, tree.work(), {tree.inbox()}, fixed_now()};
+            tree.queue_database().string(), task.node_code, 10, 10};
+        auto executor = make_executor(client, store, tree);
         executor.recover_pending_jobs();
         EXPECT_EQ(store.pending_job_count(), 0U);
         EXPECT_TRUE(
             store.is_file_processed(task.id, persisted_fingerprint));
         EXPECT_EQ(client.reports.back().idempotency_key,
                   frozen_report.idempotency_key);
-        // 配置缺席表示禁用时只清理进程内状态，持久化指纹必须跨重新启用保留。
-        executor.forget_task(task.id);
+        // 任务重新调度后指纹去重仍生效，不重复发布历史文件。
         executor.execute(scheduled(task));
         EXPECT_EQ(client.manifests.size(), 1U);
         EXPECT_EQ(client.reports.back().items_total, 0);
     }
-    std::filesystem::remove(database);
-    std::filesystem::remove(database + "-wal");
-    std::filesystem::remove(database + "-shm");
     std::cout << "recovery stage=report_pending replayed_report=1 "
-              << "config_disabled=1 config_reenabled=1 "
-              << "pending_jobs=0 next_run_manifest_files=0" << std::endl;
+              << "rescheduled_runs=1 pending_jobs=0 "
+              << "next_run_manifest_files=0" << std::endl;
 }
 
 }  // namespace

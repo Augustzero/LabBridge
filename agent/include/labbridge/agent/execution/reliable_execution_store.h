@@ -3,10 +3,18 @@
 #include "labbridge/agent/execution/task_execution_client.h"
 #include "labbridge/core/models.h"
 
+#include <stdexcept>
 #include <string>
 #include <vector>
 
 namespace labbridge::agent {
+
+// 可靠队列存储的失败（SQLite I/O、约束违例、schema 不兼容）。
+// 按约定传播到进程边界非零退出，不在作业循环内吞掉。
+class AgentQueueError final : public std::runtime_error {
+public:
+    using std::runtime_error::runtime_error;
+};
 
 struct PendingFilePlan {
     int ordinal{0};
@@ -40,6 +48,8 @@ public:
     virtual bool begin_job(const labbridge::core::TaskConfig& task,
                            const StartTaskRunRequest& request) = 0;
     virtual std::vector<RecoveredJob> recover_jobs() const = 0;
+    virtual RecoveredJob load_job(
+        const std::string& execution_key) const = 0;
     virtual void accept_start(const std::string& execution_key,
                               const std::string& task_run_id) = 0;
     virtual void save_file_plan(
@@ -57,6 +67,9 @@ public:
         const TaskRunReportRequest& request,
         const std::vector<bool>& parsed_without_errors) = 0;
     virtual void complete_job(const std::string& execution_key) = 0;
+    // 归档冲突等不可自动重试的作业级故障：作业停留 requires_attention 等待人工处理。
+    virtual void mark_requires_attention(const std::string& execution_key,
+                                         const std::string& reason) = 0;
     virtual bool has_capacity() const = 0;
     virtual bool is_file_processed(const std::string& task_id,
                                    const std::string& fingerprint) const = 0;

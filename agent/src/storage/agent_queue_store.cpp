@@ -126,6 +126,14 @@ CREATE INDEX processed_files_task_time_idx
     ON processed_files(task_id, processed_at);
 )SQL";
 
+std::string format_sqlite_error(int result,
+                                sqlite3* database,
+                                const char* raw_message) {
+    const char* detail =
+        raw_message != nullptr ? raw_message : sqlite3_errmsg(database);
+    return "sqlite code=" + std::to_string(result) + " " + detail;
+}
+
 void check_result(int result,
                   sqlite3* database,
                   const std::string& operation) {
@@ -134,8 +142,7 @@ void check_result(int result,
     }
 
     throw AgentQueueError(
-        operation + " failed: sqlite code=" + std::to_string(result) + " " +
-        sqlite3_errmsg(database));
+        operation + " failed: " + format_sqlite_error(result, database, nullptr));
 }
 
 void execute(sqlite3* database,
@@ -149,19 +156,17 @@ void execute(sqlite3* database,
     }
 
     const std::string detail =
-        raw_message == nullptr ? sqlite3_errmsg(database) : raw_message;
+        format_sqlite_error(result, database, raw_message);
     sqlite3_free(raw_message);
-    throw AgentQueueError(
-        operation + " failed: sqlite code=" + std::to_string(result) + " " +
-        detail);
+    throw AgentQueueError(operation + " failed: " + detail);
 }
 
 Statement prepare(sqlite3* database,
-                  const char* sql,
+                  const std::string& sql,
                   const std::string& operation) {
     sqlite3_stmt* raw_statement = nullptr;
     check_result(
-        sqlite3_prepare_v2(database, sql, -1, &raw_statement, nullptr),
+        sqlite3_prepare_v2(database, sql.c_str(), -1, &raw_statement, nullptr),
         database,
         operation);
     return Statement{raw_statement, sqlite3_finalize};
@@ -435,6 +440,38 @@ std::vector<PendingFilePlan> recover_file_plan(
     return files;
 }
 
+// recover_jobs 与 load_job 共用的作业行映射；列顺序由调用方 SQL 保证。
+RecoveredJob read_recovered_job(sqlite3* database, sqlite3_stmt* statement) {
+    RecoveredJob job;
+    job.execution_key = read_text(statement, 0);
+    job.task = decode_task_config(read_text(statement, 1));
+    job.stage = read_text(statement, 2);
+    job.start_request =
+        decode_start_task_run_request(read_text(statement, 3));
+    job.task_run_id = read_text(statement, 4);
+    const auto manifest_json = read_text(statement, 5);
+    if (!manifest_json.empty()) {
+        job.manifest_request =
+            decode_raw_file_manifest_request(manifest_json);
+    }
+    const auto report_json = read_text(statement, 6);
+    if (!report_json.empty()) {
+        job.report_request =
+            decode_task_run_report_request(report_json);
+    }
+    job.files = recover_file_plan(database, job.execution_key);
+    return job;
+}
+
+constexpr const char* kRecoveredJobColumns =
+    "jobs.execution_key, jobs.task_config_json, "
+    "CASE WHEN jobs.stage = 'retry_wait' THEN jobs.retry_stage ELSE jobs.stage END, "
+    "deliveries.request_json, COALESCE(jobs.task_run_id, ''), "
+    "COALESCE((SELECT request_json FROM pending_deliveries "
+    "WHERE execution_key = jobs.execution_key AND request_type = 'manifest'), ''), "
+    "COALESCE((SELECT request_json FROM pending_deliveries "
+    "WHERE execution_key = jobs.execution_key AND request_type = 'report'), '') ";
+
 }  // namespace
 
 struct AgentQueueStore::Impl {
@@ -579,12 +616,7 @@ std::vector<RecoveredJob> AgentQueueStore::recover_jobs() const {
     std::lock_guard<std::mutex> lock{impl_->mutex};
     auto statement = prepare(
         impl_->database,
-        "SELECT jobs.execution_key, jobs.task_config_json, CASE WHEN jobs.stage = 'retry_wait' THEN jobs.retry_stage ELSE jobs.stage END, "
-        "deliveries.request_json, COALESCE(jobs.task_run_id, ''), "
-        "COALESCE((SELECT request_json FROM pending_deliveries "
-        "WHERE execution_key = jobs.execution_key AND request_type = 'manifest'), ''), "
-        "COALESCE((SELECT request_json FROM pending_deliveries "
-        "WHERE execution_key = jobs.execution_key AND request_type = 'report'), '') "
+        std::string{"SELECT "} + kRecoveredJobColumns +
         "FROM pending_jobs AS jobs "
         "JOIN pending_deliveries AS deliveries "
         "ON deliveries.execution_key = jobs.execution_key "
@@ -594,27 +626,32 @@ std::vector<RecoveredJob> AgentQueueStore::recover_jobs() const {
 
     std::vector<RecoveredJob> jobs;
     while (sqlite3_step(statement.get()) == SQLITE_ROW) {
-        RecoveredJob job;
-        job.execution_key = read_text(statement.get(), 0);
-        job.task = decode_task_config(read_text(statement.get(), 1));
-        job.stage = read_text(statement.get(), 2);
-        job.start_request =
-            decode_start_task_run_request(read_text(statement.get(), 3));
-        job.task_run_id = read_text(statement.get(), 4);
-        const auto manifest_json = read_text(statement.get(), 5);
-        if (!manifest_json.empty()) {
-            job.manifest_request =
-                decode_raw_file_manifest_request(manifest_json);
-        }
-        const auto report_json = read_text(statement.get(), 6);
-        if (!report_json.empty()) {
-            job.report_request =
-                decode_task_run_report_request(report_json);
-        }
-        job.files = recover_file_plan(impl_->database, job.execution_key);
-        jobs.push_back(std::move(job));
+        jobs.push_back(read_recovered_job(impl_->database, statement.get()));
     }
     return jobs;
+}
+
+RecoveredJob AgentQueueStore::load_job(
+    const std::string& execution_key) const {
+    std::lock_guard<std::mutex> lock{impl_->mutex};
+    auto statement = prepare(
+        impl_->database,
+        std::string{"SELECT "} + kRecoveredJobColumns +
+        "FROM pending_jobs AS jobs "
+        "JOIN pending_deliveries AS deliveries "
+        "ON deliveries.execution_key = jobs.execution_key "
+        "AND deliveries.request_type = 'start' "
+        "WHERE jobs.execution_key = ? AND jobs.stage != 'requires_attention'",
+        "load job");
+    bind_text(impl_->database,
+              statement.get(),
+              1,
+              execution_key,
+              "load job");
+    if (sqlite3_step(statement.get()) != SQLITE_ROW) {
+        throw AgentQueueError("pending job does not exist: " + execution_key);
+    }
+    return read_recovered_job(impl_->database, statement.get());
 }
 
 void AgentQueueStore::accept_start(const std::string& execution_key,
@@ -848,6 +885,37 @@ void AgentQueueStore::complete_job(const std::string& execution_key) {
     transaction.commit();
 }
 
+void AgentQueueStore::mark_requires_attention(
+    const std::string& execution_key,
+    const std::string& reason) {
+    std::lock_guard<std::mutex> lock{impl_->mutex};
+    Transaction transaction{impl_->database, "mark requires attention"};
+    auto statement = prepare(
+        impl_->database,
+        "UPDATE pending_jobs SET stage = 'requires_attention', "
+        "last_error_kind = 'archive_conflict', last_error = ?, "
+        "updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') "
+        "WHERE execution_key = ?",
+        "mark requires attention");
+    bind_text(impl_->database,
+              statement.get(),
+              1,
+              reason.substr(0, 512),
+              "mark requires attention");
+    bind_text(impl_->database,
+              statement.get(),
+              2,
+              execution_key,
+              "mark requires attention");
+    check_result(sqlite3_step(statement.get()), impl_->database,
+                 "mark requires attention");
+    if (sqlite3_changes(impl_->database) != 1) {
+        throw AgentQueueError(
+            "mark requires attention requires a pending job");
+    }
+    transaction.commit();
+}
+
 void AgentQueueStore::record_delivery_failure(
     const std::string& request_type,
     const std::string& idempotency_key,
@@ -941,6 +1009,21 @@ void AgentQueueStore::record_delivery_failure(
 void AgentQueueStore::resume_delivery(const std::string& request_type,
                                       const std::string& idempotency_key) {
     std::lock_guard<std::mutex> lock{impl_->mutex};
+    // 投递记录必须存在；作业可能已在早前调用（或上次运行中断前）恢复过
+    // 阶段，此时 UPDATE 改到 0 行属于幂等成功，不能当作内部错误。
+    auto exists = prepare(
+        impl_->database,
+        "SELECT 1 FROM pending_deliveries "
+        "WHERE request_type = ? AND idempotency_key = ?",
+        "resume delivery");
+    bind_text(impl_->database, exists.get(), 1, request_type,
+              "resume delivery");
+    bind_text(impl_->database, exists.get(), 2, idempotency_key,
+              "resume delivery");
+    if (sqlite3_step(exists.get()) != SQLITE_ROW) {
+        throw AgentQueueError("delivery does not exist");
+    }
+
     auto statement = prepare(
         impl_->database,
         "UPDATE pending_jobs SET stage = retry_stage, retry_stage = NULL, "
@@ -963,8 +1046,8 @@ std::chrono::milliseconds AgentQueueStore::delivery_retry_remaining(
     std::lock_guard<std::mutex> lock{impl_->mutex};
     auto statement = prepare(
         impl_->database,
-        "SELECT max(0, CAST((julianday(next_attempt_at) - "
-        "julianday('now')) * 86400000 AS INTEGER)) "
+        "SELECT count(*), COALESCE(max(0, CAST((julianday(next_attempt_at) - "
+        "julianday('now')) * 86400000 AS INTEGER)), 0) "
         "FROM pending_deliveries WHERE request_type = ? AND idempotency_key = ?",
         "read delivery retry remaining");
     bind_text(impl_->database, statement.get(), 1, request_type,
@@ -973,7 +1056,10 @@ std::chrono::milliseconds AgentQueueStore::delivery_retry_remaining(
               "read delivery retry remaining");
     check_result(sqlite3_step(statement.get()), impl_->database,
                  "read delivery retry remaining");
-    return std::chrono::milliseconds{sqlite3_column_int64(statement.get(), 0)};
+    if (sqlite3_column_int(statement.get(), 0) != 1) {
+        throw AgentQueueError("delivery does not exist");
+    }
+    return std::chrono::milliseconds{sqlite3_column_int64(statement.get(), 1)};
 }
 
 int AgentQueueStore::delivery_attempt_count(
@@ -989,8 +1075,9 @@ int AgentQueueStore::delivery_attempt_count(
               "read delivery attempt count");
     bind_text(impl_->database, statement.get(), 2, idempotency_key,
               "read delivery attempt count");
-    check_result(sqlite3_step(statement.get()), impl_->database,
-                 "read delivery attempt count");
+    if (sqlite3_step(statement.get()) != SQLITE_ROW) {
+        throw AgentQueueError("delivery does not exist");
+    }
     return sqlite3_column_int(statement.get(), 0);
 }
 

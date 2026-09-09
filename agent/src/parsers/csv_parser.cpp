@@ -1,7 +1,8 @@
 #include "labbridge/agent/parsers/csv_parser.h"
 
+#include <nlohmann/json.hpp>
+
 #include <fstream>
-#include <iomanip>
 #include <sstream>
 #include <string>
 
@@ -18,44 +19,14 @@ std::vector<std::string> split_csv_line(const std::string& line) {
     return fields;
 }
 
-std::string escape_json_string(const std::string& value) {
-    std::ostringstream escaped;
-    for (const unsigned char character : value) {
-        switch (character) {
-            case '"':
-                escaped << "\\\"";
-                break;
-            case '\\':
-                escaped << "\\\\";
-                break;
-            case '\b':
-                escaped << "\\b";
-                break;
-            case '\f':
-                escaped << "\\f";
-                break;
-            case '\n':
-                escaped << "\\n";
-                break;
-            case '\r':
-                escaped << "\\r";
-                break;
-            case '\t':
-                escaped << "\\t";
-                break;
-            default:
-                if (character < 0x20) {
-                    escaped << "\\u00" << std::hex << std::setw(2) << std::setfill('0')
-                            << static_cast<int>(character) << std::dec;
-                } else {
-                    escaped << character;
-                }
-        }
-    }
-    return escaped.str();
+// nlohmann dump 已含首尾引号，去掉后按字段拼接。
+std::string json_string_value(const std::string& value) {
+    const auto dumped = nlohmann::json(value).dump();
+    return dumped.substr(1, dumped.size() - 2);
 }
 
 std::string make_payload_json(const std::vector<std::string>& header, const std::vector<std::string>& row) {
+    // 键序必须保持 header 顺序，不能用 json 对象整体 dump（键会被字典序重排）。
     std::ostringstream payload;
     payload << "{";
     bool first = true;
@@ -63,8 +34,8 @@ std::string make_payload_json(const std::vector<std::string>& header, const std:
         if (!first) {
             payload << ",";
         }
-        payload << "\"" << escape_json_string(header[index]) << "\":\""
-                << escape_json_string(row[index]) << "\"";
+        payload << "\"" << json_string_value(header[index]) << "\":\""
+                << json_string_value(row[index]) << "\"";
         first = false;
     }
     payload << "}";

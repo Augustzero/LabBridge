@@ -8,6 +8,7 @@
 
 #include <chrono>
 #include <cctype>
+#include <functional>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -105,17 +106,6 @@ std::vector<std::string> required_allowed_roots(const YAML::Node& tasks) {
     }
     return result;
 }
-bool is_within(const labbridge::core::fs::path& path,
-               const labbridge::core::fs::path& root) {
-    auto path_it = path.begin();
-    auto root_it = root.begin();
-    for (; root_it != root.end(); ++root_it, ++path_it) {
-        if (path_it == path.end() || *path_it != *root_it) {
-            return false;
-        }
-    }
-    return true;
-}
 
 
 AgentStartupConfig parse_agent_config_node(
@@ -176,7 +166,8 @@ AgentStartupConfig parse_agent_config_node(
         throw AgentConfigError("storage.queue_db must not be a directory");
     }
     for (const auto& root_path : config.allowed_local_roots) {
-        if (is_within(queue_path, labbridge::core::fs::path{root_path})) {
+        if (labbridge::core::is_within(
+                queue_path, labbridge::core::fs::path{root_path})) {
             throw AgentConfigError(
                 "storage.queue_db must not be inside tasks.allowed_local_roots");
         }
@@ -209,16 +200,17 @@ AgentStartupConfig parse_agent_config_node(
 
 }  // namespace
 
-AgentStartupConfig parse_agent_config(std::string_view yaml_content) {
+// 两个公开入口共享的异常翻译：只有加载源（字符串/文件）不同。
+AgentStartupConfig parse_config_sourced(
+    const std::function<YAML::Node()>& load_node,
+    const labbridge::core::fs::path& base_directory,
+    const std::string& yaml_error_prefix) {
     try {
-        return parse_agent_config_node(
-            YAML::Load(std::string{yaml_content}),
-            labbridge::core::fs::current_path());
+        return parse_agent_config_node(load_node(), base_directory);
     } catch (const AgentConfigError&) {
         throw;
     } catch (const YAML::Exception& error) {
-        throw AgentConfigError(
-            "failed to parse agent configuration: " + std::string{error.what()});
+        throw AgentConfigError(yaml_error_prefix + error.what());
     } catch (const std::invalid_argument& error) {
         throw AgentConfigError(
             "invalid agent.server_url: " + std::string{error.what()});
@@ -228,23 +220,20 @@ AgentStartupConfig parse_agent_config(std::string_view yaml_content) {
     }
 }
 
+AgentStartupConfig parse_agent_config(std::string_view yaml_content) {
+    const std::string content{yaml_content};
+    return parse_config_sourced(
+        [&content] { return YAML::Load(content); },
+        labbridge::core::fs::current_path(),
+        "failed to parse agent configuration: ");
+}
+
 AgentStartupConfig load_agent_config(const std::string& path) {
-    try {
-        const auto absolute_path = labbridge::core::fs::absolute(path);
-        return parse_agent_config_node(
-            YAML::LoadFile(path), absolute_path.parent_path());
-    } catch (const AgentConfigError&) {
-        throw;
-    } catch (const YAML::Exception& error) {
-        throw AgentConfigError(
-            "failed to load agent configuration '" + path + "': " + error.what());
-    } catch (const std::invalid_argument& error) {
-        throw AgentConfigError(
-            "invalid agent.server_url: " + std::string{error.what()});
-    } catch (const labbridge::core::fs::filesystem_error& error) {
-        throw AgentConfigError(
-            "invalid local path configuration: " + std::string{error.what()});
-    }
+    const auto absolute_path = labbridge::core::fs::absolute(path);
+    return parse_config_sourced(
+        [&path] { return YAML::LoadFile(path); },
+        absolute_path.parent_path(),
+        "failed to load agent configuration '" + path + "': ");
 }
 
 }  // namespace labbridge::agent

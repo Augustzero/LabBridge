@@ -10,11 +10,6 @@
 
 namespace labbridge::agent {
 
-class AgentQueueError final : public std::runtime_error {
-public:
-    using std::runtime_error::runtime_error;
-};
-
 class AgentQueueStore final : public IReliableExecutionStore {
 public:
     AgentQueueStore(std::string database_path,
@@ -30,6 +25,7 @@ public:
     void save_file_plan(const std::string& execution_key,
                         const std::vector<PendingFilePlan>& files) override;
     std::vector<RecoveredJob> recover_jobs() const override;
+    RecoveredJob load_job(const std::string& execution_key) const override;
     void accept_start(const std::string& execution_key,
                       const std::string& task_run_id) override;
     void mark_file_archived(const std::string& execution_key,
@@ -42,6 +38,8 @@ public:
                      const TaskRunReportRequest& request,
                      const std::vector<bool>& parsed_without_errors) override;
     void complete_job(const std::string& execution_key) override;
+    void mark_requires_attention(const std::string& execution_key,
+                                 const std::string& reason) override;
     void record_delivery_failure(
         const std::string& request_type, const std::string& idempotency_key,
         bool retryable, const std::string& error_kind, unsigned int http_status,

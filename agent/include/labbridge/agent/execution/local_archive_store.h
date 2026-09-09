@@ -4,6 +4,7 @@
 #include "labbridge/core/filesystem.h"
 
 #include <cstddef>
+#include <stdexcept>
 #include <string>
 
 namespace labbridge::agent {
@@ -20,6 +21,13 @@ struct LocalFileMetadata {
 struct ArchivedLocalFile {
     LocalFileMetadata source;
     labbridge::core::fs::path archive_path;
+};
+
+// 归档目标已存在且与持久化指纹不一致：证据可能已被外部改动，
+// 作业必须停留 requires_attention 等待人工处理，不能自动重试或覆盖。
+class ArchiveConflictError final : public std::runtime_error {
+public:
+    using std::runtime_error::runtime_error;
 };
 
 class LocalArchiveStore {

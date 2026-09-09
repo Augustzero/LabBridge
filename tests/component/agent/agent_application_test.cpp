@@ -97,7 +97,6 @@ public:
         ++executions;
     }
     void request_stop() noexcept override { ++stop_requests; }
-    void forget_task(const std::string&) override {}
 
     std::atomic<int> executions{0};
     std::atomic<int> stop_requests{0};
@@ -169,7 +168,6 @@ public:
         throw std::logic_error("unexpected worker failure");
     }
     void request_stop() noexcept override { stop_requested = true; }
-    void forget_task(const std::string&) override {}
 
     std::string observed_task_id;
     bool stop_requested{false};

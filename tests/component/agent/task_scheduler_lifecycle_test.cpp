@@ -15,7 +15,6 @@ public:
         ++calls;
     }
     void request_stop() noexcept override {}
-    void forget_task(const std::string&) override {}
 
     int calls{0};
 };

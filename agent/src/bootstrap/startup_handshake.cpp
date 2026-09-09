@@ -1,5 +1,5 @@
 #include "labbridge/agent/bootstrap/startup_handshake.h"
-#include "labbridge/agent/bootstrap/utc_time.h"
+#include "labbridge/core/utc_time.h"
 
 #include <chrono>
 
@@ -20,7 +20,7 @@ PulledAgentConfig perform_startup_handshake(
     client.send_heartbeat({
         node.node_code,
         node.agent_version,
-        format_utc_timestamp(reported_at),
+        labbridge::core::format_utc_timestamp(reported_at),
     });
     return client.fetch_config(node.node_code);
 }

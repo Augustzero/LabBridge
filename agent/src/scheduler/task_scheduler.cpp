@@ -1,3 +1,4 @@
+#include "labbridge/agent/execution/reliable_delivery_client.h"
 #include "labbridge/agent/scheduler/task_scheduler.h"
 
 #include "labbridge/core/cron_schedule.h"
@@ -5,7 +6,6 @@
 
 #include <algorithm>
 #include <cctype>
-#include <labbridge/agent/execution/reliable_delivery_client.h>
 #include <map>
 #include <optional>
 #include <stdexcept>
@@ -169,15 +169,8 @@ public:
             }
         }
 
-        for (const auto& item : entries) {
-            if (replacement.count(item.first) == 0U &&
-                active_task_id != item.first) {
-                executor.forget_task(item.first);
-            }
-        }
-
         // 可执行投影缺席既可能表示禁用，也可能表示删除；这里只停止新调度，
-        // 不能据此清除持久化指纹，否则任务重新启用后会重复发布历史文件。
+        // 不清除任何持久化状态，任务重新启用后指纹去重仍然有效。
         entries = std::move(replacement);
         time_source.wake();
     }
@@ -254,21 +247,11 @@ public:
                                                    execution.task)) {
                             continue;
                         }
-                        active_task_id = execution.task.id;
                     }
-                    const auto executed_task_id = execution.task.id;
                     try {
                         executor.execute(std::move(execution));
                     } catch (const DeliveryAbandoned& error) {
                         labbridge::core::log_warn(kComponent, error.what());
-                    }
-                    {
-                        std::lock_guard<std::mutex> lock{mutex};
-                        active_task_id.reset();
-                        if (entries.count(executed_task_id) == 0U) {
-                            // 运行中删除的任务可能在结束时重新写入指纹，需再次清理。
-                            executor.forget_task(executed_task_id);
-                        }
                     }
                 }
 
@@ -312,7 +295,6 @@ public:
     ISchedulerTimeSource& time_source;
     std::mutex mutex;
     std::map<std::string, Entry> entries;
-    std::optional<std::string> active_task_id;
     std::atomic<bool> stop_requested{false};
     std::atomic<bool> running{false};
 };

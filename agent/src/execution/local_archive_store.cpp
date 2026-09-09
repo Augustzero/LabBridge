@@ -1,17 +1,10 @@
 #include "labbridge/agent/execution/local_archive_store.h"
+#include "labbridge/agent/execution/sha256.h"
+#include "labbridge/core/utc_time.h"
 
-#include <openssl/evp.h>
-
-#include <array>
 #include <atomic>
-#include <chrono>
 #include <cctype>
-#include <ctime>
-#include <fstream>
-#include <iomanip>
 #include <limits>
-#include <memory>
-#include <sstream>
 #include <stdexcept>
 #include <utility>
 
@@ -20,60 +13,12 @@ namespace {
 
 std::atomic<unsigned long long> temporary_sequence{0};
 
-std::string sha256_file(const labbridge::core::fs::path& path) {
-    using Context = std::unique_ptr<EVP_MD_CTX, decltype(&EVP_MD_CTX_free)>;
-    Context context{EVP_MD_CTX_new(), EVP_MD_CTX_free};
-    if (!context || EVP_DigestInit_ex(context.get(), EVP_sha256(), nullptr) != 1) {
-        throw std::runtime_error("failed to initialize archive SHA-256");
-    }
-
-    std::ifstream input{path, std::ios::binary};
-    if (!input.is_open()) {
-        throw std::runtime_error("failed to open file for SHA-256: " + path.string());
-    }
-
-    std::array<char, 64 * 1024> buffer{};
-    while (input.read(buffer.data(), static_cast<std::streamsize>(buffer.size())) ||
-           input.gcount() > 0) {
-        if (EVP_DigestUpdate(
-                context.get(), buffer.data(),
-                static_cast<std::size_t>(input.gcount())) != 1) {
-            throw std::runtime_error("failed to update archive SHA-256");
-        }
-    }
-    if (input.bad()) {
-        throw std::runtime_error("failed while reading file for SHA-256");
-    }
-
-    unsigned char digest[EVP_MAX_MD_SIZE];
-    unsigned int digest_size = 0;
-    if (EVP_DigestFinal_ex(context.get(), digest, &digest_size) != 1) {
-        throw std::runtime_error("failed to finish archive SHA-256");
-    }
-
-    std::ostringstream output;
-    output << std::hex << std::setfill('0');
-    for (unsigned int index = 0; index < digest_size; ++index) {
-        output << std::setw(2) << static_cast<unsigned int>(digest[index]);
-    }
-    return output.str();
-}
-
 std::string format_file_time(labbridge::core::fs::file_time_type value) {
     const auto system_time = std::chrono::time_point_cast<
         std::chrono::system_clock::duration>(
         value - labbridge::core::fs::file_time_type::clock::now() +
         std::chrono::system_clock::now());
-    const auto raw_time = std::chrono::system_clock::to_time_t(system_time);
-    std::tm utc{};
-#if defined(_WIN32)
-    gmtime_s(&utc, &raw_time);
-#else
-    gmtime_r(&raw_time, &utc);
-#endif
-    std::ostringstream output;
-    output << std::put_time(&utc, "%Y-%m-%dT%H:%M:%SZ");
-    return output.str();
+    return labbridge::core::format_utc_timestamp(system_time);
 }
 
 bool is_safe_segment(const std::string& value) {
@@ -132,7 +77,7 @@ LocalFileMetadata LocalArchiveStore::inspect(const CollectedItem& item) const {
     metadata.original_name = item.original_name;
     metadata.source_mtime =
         format_file_time(labbridge::core::fs::last_write_time(metadata.source_path));
-    metadata.file_hash = sha256_file(metadata.source_path);
+    metadata.file_hash = sha256_file_hex(metadata.source_path);
     metadata.fingerprint = metadata.source_path.string() + "\n" +
                            std::to_string(metadata.size_bytes) + "\n" +
                            metadata.source_mtime + "\n" + metadata.file_hash;
@@ -153,7 +98,7 @@ ArchivedLocalFile LocalArchiveStore::archive(
     const auto directory = destination.parent_path();
     labbridge::core::fs::create_directories(directory);
     if (labbridge::core::fs::exists(destination)) {
-        throw std::runtime_error("archive destination already exists");
+        throw ArchiveConflictError("archive destination already exists");
     }
 
     const auto filename = destination.filename().string();
@@ -168,7 +113,7 @@ ArchivedLocalFile LocalArchiveStore::archive(
             source.source_path, temporary,
             labbridge::core::fs::copy_options::none);
         const auto archive_size = labbridge::core::fs::file_size(temporary);
-        const auto archive_hash = sha256_file(temporary);
+        const auto archive_hash = sha256_file_hex(temporary);
         if (archive_size != static_cast<std::uintmax_t>(source.size_bytes) ||
             archive_hash != source.file_hash) {
             throw std::runtime_error("source changed while it was being archived");
@@ -189,8 +134,8 @@ ArchivedLocalFile LocalArchiveStore::recover_archive(
         if (!labbridge::core::fs::is_regular_file(archive_path) ||
             labbridge::core::fs::file_size(archive_path) !=
                 static_cast<std::uintmax_t>(source.size_bytes) ||
-            sha256_file(archive_path) != source.file_hash) {
-            throw std::runtime_error(
+            sha256_file_hex(archive_path) != source.file_hash) {
+            throw ArchiveConflictError(
                 "persisted archive conflicts with expected evidence");
         }
         return {source, labbridge::core::fs::weakly_canonical(archive_path)};

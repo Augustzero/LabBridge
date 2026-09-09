@@ -19,15 +19,6 @@
 
 namespace {
 constexpr std::string_view kComponent = "agent";
-
-bool transient_startup_failure(
-    const labbridge::agent::ControlPlaneClientError& error) {
-    const auto status = error.http_status();
-    return error.kind() == labbridge::agent::ControlPlaneErrorKind::Network ||
-           error.kind() == labbridge::agent::ControlPlaneErrorKind::ServerError ||
-           status == 408 || status == 429 ||
-           (status >= 500 && status <= 599);
-}
 }  // namespace
 
 int main(int argc, char* argv[]) {
@@ -51,7 +42,7 @@ int main(int argc, char* argv[]) {
             remote_config = labbridge::agent::perform_startup_handshake(
                 control_client, config.node);
         } catch (const labbridge::agent::ControlPlaneClientError& error) {
-            if (!transient_startup_failure(error)) {
+            if (!error.is_transient()) {
                 throw;
             }
             connected = false;

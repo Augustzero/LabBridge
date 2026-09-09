@@ -7,6 +7,8 @@ add_library(labbridge_agent_domain
 target_link_libraries(labbridge_agent_domain
     PUBLIC
         labbridge_core
+    PRIVATE
+        nlohmann_json::nlohmann_json
 )
 
 target_include_directories(labbridge_agent_domain
@@ -45,6 +47,7 @@ target_link_libraries(labbridge_agent_storage
         labbridge_agent_execution
     PRIVATE
         SQLite::SQLite3
+        nlohmann_json::nlohmann_json
 )
 
 target_include_directories(labbridge_agent_storage
@@ -57,7 +60,6 @@ add_library(labbridge_agent_bootstrap
     src/bootstrap/control_plane_client.cpp
     src/bootstrap/process_signal_monitor.cpp
     src/bootstrap/startup_handshake.cpp
-    src/bootstrap/utc_time.cpp
 )
 
 target_link_libraries(labbridge_agent_bootstrap

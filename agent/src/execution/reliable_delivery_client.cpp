@@ -11,16 +11,6 @@ namespace {
 
 constexpr std::string_view kComponent = "reliable-delivery";
 
-bool retryable(const TaskExecutionClientError& error) {
-    if (error.kind() == TaskExecutionErrorKind::Network ||
-        error.kind() == TaskExecutionErrorKind::ServerError) {
-        return true;
-    }
-    return error.kind() == TaskExecutionErrorKind::HttpStatus &&
-           (error.http_status() == 408 || error.http_status() == 429 ||
-            (error.http_status() >= 500 && error.http_status() <= 599));
-}
-
 std::string error_kind_name(TaskExecutionErrorKind kind) {
     switch (kind) {
         case TaskExecutionErrorKind::Network:
@@ -92,7 +82,7 @@ Result ReliableDeliveryClient::deliver(
             return call();
         } catch (const TaskExecutionClientError& error) {
             ++attempt;
-            const bool should_retry = retryable(error);
+            const bool should_retry = error.is_transient();
             const auto delay = retry_delay(
                 idempotency_key + "\n" + request_type, attempt);
             store_.record_delivery_failure(

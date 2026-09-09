@@ -16,6 +16,8 @@ public:
                              unsigned int http_status = 0);
     TaskExecutionErrorKind kind() const noexcept;
     unsigned int http_status() const noexcept;
+    // 瞬时错误统一判定：网络/服务端故障，或 408/429/5xx 状态。
+    bool is_transient() const noexcept;
 private:
     TaskExecutionErrorKind kind_;
     unsigned int http_status_;

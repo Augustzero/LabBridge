@@ -293,6 +293,11 @@ labbridge::core::TaskConfig decode_task_config(const std::string& json) {
 }
 
 std::string encode_start_task_run_request(const StartTaskRunRequest& request) {
+    return encode_start_task_run_request_json(request).dump();
+}
+
+nlohmann::json encode_start_task_run_request_json(
+    const StartTaskRunRequest& request) {
     return Json{
         {"codec_version", kCodecVersion},
         {"node_code", request.node_code},
@@ -301,7 +306,7 @@ std::string encode_start_task_run_request(const StartTaskRunRequest& request) {
         {"scheduled_for", request.scheduled_for},
         {"started_at", request.started_at},
         {"trigger_type", request.trigger_type},
-    }.dump();
+    };
 }
 
 StartTaskRunRequest decode_start_task_run_request(const std::string& json) {
@@ -318,6 +323,11 @@ StartTaskRunRequest decode_start_task_run_request(const std::string& json) {
 
 std::string encode_raw_file_manifest_request(
     const RawFileManifestRequest& request) {
+    return encode_raw_file_manifest_request_json(request).dump();
+}
+
+nlohmann::json encode_raw_file_manifest_request_json(
+    const RawFileManifestRequest& request) {
     Json files = Json::array();
     for (const auto& file : request.files) {
         files.push_back(encode_manifest_entry(file));
@@ -329,7 +339,7 @@ std::string encode_raw_file_manifest_request(
         {"node_code", request.node_code},
         {"idempotency_key", request.idempotency_key},
         {"files", std::move(files)},
-    }.dump();
+    };
 }
 
 RawFileManifestRequest decode_raw_file_manifest_request(
@@ -350,6 +360,11 @@ RawFileManifestRequest decode_raw_file_manifest_request(
 
 std::string encode_task_run_report_request(
     const TaskRunReportRequest& request) {
+    return encode_task_run_report_request_json(request).dump();
+}
+
+nlohmann::json encode_task_run_report_request_json(
+    const TaskRunReportRequest& request) {
     Json parsed_records = Json::array();
     for (const auto& parsed : request.parsed_records) {
         parsed_records.push_back(encode_parsed_record(parsed));
@@ -367,7 +382,7 @@ std::string encode_task_run_report_request(
         {"items_failed", request.items_failed},
         {"error_summary", request.error_summary},
         {"parsed_records", std::move(parsed_records)},
-    }.dump();
+    };
 }
 
 TaskRunReportRequest decode_task_run_report_request(const std::string& json) {

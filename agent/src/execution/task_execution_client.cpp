@@ -1,11 +1,6 @@
 #include "labbridge/agent/execution/task_execution_client.h"
+#include "labbridge/agent/execution/sha256.h"
 
-#include <openssl/evp.h>
-
-#include <iomanip>
-#include <memory>
-#include <sstream>
-#include <stdexcept>
 #include <string_view>
 
 namespace labbridge::agent {
@@ -23,32 +18,12 @@ unsigned int TaskExecutionClientError::http_status() const noexcept {
     return http_status_;
 }
 
-namespace {
-
-std::string sha256_hex(std::string_view value) {
-    using Context = std::unique_ptr<EVP_MD_CTX, decltype(&EVP_MD_CTX_free)>;
-    Context context{EVP_MD_CTX_new(), EVP_MD_CTX_free};
-    if (!context ||
-        EVP_DigestInit_ex(context.get(), EVP_sha256(), nullptr) != 1 ||
-        EVP_DigestUpdate(context.get(), value.data(), value.size()) != 1) {
-        throw std::runtime_error("failed to initialize task execution key");
-    }
-
-    unsigned char digest[EVP_MAX_MD_SIZE];
-    unsigned int digest_size = 0;
-    if (EVP_DigestFinal_ex(context.get(), digest, &digest_size) != 1) {
-        throw std::runtime_error("failed to create task execution key");
-    }
-
-    std::ostringstream output;
-    output << std::hex << std::setfill('0');
-    for (unsigned int index = 0; index < digest_size; ++index) {
-        output << std::setw(2) << static_cast<unsigned int>(digest[index]);
-    }
-    return output.str();
+bool TaskExecutionClientError::is_transient() const noexcept {
+    return kind_ == TaskExecutionErrorKind::Network ||
+           kind_ == TaskExecutionErrorKind::ServerError ||
+           http_status_ == 408 || http_status_ == 429 ||
+           (http_status_ >= 500 && http_status_ <= 599);
 }
-
-}  // namespace
 
 std::string make_scheduled_execution_key(
     const std::string& node_code,
