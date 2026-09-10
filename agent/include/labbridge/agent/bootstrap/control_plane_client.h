@@ -60,8 +60,11 @@ public:
 class ControlPlaneClient final : public IRuntimeControlClient,
                                  public ITaskExecutionClient {
 public:
+    // 节点编号与密钥来自启动配置，构造后固定；六个请求统一附加认证头。
     ControlPlaneClient(std::string server_url,
-                       std::chrono::milliseconds request_timeout);
+                       std::chrono::milliseconds request_timeout,
+                       std::string node_code,
+                       std::string auth_token);
 
     void register_node(const labbridge::core::NodeInfo& node) const override;
     void send_heartbeat(
@@ -88,6 +91,8 @@ private:
     std::string host_;
     std::string port_;
     std::string host_header_;
+    std::string node_code_;
+    std::string auth_token_;
     std::chrono::milliseconds request_timeout_;
 };
 

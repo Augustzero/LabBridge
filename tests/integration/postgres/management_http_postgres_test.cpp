@@ -1,3 +1,4 @@
+#include "labbridge/server/http/http_authenticator.h"
 #include "labbridge/server/http/management_http_controller.h"
 #include "labbridge/server/postgres/libpq_sql_session.h"
 #include "labbridge/server/postgres/management_command_executor.h"
@@ -21,10 +22,14 @@ namespace {
 using namespace labbridge::server;
 using labbridge::server::storage::value_or_empty;
 
+// 真实库测试统一使用管理 token 访问管理 HTTP 接口。
+const std::string kManagementToken(64, '1');
+
 drogon::HttpRequestPtr request(
     std::initializer_list<std::pair<std::string, std::string>> parameters = {}) {
     auto value = drogon::HttpRequest::newHttpRequest();
     value->setMethod(drogon::Get);
+    value->addHeader("Authorization", "Bearer " + kManagementToken);
     for (const auto& parameter : parameters) {
         value->setParameter(parameter.first, parameter.second);
     }
@@ -37,6 +42,7 @@ drogon::HttpRequestPtr json_request(drogon::HttpMethod method,
     builder["indentation"] = "";
     auto value = drogon::HttpRequest::newHttpRequest();
     value->setMethod(method);
+    value->addHeader("Authorization", "Bearer " + kManagementToken);
     value->setContentTypeCode(drogon::CT_APPLICATION_JSON);
     value->setBody(Json::writeString(builder, body));
     return value;
@@ -289,6 +295,8 @@ TEST_F(ManagementHttpPostgresTest, ReadsCompleteManagementEvidenceThroughHttpDto
     auto command_executor =
         std::make_shared<PostgresManagementCommandExecutor>(connection_info_);
     ManagementHttpController controller{
+        std::make_shared<HttpAuthenticator>(HttpAuthenticator::CredentialSet{
+            kManagementToken, {}}),
         handlers(executor), command_handlers(command_executor)};
 
     const auto nodes = data(invoke([&](auto callback) {
@@ -390,6 +398,8 @@ TEST_F(ManagementHttpPostgresTest,
     auto command_executor =
         std::make_shared<PostgresManagementCommandExecutor>(connection_info_);
     ManagementHttpController controller{
+        std::make_shared<HttpAuthenticator>(HttpAuthenticator::CredentialSet{
+            kManagementToken, {}}),
         handlers(query_executor), command_handlers(command_executor)};
 
     Json::Value source_body;

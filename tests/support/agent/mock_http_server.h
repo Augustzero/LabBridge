@@ -28,6 +28,8 @@ struct CapturedHttpRequest {
     std::string target;
     std::string content_type;
     std::string body;
+    std::string authorization;
+    std::string node_code;
 };
 
 class MockHttpServer final {

@@ -1,3 +1,4 @@
+#include "labbridge/server/http/http_authenticator.h"
 #include "labbridge/server/http/task_run_http_controller.h"
 #include "support/server/in_memory_repositories.h"
 
@@ -10,6 +11,16 @@
 
 namespace {
 
+// start 接口凭据：body 的 node_code 必须与认证节点一致。
+const std::string kNodeCode = "node-http";
+const std::string kAgentToken(64, 'a');
+
+std::shared_ptr<const labbridge::server::HttpAuthenticator> test_authenticator() {
+    return std::make_shared<labbridge::server::HttpAuthenticator>(
+        labbridge::server::HttpAuthenticator::CredentialSet{
+            std::string(64, '1'), {{kNodeCode, kAgentToken}}});
+}
+
 drogon::HttpResponsePtr invoke(
     const labbridge::server::TaskRunHttpController& controller,
     const Json::Value& body,
@@ -20,6 +31,8 @@ drogon::HttpResponsePtr invoke(
         request->setContentTypeCode(drogon::CT_APPLICATION_JSON);
     }
     request->setBody(body.toStyledString());
+    request->addHeader("Authorization", "Bearer " + kAgentToken);
+    request->addHeader("X-LabBridge-Node-Code", kNodeCode);
 
     drogon::HttpResponsePtr response;
     controller.post_start(
@@ -62,6 +75,7 @@ protected:
         task_id_ = configs_.create_task(std::move(task));
         controller_ =
             std::make_unique<labbridge::server::TaskRunHttpController>(
+                test_authenticator(),
                 [this](const labbridge::server::StartTaskRunRequest& request) {
                     return service_.start(request);
                 });

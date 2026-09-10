@@ -2,6 +2,7 @@
 
 #include "labbridge/server/application/management_command_service.h"
 #include "labbridge/server/application/management_query_service.h"
+#include "labbridge/server/http/http_authenticator.h"
 #include "labbridge/server/http/http_json_response.h"
 
 #include <drogon/HttpAppFramework.h>
@@ -54,8 +55,10 @@ class ManagementHttpController
 public:
     using ResponseCallback = http::ResponseCallback;
 
-    ManagementHttpController(ManagementQueryHandlers query_handlers,
-                             ManagementCommandHandlers command_handlers);
+    ManagementHttpController(
+        std::shared_ptr<const HttpAuthenticator> authenticator,
+        ManagementQueryHandlers query_handlers,
+        ManagementCommandHandlers command_handlers);
 
     void register_routes(drogon::HttpAppFramework& app);
 
@@ -94,6 +97,7 @@ public:
                     ResponseCallback&& callback) const;
 
 private:
+    std::shared_ptr<const HttpAuthenticator> authenticator_;
     ManagementQueryHandlers query_handlers_;
     ManagementCommandHandlers command_handlers_;
 };

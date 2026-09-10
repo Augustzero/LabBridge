@@ -1,7 +1,9 @@
+#include "labbridge/core/filesystem.h"
 #include "labbridge/core/logging.h"
 #include "labbridge/core/version.h"
 #include "labbridge/server/http/agent_control_http_controller.h"
 #include "labbridge/server/http/agent_report_http_controller.h"
+#include "labbridge/server/http/http_authenticator.h"
 #include "labbridge/server/http/management_http_controller.h"
 #include "labbridge/server/http/task_run_http_controller.h"
 #include "labbridge/server/postgres/agent_control_executor.h"
@@ -65,6 +67,35 @@ int positive_management_setting(const drogon::HttpAppFramework& app,
     return value;
 }
 
+std::string required_auth_setting(const drogon::HttpAppFramework& app,
+                                  const std::string& name) {
+    const auto& custom_config = app.getCustomConfig();
+    if (!custom_config.isObject() || !custom_config.isMember("auth") ||
+        !custom_config["auth"].isObject() ||
+        !custom_config["auth"].isMember(name) ||
+        !custom_config["auth"][name].isString()) {
+        throw std::runtime_error(
+            "auth " + name + " is missing from server configuration");
+    }
+    const auto value = custom_config["auth"][name].asString();
+    if (value.empty()) {
+        throw std::runtime_error("auth " + name + " must not be empty");
+    }
+    return value;
+}
+
+// 配置里的相对路径以配置文件所在目录为基准解析。
+std::string resolve_against_config(const std::string& config_path,
+                                   const std::string& value) {
+    const labbridge::core::fs::path configured{value};
+    if (configured.is_absolute()) {
+        return value;
+    }
+    return labbridge::core::fs::weakly_canonical(
+               labbridge::core::fs::path{config_path}.parent_path() / configured)
+        .string();
+}
+
 }  // namespace
 
 int main(int argc, char* argv[]) {
@@ -84,11 +115,24 @@ int main(int argc, char* argv[]) {
         const int task_run_stale_after_seconds = positive_management_setting(
             app, "task_run_stale_after_seconds");
 
+        // 凭据只在启动时读取一次，之后作为不可变对象被四组 controller 共享。
+        const auto authenticator =
+            std::make_shared<labbridge::server::HttpAuthenticator>(
+                labbridge::server::HttpAuthenticator::from_files(
+                    resolve_against_config(
+                        config_path,
+                        required_auth_setting(app, "management_token_file")),
+                    resolve_against_config(
+                        config_path,
+                        required_auth_setting(app, "agent_tokens_file"))));
+        labbridge::core::log_info(kComponent, "HTTP credentials loaded");
+
         auto report_executor =
             std::make_shared<labbridge::server::PostgresAgentReportExecutor>(
                 connection_info);
         auto controller =
             std::make_shared<labbridge::server::AgentReportHttpController>(
+                authenticator,
                 [report_executor](const labbridge::server::RawFileManifestRequest& request) {
                     return report_executor->accept_raw_file_manifest(request);
                 },
@@ -102,6 +146,7 @@ int main(int argc, char* argv[]) {
                 connection_info);
         auto task_run_controller =
             std::make_shared<labbridge::server::TaskRunHttpController>(
+                authenticator,
                 [task_run_executor](const labbridge::server::StartTaskRunRequest& request) {
                     return task_run_executor->start(request);
                 });
@@ -112,6 +157,7 @@ int main(int argc, char* argv[]) {
                 connection_info);
         auto control_controller =
             std::make_shared<labbridge::server::AgentControlHttpController>(
+                authenticator,
                 [control_executor](const labbridge::core::NodeInfo& node) {
                     return control_executor->register_node(node);
                 },
@@ -211,7 +257,9 @@ int main(int argc, char* argv[]) {
             };
         auto management_controller =
             std::make_shared<labbridge::server::ManagementHttpController>(
-                std::move(management_handlers), std::move(command_handlers));
+                authenticator,
+                std::move(management_handlers),
+                std::move(command_handlers));
         management_controller->register_routes(app);
 
         labbridge::core::log_info(kComponent, "control plane HTTP service is ready");

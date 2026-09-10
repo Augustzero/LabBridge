@@ -2,6 +2,7 @@
 #include "support/server/test_config_seed.h"
 #include "labbridge/core/version.h"
 #include "labbridge/server/http/agent_report_http_controller.h"
+#include "labbridge/server/http/http_authenticator.h"
 #include "labbridge/server/application/alert_service.h"
 #include "labbridge/server/application/node_service.h"
 #include "labbridge/server/application/qc_service.h"
@@ -13,10 +14,28 @@
 #include <json/writer.h>
 
 #include <gtest/gtest.h>
+#include <memory>
 #include <stdexcept>
 #include <string>
 
 namespace {
+
+// 上报接口凭据：manifest/report 的 body 节点必须与此一致才能通过校验。
+const std::string kNodeCode = "lab-node-http-report-017";
+const std::string kAgentToken(64, 'a');
+
+std::shared_ptr<const labbridge::server::HttpAuthenticator> test_authenticator() {
+    return std::make_shared<labbridge::server::HttpAuthenticator>(
+        labbridge::server::HttpAuthenticator::CredentialSet{
+            std::string(64, '1'), {{kNodeCode, kAgentToken}}});
+}
+
+void add_agent_credentials(drogon::HttpRequest& request,
+                           const std::string& node_code = kNodeCode,
+                           const std::string& token = kAgentToken) {
+    request.addHeader("Authorization", "Bearer " + token);
+    request.addHeader("X-LabBridge-Node-Code", node_code);
+}
 
 std::string write_json(const Json::Value& value) {
     Json::StreamWriterBuilder builder;
@@ -34,6 +53,7 @@ drogon::HttpResponsePtr invoke_manifest(
         request->setContentTypeCode(drogon::CT_APPLICATION_JSON);
     }
     request->setBody(body);
+    add_agent_credentials(*request);
 
     drogon::HttpResponsePtr response;
     controller.post_raw_file_manifest(
@@ -55,6 +75,7 @@ drogon::HttpResponsePtr invoke_report(
     request->setMethod(drogon::Post);
     request->setContentTypeCode(drogon::CT_APPLICATION_JSON);
     request->setBody(body);
+    add_agent_credentials(*request);
 
     drogon::HttpResponsePtr response;
     controller.post_task_run_report(
@@ -183,6 +204,7 @@ TEST(AgentReportHttpControllerTest, MapsManifestReportReplayAndErrors) {
         receipt_repository};
 
     labbridge::server::AgentReportHttpController controller{
+        test_authenticator(),
         [&agent_report_service](
             const labbridge::server::RawFileManifestRequest& request) {
             return agent_report_service.accept_raw_file_manifest(request);
@@ -247,12 +269,13 @@ TEST(AgentReportHttpControllerTest, MapsManifestReportReplayAndErrors) {
         invoke_manifest(controller, write_json(manifest_body("missing-run", node_code))),
         drogon::k404NotFound,
         "not_found");
+    // 节点凭据有效但 body 声明其他节点：HTTP 边界直接 403，不再进入业务层。
     assert_error(
         invoke_manifest(
             controller,
             write_json(manifest_body(started.id, other_node_code))),
-        drogon::k409Conflict,
-        "conflict");
+        drogon::k403Forbidden,
+        "forbidden");
 
     const auto manifest_response =
         invoke_manifest(controller, write_json(manifest_body(started.id, node_code)));
@@ -337,6 +360,7 @@ TEST(AgentReportHttpControllerTest, MapsManifestReportReplayAndErrors) {
     EXPECT_TRUE(alert_repository.find_by_task_run(started.id).size() == 1);
 
     labbridge::server::AgentReportHttpController throwing_controller{
+        test_authenticator(),
         [](const labbridge::server::RawFileManifestRequest&)
             -> labbridge::server::RawFileManifestResult {
             throw std::runtime_error("database password must stay private");

@@ -22,6 +22,17 @@ using labbridge::test::support::MockHttpServer;
 using labbridge::test::support::local_server_url;
 using namespace std::chrono_literals;
 
+// 64 位小写十六进制的测试密钥，与服务端凭据格式约束一致。
+const std::string kAuthToken(64, 'a');
+
+labbridge::agent::ControlPlaneClient make_client(
+    unsigned short port,
+    std::chrono::milliseconds timeout = 2s,
+    std::string node_code = "phase20-node") {
+    return labbridge::agent::ControlPlaneClient{
+        local_server_url(port), timeout, std::move(node_code), kAuthToken};
+}
+
 std::string config_response(const std::string& node_code,
                             Json tasks = Json::array(),
                             Json data_sources = Json::array(),
@@ -73,9 +84,7 @@ TEST(ControlPlaneClientTest, SendsRegistrationContract) {
             R"({"ok":true,"data":{"node_code":"phase20-node","status":"offline"}})",
         },
     }};
-    labbridge::agent::ControlPlaneClient client{
-        local_server_url(server.port()),
-        2s};
+    auto client = make_client(server.port());
 
     client.register_node(
         {"phase20-node", "phase20 agent", "0.1.0"});
@@ -99,9 +108,7 @@ TEST(ControlPlaneClientTest, SendsHeartbeatContract) {
             R"({"ok":true,"data":{"node_code":"phase20-node","status":"online","reported_at":"2026-07-18T10:00:00Z"}})",
         },
     }};
-    labbridge::agent::ControlPlaneClient client{
-        local_server_url(server.port()),
-        2s};
+    auto client = make_client(server.port());
 
     client.send_heartbeat({
         "phase20-node",
@@ -128,9 +135,7 @@ TEST(ControlPlaneClientTest, RejectsRegistrationStatusOutsideContract) {
             R"({"ok":true,"data":{"node_code":"phase20-node","status":"online"}})",
         },
     }};
-    labbridge::agent::ControlPlaneClient client{
-        local_server_url(server.port()),
-        2s};
+    auto client = make_client(server.port());
 
     expect_client_error(
         labbridge::agent::ControlPlaneErrorKind::InvalidResponse,
@@ -149,9 +154,7 @@ TEST(ControlPlaneClientTest, RejectsHeartbeatResponseWithMismatchedTimestamp) {
             R"({"ok":true,"data":{"node_code":"phase20-node","status":"online","reported_at":"2026-07-18T10:00:01Z"}})",
         },
     }};
-    labbridge::agent::ControlPlaneClient client{
-        local_server_url(server.port()),
-        2s};
+    auto client = make_client(server.port());
 
     expect_client_error(
         labbridge::agent::ControlPlaneErrorKind::InvalidResponse,
@@ -172,9 +175,7 @@ TEST(ControlPlaneClientTest, PreservesHttpStatusForInvalidConfigField) {
     MockHttpServer server{{
         {http::status::ok, body.dump()},
     }};
-    labbridge::agent::ControlPlaneClient client{
-        local_server_url(server.port()),
-        2s};
+    auto client = make_client(server.port());
 
     expect_client_error(
         labbridge::agent::ControlPlaneErrorKind::InvalidResponse,
@@ -244,9 +245,7 @@ TEST(ControlPlaneClientTest, MapsExecutableTaskAndIsolatesUnknownType) {
              std::move(data_sources),
              std::move(qc_rules))},
     }};
-    labbridge::agent::ControlPlaneClient client{
-        local_server_url(server.port()),
-        2s};
+    auto client = make_client(server.port());
 
     const auto config = client.fetch_config(node_code);
     ASSERT_NO_THROW(server.join());
@@ -279,9 +278,7 @@ TEST(ControlPlaneClientTest, AcceptsEmptyEnabledTaskList) {
     MockHttpServer server{{
         {http::status::ok, config_response("phase20-node")},
     }};
-    labbridge::agent::ControlPlaneClient client{
-        local_server_url(server.port()),
-        2s};
+    auto client = make_client(server.port());
 
     const auto config = client.fetch_config("phase20-node");
     ASSERT_NO_THROW(server.join());
@@ -293,9 +290,7 @@ TEST(ControlPlaneClientTest, ClassifiesInvalidJsonResponse) {
     MockHttpServer server{{
         {http::status::ok, "{"},
     }};
-    labbridge::agent::ControlPlaneClient client{
-        local_server_url(server.port()),
-        2s};
+    auto client = make_client(server.port());
 
     expect_client_error(
         labbridge::agent::ControlPlaneErrorKind::InvalidJson,
@@ -314,9 +309,7 @@ TEST(ControlPlaneClientTest, PreservesStructuredServerError) {
             R"({"ok":false,"error":{"code":"not_found","message":"node not found"}})",
         },
     }};
-    labbridge::agent::ControlPlaneClient client{
-        local_server_url(server.port()),
-        2s};
+    auto client = make_client(server.port());
 
     expect_client_error(
         labbridge::agent::ControlPlaneErrorKind::ServerError,
@@ -333,9 +326,7 @@ TEST(ControlPlaneClientTest, ClassifiesUnstructuredHttpFailure) {
     MockHttpServer server{{
         {http::status::service_unavailable, "temporarily unavailable"},
     }};
-    labbridge::agent::ControlPlaneClient client{
-        local_server_url(server.port()),
-        2s};
+    auto client = make_client(server.port());
 
     expect_client_error(
         labbridge::agent::ControlPlaneErrorKind::HttpStatus,
@@ -351,9 +342,7 @@ TEST(ControlPlaneClientTest, RejectsInvalidSuccessEnvelope) {
     MockHttpServer server{{
         {http::status::ok, R"({"ok":true})"},
     }};
-    labbridge::agent::ControlPlaneClient client{
-        local_server_url(server.port()),
-        2s};
+    auto client = make_client(server.port());
 
     expect_client_error(
         labbridge::agent::ControlPlaneErrorKind::InvalidResponse,
@@ -370,9 +359,7 @@ TEST(ControlPlaneClientTest, ClassifiesConnectionFailure) {
     tcp::acceptor unused_port{context, {tcp::v4(), 0}};
     const auto port = unused_port.local_endpoint().port();
     unused_port.close();
-    labbridge::agent::ControlPlaneClient client{
-        local_server_url(port),
-        500ms};
+    auto client = make_client(port, 500ms);
 
     expect_client_error(
         labbridge::agent::ControlPlaneErrorKind::Network,
@@ -390,9 +377,7 @@ TEST(ControlPlaneClientTest, EnforcesOverallRequestTimeout) {
             true,
         },
     }};
-    labbridge::agent::ControlPlaneClient client{
-        local_server_url(server.port()),
-        50ms};
+    auto client = make_client(server.port(), 50ms);
 
     expect_client_error(
         labbridge::agent::ControlPlaneErrorKind::Network,
@@ -410,9 +395,7 @@ TEST(ControlPlaneClientTest, RejectsResponseBodyAboveOneMebibyte) {
             std::string((1024U * 1024U) + 1U, 'x'),
         },
     }};
-    labbridge::agent::ControlPlaneClient client{
-        local_server_url(server.port()),
-        2s};
+    auto client = make_client(server.port());
 
     expect_client_error(
         labbridge::agent::ControlPlaneErrorKind::Network,
@@ -438,9 +421,7 @@ TEST(ControlPlaneClientTest, SendsCompleteTaskExecutionContracts) {
             R"({"ok":true,"data":{"parsed_record_ids":["61"],"qc_result_ids":["71"],"alert_ids":["81"],"replayed":false}})",
         },
     }};
-    labbridge::agent::ControlPlaneClient client{
-        local_server_url(server.port()),
-        2s};
+    auto client = make_client(server.port());
 
     const auto execution_key =
         labbridge::agent::make_scheduled_execution_key(
@@ -540,6 +521,78 @@ TEST(ControlPlaneClientTest, SendsCompleteTaskExecutionContracts) {
     EXPECT_EQ(
         report_body["parsed_records"][0]["qc_results"][0]["qc_rule_id"],
         "21");
+}
+
+TEST(ControlPlaneClientTest, AttachesNodeCredentialsToEveryRequest) {
+    MockHttpServer server{{
+        {
+            http::status::created,
+            R"({"ok":true,"data":{"node_code":"phase20-node","status":"offline"}})",
+        },
+        {
+            http::status::ok,
+            R"({"ok":true,"data":{"node_code":"phase20-node","status":"online","reported_at":"2026-07-18T10:00:00Z"}})",
+        },
+        {
+            http::status::ok,
+            config_response("phase20-node"),
+        },
+        {
+            http::status::created,
+            R"({"ok":true,"data":{"task_run_id":"42","replayed":false}})",
+        },
+        {
+            http::status::created,
+            R"({"ok":true,"data":{"raw_file_ids":["51"],"replayed":false}})",
+        },
+        {
+            http::status::ok,
+            R"({"ok":true,"data":{"parsed_record_ids":["61"],"qc_result_ids":["71"],"alert_ids":["81"],"replayed":false}})",
+        },
+    }};
+    auto client = make_client(server.port());
+
+    client.register_node({"phase20-node", "phase20 agent", "0.1.0"});
+    client.send_heartbeat({
+        "phase20-node",
+        "0.1.0",
+        "2026-07-18T10:00:00Z",
+    });
+    static_cast<void>(client.fetch_config("phase20-node"));
+    const auto started = client.start_task_run({
+        "phase20-node",
+        "30",
+        "phase20-node|30|2026-08-08T10:00:00Z",
+        "2026-08-08T10:00:00Z",
+        "2026-08-08T10:00:01Z",
+        "scheduled",
+    });
+    static_cast<void>(client.report_raw_file_manifest({
+        started.task_run_id,
+        "phase20-node",
+        "manifest-key",
+        {},
+    }));
+    static_cast<void>(client.report_task_run({
+        started.task_run_id,
+        "phase20-node",
+        "report-key",
+        labbridge::core::TaskRunStatus::Succeeded,
+        "2026-08-08T10:00:02Z",
+        0,
+        0,
+        0,
+        {},
+        {},
+    }));
+    ASSERT_NO_THROW(server.join());
+
+    // 六类请求全部携带 Bearer 密钥和节点身份请求头。
+    ASSERT_EQ(server.requests().size(), 6U);
+    for (const auto& request : server.requests()) {
+        EXPECT_EQ(request.authorization, "Bearer " + kAuthToken) << request.target;
+        EXPECT_EQ(request.node_code, "phase20-node") << request.target;
+    }
 }
 
 }  // namespace

@@ -35,7 +35,8 @@ int main(int argc, char* argv[]) {
                             std::to_string(queue_store.pending_job_count()));
 
         labbridge::agent::ControlPlaneClient control_client{
-            config.server_url, config.request_timeout};
+            config.server_url, config.request_timeout,
+            config.node.node_code, config.auth_token};
         labbridge::agent::PulledAgentConfig remote_config;
         bool connected = true;
         try {

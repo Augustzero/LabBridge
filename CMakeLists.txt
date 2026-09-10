@@ -24,11 +24,12 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 find_package(OpenSSL REQUIRED COMPONENTS Crypto)
 find_package(nlohmann_json REQUIRED)
+# yaml-cpp 供 Agent 配置和 Server 节点凭据映射共同使用。
+find_package(yaml-cpp REQUIRED)
 
 if(LABBRIDGE_BUILD_AGENT)
     find_package(SQLite3 REQUIRED)
     find_package(Boost REQUIRED COMPONENTS system)
-    find_package(yaml-cpp REQUIRED)
 endif()
 
 if(LABBRIDGE_BUILD_SERVER)

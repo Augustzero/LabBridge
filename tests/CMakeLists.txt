@@ -307,6 +307,22 @@ add_labbridge_test(
 )
 
 add_labbridge_test(
+    http_authenticator_test
+    SOURCES unit/server/http_authenticator_test.cpp
+    LINK_LIBRARIES GTest::gtest_main labbridge_server_http
+    LABELS unit
+    TIMEOUT 10
+)
+
+add_labbridge_test(
+    http_authentication_contract_test
+    SOURCES component/server/http_authentication_contract_test.cpp
+    LINK_LIBRARIES GTest::gtest_main labbridge_server_http
+    LABELS component contract
+    TIMEOUT 30
+)
+
+add_labbridge_test(
     sql_transaction_test
     SOURCES unit/server/sql_transaction_test.cpp
     LINK_LIBRARIES GTest::gtest_main labbridge_server_postgres
@@ -426,6 +442,15 @@ add_labbridge_postgres_test(
 add_labbridge_postgres_test(
     management_http_postgres_test
     SOURCES integration/postgres/management_http_postgres_test.cpp
+    LINK_LIBRARIES
+        GTest::gtest
+        labbridge_server_http
+        labbridge_server_postgres
+)
+
+add_labbridge_postgres_test(
+    auth_rejection_postgres_test
+    SOURCES integration/postgres/auth_rejection_postgres_test.cpp
     LINK_LIBRARIES
         GTest::gtest
         labbridge_server_http

@@ -68,6 +68,8 @@ void MockHttpServer::serve() {
                 std::string{request.target()},
                 std::string{request[http::field::content_type]},
                 request.body(),
+                std::string{request[http::field::authorization]},
+                std::string{request["X-LabBridge-Node-Code"]},
             });
 
             if (planned.wait_for_disconnect) {

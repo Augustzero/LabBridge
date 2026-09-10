@@ -463,10 +463,15 @@ void respond_item(const Result& result,
 }  // namespace
 
 ManagementHttpController::ManagementHttpController(
+    std::shared_ptr<const HttpAuthenticator> authenticator,
     ManagementQueryHandlers query_handlers,
     ManagementCommandHandlers command_handlers)
-    : query_handlers_(std::move(query_handlers)),
+    : authenticator_(std::move(authenticator)),
+      query_handlers_(std::move(query_handlers)),
       command_handlers_(std::move(command_handlers)) {
+    if (!authenticator_) {
+        throw std::invalid_argument("management HTTP authenticator is required");
+    }
     if (!query_handlers_.list_nodes || !query_handlers_.find_node ||
         !query_handlers_.list_data_sources || !query_handlers_.list_qc_rules ||
         !query_handlers_.list_tasks || !query_handlers_.list_task_runs ||
@@ -598,6 +603,9 @@ void ManagementHttpController::register_routes(drogon::HttpAppFramework& app) {
 void ManagementHttpController::get_nodes(const drogon::HttpRequestPtr& request,
                                          ResponseCallback&& callback) const {
     http::handle_request(kComponent, "GET /api/v1/nodes", [&] {
+        if (!authenticator_->require_management(request, callback)) {
+            return;
+        }
         const auto& parameters = request->getParameters();
         require_allowed_parameters(parameters, {"status", "limit", "cursor"});
         respond_page(query_handlers_.list_nodes({optional_parameter(parameters, "status"),
@@ -610,6 +618,9 @@ void ManagementHttpController::get_node(const drogon::HttpRequestPtr& request,
                                         const std::string& node_code,
                                         ResponseCallback&& callback) const {
     http::handle_request(kComponent, "GET /api/v1/nodes/{nodeCode}", [&] {
+        if (!authenticator_->require_management(request, callback)) {
+            return;
+        }
         require_allowed_parameters(request->getParameters(), {});
         respond_item(query_handlers_.find_node(node_code), node_summary_json, callback);
     }, callback);
@@ -618,6 +629,9 @@ void ManagementHttpController::get_node(const drogon::HttpRequestPtr& request,
 void ManagementHttpController::get_data_sources(
     const drogon::HttpRequestPtr& request, ResponseCallback&& callback) const {
     http::handle_request(kComponent, "GET /api/v1/data-sources", [&] {
+        if (!authenticator_->require_management(request, callback)) {
+            return;
+        }
         const auto& parameters = request->getParameters();
         require_allowed_parameters(parameters, {"node_code", "enabled", "limit", "cursor"});
         respond_page(query_handlers_.list_data_sources({required_parameter(parameters, "node_code"),
@@ -630,6 +644,9 @@ void ManagementHttpController::get_data_sources(
 void ManagementHttpController::get_qc_rules(const drogon::HttpRequestPtr& request,
                                             ResponseCallback&& callback) const {
     http::handle_request(kComponent, "GET /api/v1/qc-rules", [&] {
+        if (!authenticator_->require_management(request, callback)) {
+            return;
+        }
         const auto& parameters = request->getParameters();
         require_allowed_parameters(parameters, {"enabled", "limit", "cursor"});
         respond_page(query_handlers_.list_qc_rules({optional_bool(parameters, "enabled"),
@@ -641,6 +658,9 @@ void ManagementHttpController::get_qc_rules(const drogon::HttpRequestPtr& reques
 void ManagementHttpController::get_tasks(const drogon::HttpRequestPtr& request,
                                          ResponseCallback&& callback) const {
     http::handle_request(kComponent, "GET /api/v1/tasks", [&] {
+        if (!authenticator_->require_management(request, callback)) {
+            return;
+        }
         const auto& parameters = request->getParameters();
         require_allowed_parameters(parameters, {"node_code", "enabled", "limit", "cursor"});
         respond_page(query_handlers_.list_tasks({required_parameter(parameters, "node_code"),
@@ -653,6 +673,9 @@ void ManagementHttpController::get_tasks(const drogon::HttpRequestPtr& request,
 void ManagementHttpController::get_task_runs(const drogon::HttpRequestPtr& request,
                                              ResponseCallback&& callback) const {
     http::handle_request(kComponent, "GET /api/v1/task-runs", [&] {
+        if (!authenticator_->require_management(request, callback)) {
+            return;
+        }
         const auto& parameters = request->getParameters();
         require_allowed_parameters(parameters,
             {"node_code", "task_id", "status", "limit", "cursor"});
@@ -668,6 +691,9 @@ void ManagementHttpController::get_task_run(const drogon::HttpRequestPtr& reques
                                             const std::string& task_run_id,
                                             ResponseCallback&& callback) const {
     http::handle_request(kComponent, "GET /api/v1/task-runs/{runId}", [&] {
+        if (!authenticator_->require_management(request, callback)) {
+            return;
+        }
         const auto& parameters = request->getParameters();
         require_allowed_parameters(parameters, {"node_code"});
         respond_item(query_handlers_.find_task_run(required_parameter(parameters, "node_code"),
@@ -679,6 +705,9 @@ void ManagementHttpController::get_task_run(const drogon::HttpRequestPtr& reques
 void ManagementHttpController::get_raw_files(const drogon::HttpRequestPtr& request,
                                              ResponseCallback&& callback) const {
     http::handle_request(kComponent, "GET /api/v1/raw-files", [&] {
+        if (!authenticator_->require_management(request, callback)) {
+            return;
+        }
         const auto& parameters = request->getParameters();
         require_allowed_parameters(parameters, {"task_run_id", "limit", "cursor"});
         respond_page(query_handlers_.list_raw_files({required_parameter(parameters, "task_run_id"),
@@ -690,6 +719,9 @@ void ManagementHttpController::get_raw_files(const drogon::HttpRequestPtr& reque
 void ManagementHttpController::get_parsed_records(
     const drogon::HttpRequestPtr& request, ResponseCallback&& callback) const {
     http::handle_request(kComponent, "GET /api/v1/parsed-records", [&] {
+        if (!authenticator_->require_management(request, callback)) {
+            return;
+        }
         const auto& parameters = request->getParameters();
         require_allowed_parameters(parameters, {"task_run_id", "limit", "cursor"});
         respond_page(query_handlers_.list_parsed_records(
@@ -702,6 +734,9 @@ void ManagementHttpController::get_parsed_records(
 void ManagementHttpController::get_qc_results(const drogon::HttpRequestPtr& request,
                                               ResponseCallback&& callback) const {
     http::handle_request(kComponent, "GET /api/v1/qc-results", [&] {
+        if (!authenticator_->require_management(request, callback)) {
+            return;
+        }
         const auto& parameters = request->getParameters();
         require_allowed_parameters(parameters, {"task_run_id", "result", "limit", "cursor"});
         respond_page(query_handlers_.list_qc_results({required_parameter(parameters, "task_run_id"),
@@ -714,6 +749,9 @@ void ManagementHttpController::get_qc_results(const drogon::HttpRequestPtr& requ
 void ManagementHttpController::get_alerts(const drogon::HttpRequestPtr& request,
                                           ResponseCallback&& callback) const {
     http::handle_request(kComponent, "GET /api/v1/alerts", [&] {
+        if (!authenticator_->require_management(request, callback)) {
+            return;
+        }
         const auto& parameters = request->getParameters();
         require_allowed_parameters(parameters,
             {"node_code", "task_run_id", "status", "severity", "limit", "cursor"});
@@ -730,6 +768,9 @@ void ManagementHttpController::post_data_source(
     const drogon::HttpRequestPtr& request,
     ResponseCallback&& callback) const {
     http::handle_request(kComponent, "POST /api/v1/data-sources", [&] {
+        if (!authenticator_->require_management(request, callback)) {
+            return;
+        }
         require_allowed_parameters(request->getParameters(), {});
         if (!http::require_json_content_type(request, callback)) {
             return;
@@ -747,6 +788,9 @@ void ManagementHttpController::post_qc_rule(
     const drogon::HttpRequestPtr& request,
     ResponseCallback&& callback) const {
     http::handle_request(kComponent, "POST /api/v1/qc-rules", [&] {
+        if (!authenticator_->require_management(request, callback)) {
+            return;
+        }
         require_allowed_parameters(request->getParameters(), {});
         if (!http::require_json_content_type(request, callback)) {
             return;
@@ -764,6 +808,9 @@ void ManagementHttpController::post_task(
     const drogon::HttpRequestPtr& request,
     ResponseCallback&& callback) const {
     http::handle_request(kComponent, "POST /api/v1/tasks", [&] {
+        if (!authenticator_->require_management(request, callback)) {
+            return;
+        }
         require_allowed_parameters(request->getParameters(), {});
         if (!http::require_json_content_type(request, callback)) {
             return;
@@ -782,6 +829,9 @@ void ManagementHttpController::patch_task(
     const std::string& task_id,
     ResponseCallback&& callback) const {
     http::handle_request(kComponent, "PATCH /api/v1/tasks/{taskId}", [&] {
+        if (!authenticator_->require_management(request, callback)) {
+            return;
+        }
         require_allowed_parameters(request->getParameters(), {});
         if (!http::require_json_content_type(request, callback)) {
             return;

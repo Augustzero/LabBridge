@@ -1,3 +1,4 @@
+#include "labbridge/server/http/http_authenticator.h"
 #include "labbridge/server/http/management_http_controller.h"
 
 #include <drogon/HttpRequest.h>
@@ -5,6 +6,7 @@
 #include <gtest/gtest.h>
 #include <json/writer.h>
 
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -12,6 +14,43 @@
 namespace {
 
 using namespace labbridge::server;
+
+// 测试凭据：64 位小写十六进制，管理 token 与节点密钥相互独立。
+const std::string kManagementToken(64, '1');
+const std::string kAgentToken(64, 'a');
+
+std::shared_ptr<const HttpAuthenticator> test_authenticator() {
+    return std::make_shared<HttpAuthenticator>(
+        HttpAuthenticator::CredentialSet{
+            kManagementToken, {{"node-http-025", kAgentToken}}});
+}
+
+// 管理 API 统一携带管理 token。
+drogon::HttpRequestPtr request(
+    std::initializer_list<std::pair<std::string, std::string>> parameters = {}) {
+    auto value = drogon::HttpRequest::newHttpRequest();
+    value->setMethod(drogon::Get);
+    value->addHeader("Authorization", "Bearer " + kManagementToken);
+    for (const auto& parameter : parameters) {
+        value->setParameter(parameter.first, parameter.second);
+    }
+    return value;
+}
+
+drogon::HttpRequestPtr json_request(drogon::HttpMethod method,
+                                    const Json::Value& body,
+                                    bool application_json = true) {
+    Json::StreamWriterBuilder builder;
+    builder["indentation"] = "";
+    auto value = drogon::HttpRequest::newHttpRequest();
+    value->setMethod(method);
+    value->addHeader("Authorization", "Bearer " + kManagementToken);
+    if (application_json) {
+        value->setContentTypeCode(drogon::CT_APPLICATION_JSON);
+    }
+    value->setBody(Json::writeString(builder, body));
+    return value;
+}
 
 template <typename T>
 ManagementPageResult<T> empty_page() {
@@ -89,30 +128,6 @@ ManagementCommandHandlers empty_command_handlers() {
     return handlers;
 }
 
-drogon::HttpRequestPtr request(
-    std::initializer_list<std::pair<std::string, std::string>> parameters = {}) {
-    auto value = drogon::HttpRequest::newHttpRequest();
-    value->setMethod(drogon::Get);
-    for (const auto& parameter : parameters) {
-        value->setParameter(parameter.first, parameter.second);
-    }
-    return value;
-}
-
-drogon::HttpRequestPtr json_request(drogon::HttpMethod method,
-                                    const Json::Value& body,
-                                    bool application_json = true) {
-    Json::StreamWriterBuilder builder;
-    builder["indentation"] = "";
-    auto value = drogon::HttpRequest::newHttpRequest();
-    value->setMethod(method);
-    if (application_json) {
-        value->setContentTypeCode(drogon::CT_APPLICATION_JSON);
-    }
-    value->setBody(Json::writeString(builder, body));
-    return value;
-}
-
 template <typename Invoke>
 drogon::HttpResponsePtr invoke(Invoke operation) {
     drogon::HttpResponsePtr response;
@@ -153,7 +168,8 @@ TEST(ManagementHttpControllerTest, ParsesWhitelistedPaginationAndFilters) {
             labbridge::core::Status::success(),
             {{{record, labbridge::core::NodeStatus::Offline}}, "42", true}};
     };
-    ManagementHttpController controller{std::move(handlers), empty_command_handlers()};
+    ManagementHttpController controller{
+        test_authenticator(), std::move(handlers), empty_command_handlers()};
 
     const auto response = invoke([&](auto callback) {
         controller.get_nodes(
@@ -243,7 +259,8 @@ TEST(ManagementHttpControllerTest, MapsConfigurationAndSummaryObjects) {
         return ManagementPageResult<TaskRecord>{
             labbridge::core::Status::success(), {{{task}}, std::nullopt, false}};
     };
-    ManagementHttpController controller{std::move(handlers), empty_command_handlers()};
+    ManagementHttpController controller{
+        test_authenticator(), std::move(handlers), empty_command_handlers()};
 
     const auto node = invoke([&](auto callback) {
         controller.get_node(request(), "node-http-025", std::move(callback));
@@ -340,7 +357,8 @@ TEST(ManagementHttpControllerTest, MapsRunEvidenceFiltersAndSanitizesFailures) {
         return ManagementPageResult<AlertRecord>{
             labbridge::core::Status::success(), {{{alert}}, std::nullopt, false}};
     };
-    ManagementHttpController controller{std::move(handlers), empty_command_handlers()};
+    ManagementHttpController controller{
+        test_authenticator(), std::move(handlers), empty_command_handlers()};
 
     const auto runs = invoke([&](auto callback) {
         controller.get_task_runs(request({{"node_code", "node-http-025"},
@@ -388,7 +406,9 @@ TEST(ManagementHttpControllerTest, MapsRunEvidenceFiltersAndSanitizesFailures) {
         -> ManagementPageResult<ManagementNode> {
         throw std::runtime_error("password=secret SQL SELECT private_payload");
     };
-    ManagementHttpController throwing{std::move(throwing_handlers), empty_command_handlers()};
+    ManagementHttpController throwing{
+        test_authenticator(), std::move(throwing_handlers),
+        empty_command_handlers()};
     const auto failure = invoke([&](auto callback) {
         throwing.get_nodes(request(), std::move(callback));
     });
@@ -466,7 +486,7 @@ TEST(ManagementHttpControllerTest, ParsesCommandsAndReturnsWrittenObjects) {
             labbridge::core::Status::success(), record.id, record};
     };
     ManagementHttpController controller{
-        empty_handlers(), std::move(commands)};
+        test_authenticator(), empty_handlers(), std::move(commands)};
 
     Json::Value source_body;
     source_body["node_code"] = "node-http-025";
@@ -577,7 +597,7 @@ TEST(ManagementHttpControllerTest, RejectsInvalidCommandHttpBoundaries) {
             {}, {}};
     };
     ManagementHttpController controller{
-        empty_handlers(), std::move(commands)};
+        test_authenticator(), empty_handlers(), std::move(commands)};
 
     Json::Value source_body;
     source_body["node_code"] = "missing-node";

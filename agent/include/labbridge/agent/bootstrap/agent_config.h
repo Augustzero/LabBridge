@@ -23,6 +23,9 @@ struct AgentStartupConfig {
     std::chrono::seconds retry_initial{2};
     std::chrono::seconds retry_max{300};
     std::vector<std::string> allowed_local_roots;
+    // 本节点访问控制面的密钥（agent.token_file 的加载结果），
+    // 只在内存中使用，不进入任务配置投影、SQLite 队列或归档内容。
+    std::string auth_token;
 };
 
 class AgentConfigError final : public std::runtime_error {

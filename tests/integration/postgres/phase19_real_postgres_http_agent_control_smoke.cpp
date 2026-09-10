@@ -1,5 +1,6 @@
 #include "labbridge/core/version.h"
 #include "labbridge/server/http/agent_control_http_controller.h"
+#include "labbridge/server/http/http_authenticator.h"
 #include "labbridge/server/application/config_service.h"
 #include "labbridge/server/postgres/libpq_sql_session.h"
 #include "labbridge/server/postgres/agent_control_executor.h"
@@ -20,6 +21,15 @@
 
 namespace {
 
+// phase19 冒烟的节点凭据：请求头、注册与心跳 body 声明同一节点。
+const std::string kNodeCode = "lab-node-real-agent-control-019";
+const std::string kAgentToken(64, 'a');
+
+void add_agent_credentials(drogon::HttpRequest& request) {
+    request.addHeader("Authorization", "Bearer " + kAgentToken);
+    request.addHeader("X-LabBridge-Node-Code", kNodeCode);
+}
+
 std::string write_json(const Json::Value& value) {
     Json::StreamWriterBuilder builder;
     builder["indentation"] = "";
@@ -34,6 +44,7 @@ drogon::HttpResponsePtr invoke_post(
     request->setMethod(drogon::Post);
     request->setContentTypeCode(drogon::CT_APPLICATION_JSON);
     request->setBody(write_json(body));
+    add_agent_credentials(*request);
 
     drogon::HttpResponsePtr response;
     auto callback = [&response](const drogon::HttpResponsePtr& current) {
@@ -51,8 +62,12 @@ drogon::HttpResponsePtr invoke_post(
 drogon::HttpResponsePtr invoke_config(
     const labbridge::server::AgentControlHttpController& controller,
     const std::string& node_code) {
+    auto request = drogon::HttpRequest::newHttpRequest();
+    request->setMethod(drogon::Get);
+    add_agent_credentials(*request);
     drogon::HttpResponsePtr response;
     controller.get_config(
+        request,
         node_code,
         [&response](const drogon::HttpResponsePtr& current) {
             response = current;
@@ -89,6 +104,9 @@ int main() {
         std::make_shared<labbridge::server::PostgresAgentControlExecutor>(
             connection_info);
     labbridge::server::AgentControlHttpController controller{
+        std::make_shared<labbridge::server::HttpAuthenticator>(
+            labbridge::server::HttpAuthenticator::CredentialSet{
+                std::string(64, '1'), {{kNodeCode, kAgentToken}}}),
         [executor](const labbridge::core::NodeInfo& node) {
             return executor->register_node(node);
         },
@@ -149,11 +167,12 @@ int main() {
     assert(contains_task(config["tasks"], enabled_task));
     assert(!contains_task(config["tasks"], disabled_task));
 
+    // 路径声明的节点与认证节点不一致时，HTTP 边界直接 403，不进入业务查询。
     const auto missing_response =
         invoke_config(controller, "lab-node-real-agent-control-019-missing");
-    assert(missing_response->statusCode() == drogon::k404NotFound);
+    assert(missing_response->statusCode() == drogon::k403Forbidden);
     assert(response_json(missing_response)["error"]["code"].asString() ==
-           "not_found");
+           "forbidden");
 
     const auto persisted = session.query_one(
         "SELECT n.status, n.agent_version, "

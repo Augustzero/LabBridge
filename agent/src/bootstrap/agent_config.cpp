@@ -2,13 +2,16 @@
 
 #include "labbridge/agent/bootstrap/control_plane_client.h"
 #include "labbridge/core/filesystem.h"
+#include "labbridge/core/hex_token.h"
 #include "labbridge/core/version.h"
 
 #include <yaml-cpp/yaml.h>
 
 #include <chrono>
 #include <cctype>
+#include <fstream>
 #include <functional>
+#include <iterator>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -80,6 +83,29 @@ labbridge::core::fs::path normalized_absolute_path(
     return labbridge::core::fs::weakly_canonical(absolute);
 }
 
+// 读取本节点密钥文件：整个文件就是一个密钥，最多允许一个结尾换行。
+// 报错只提文件路径和格式要求，不回显文件内容。
+std::string load_agent_token(const labbridge::core::fs::path& token_file) {
+    std::ifstream input{token_file, std::ios::binary};
+    if (!input) {
+        throw AgentConfigError(
+            "agent.token_file '" + token_file.string() + "' cannot be read");
+    }
+    std::string token{std::istreambuf_iterator<char>{input}, {}};
+    if (!token.empty() && token.back() == '\n') {
+        token.pop_back();
+        if (!token.empty() && token.back() == '\r') {
+            token.pop_back();
+        }
+    }
+    if (!labbridge::core::is_valid_hex_token(token)) {
+        throw AgentConfigError(
+            "agent.token_file '" + token_file.string() +
+            "' must contain a single 64-character lowercase hex token");
+    }
+    return token;
+}
+
 std::vector<std::string> required_allowed_roots(const YAML::Node& tasks) {
     const auto roots = tasks["allowed_local_roots"];
     if (!roots || !roots.IsSequence() || roots.size() == 0U) {
@@ -137,6 +163,10 @@ AgentStartupConfig parse_agent_config_node(
         kMaximumIntervalSeconds);
     config.heartbeat_interval =
         std::chrono::seconds{heartbeat_interval_seconds};
+
+    // 认证是启动的硬性要求：token_file 缺失或文件内容非法都直接失败。
+    config.auth_token = load_agent_token(normalized_absolute_path(
+        required_string(agent, "token_file", "agent"), base_directory));
 
     const auto tasks = root["tasks"];
     if (!tasks || !tasks.IsMap()) {

@@ -15,6 +15,15 @@ app:
 custom_config:
   database:
     connection_info: "host=127.0.0.1 port=5432 dbname=labbridge user=labbridge password=labbridge"
+  # 认证配置为必填项，缺少任一文件 Server 拒绝启动。
+  # 凭据用 `openssl rand -hex 32` 生成（64 位小写十六进制文本）。
+  auth:
+    # 管理 API 访问令牌文件：内容为一个管理 token，允许末尾换行。
+    management_token_file: /etc/labbridge/auth/management.token
+    # Agent 节点密钥映射文件（节点编号 -> 独立密钥），允许为空映射：
+    # agent_tokens:
+    #   station-001: "<station-001 的独立密钥>"
+    agent_tokens_file: /etc/labbridge/auth/agent-tokens.yaml
   management:
     node_offline_after_seconds: 120
     task_run_stale_after_seconds: 3600

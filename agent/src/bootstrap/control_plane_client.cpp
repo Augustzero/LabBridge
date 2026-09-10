@@ -457,10 +457,19 @@ void validate_control_plane_url(std::string_view server_url) {
 
 ControlPlaneClient::ControlPlaneClient(
     std::string server_url,
-    std::chrono::milliseconds request_timeout)
-    : request_timeout_(request_timeout) {
+    std::chrono::milliseconds request_timeout,
+    std::string node_code,
+    std::string auth_token)
+    : node_code_(std::move(node_code)),
+      auth_token_(std::move(auth_token)),
+      request_timeout_(request_timeout) {
     if (request_timeout_.count() <= 0) {
         throw std::invalid_argument("request timeout must be positive");
+    }
+    // 缺少身份或密钥说明配置装配有误，宁可启动失败也不发送匿名请求。
+    if (node_code_.empty() || auth_token_.empty()) {
+        throw std::invalid_argument(
+            "node code and auth token are required for control plane requests");
     }
     const auto parsed = parse_server_url(server_url);
     host_ = parsed.host;
@@ -794,6 +803,10 @@ ControlPlaneClient::HttpResponse ControlPlaneClient::request(
     request.set(http::field::user_agent, "LabBridge-Agent");
     request.set(http::field::accept, "application/json");
     request.set(http::field::connection, "close");
+    // request 是所有控制面请求的唯一出口，认证头统一在这里附加；
+    // 服务端先按节点头找到该节点的密钥，再做 Bearer 比对。
+    request.set(http::field::authorization, "Bearer " + auth_token_);
+    request.set("X-LabBridge-Node-Code", node_code_);
     if (verb == http::verb::post) {
         request.set(http::field::content_type, "application/json");
         request.body() = std::move(body);

@@ -42,8 +42,14 @@ StartTaskRunRequest parse_start_request(const drogon::HttpRequestPtr& request) {
 
 }  // namespace
 
-TaskRunHttpController::TaskRunHttpController(StartHandler start_handler)
-    : start_handler_(std::move(start_handler)) {
+TaskRunHttpController::TaskRunHttpController(
+    std::shared_ptr<const HttpAuthenticator> authenticator,
+    StartHandler start_handler)
+    : authenticator_(std::move(authenticator)),
+      start_handler_(std::move(start_handler)) {
+    if (!authenticator_) {
+        throw std::invalid_argument("task run HTTP authenticator is required");
+    }
     if (!start_handler_) {
         throw std::invalid_argument("task run start HTTP handler is required");
     }
@@ -63,10 +69,20 @@ void TaskRunHttpController::post_start(
     const drogon::HttpRequestPtr& request,
     ResponseCallback&& callback) const {
     http::handle_request(kComponent, "POST /api/v1/task-runs/start", [&] {
+        const auto authenticated_node =
+            authenticator_->require_agent_node(request, callback);
+        if (!authenticated_node) {
+            return;
+        }
         if (!http::require_json_content_type(request, callback)) {
             return;
         }
-        const auto result = start_handler_(parse_start_request(request));
+        const auto parsed = parse_start_request(request);
+        if (!HttpAuthenticator::require_declared_node(
+                *authenticated_node, parsed.node_code, callback)) {
+            return;
+        }
+        const auto result = start_handler_(parsed);
         if (!result.status.ok) {
             callback(http::status_error_response(result.status));
             return;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "labbridge/server/application/agent_report_service.h"
+#include "labbridge/server/http/http_authenticator.h"
 #include "labbridge/server/http/http_json_response.h"
 
 #include <drogon/HttpAppFramework.h>
@@ -21,8 +22,10 @@ public:
         std::function<TaskRunReportResult(const TaskRunReportRequest&)>;
     using ResponseCallback = http::ResponseCallback;
 
-    AgentReportHttpController(RawFileManifestHandler raw_file_manifest_handler,
-                              TaskRunReportHandler task_run_report_handler);
+    AgentReportHttpController(
+        std::shared_ptr<const HttpAuthenticator> authenticator,
+        RawFileManifestHandler raw_file_manifest_handler,
+        TaskRunReportHandler task_run_report_handler);
 
     void register_routes(drogon::HttpAppFramework& app);
 
@@ -32,6 +35,7 @@ public:
                               ResponseCallback&& callback) const;
 
 private:
+    std::shared_ptr<const HttpAuthenticator> authenticator_;
     RawFileManifestHandler raw_file_manifest_handler_;
     TaskRunReportHandler task_run_report_handler_;
 };

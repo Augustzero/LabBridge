@@ -125,12 +125,18 @@ Json::Value config_json(const AgentConfigResult& result) {
 }  // namespace
 
 AgentControlHttpController::AgentControlHttpController(
+    std::shared_ptr<const HttpAuthenticator> authenticator,
     RegisterNodeHandler register_node_handler,
     HeartbeatHandler heartbeat_handler,
     FindConfigHandler find_config_handler)
-    : register_node_handler_(std::move(register_node_handler)),
+    : authenticator_(std::move(authenticator)),
+      register_node_handler_(std::move(register_node_handler)),
       heartbeat_handler_(std::move(heartbeat_handler)),
       find_config_handler_(std::move(find_config_handler)) {
+    if (!authenticator_) {
+        throw std::invalid_argument(
+            "agent control HTTP authenticator is required");
+    }
     if (!register_node_handler_ || !heartbeat_handler_ || !find_config_handler_) {
         throw std::invalid_argument("agent control HTTP handlers are required");
     }
@@ -152,10 +158,10 @@ void AgentControlHttpController::register_routes(drogon::HttpAppFramework& app) 
         {drogon::Post});
     app.registerHandler(
         "/api/v1/agents/{1}/config",
-        [self](const drogon::HttpRequestPtr&,
+        [self](const drogon::HttpRequestPtr& request,
                ResponseCallback&& callback,
                const std::string& node_code) {
-            self->get_config(node_code, std::move(callback));
+            self->get_config(request, node_code, std::move(callback));
         },
         {drogon::Get});
 }
@@ -164,10 +170,20 @@ void AgentControlHttpController::post_register(
     const drogon::HttpRequestPtr& request,
     ResponseCallback&& callback) const {
     http::handle_request(kComponent, "POST /api/v1/agents/register", [&] {
+        // 凭据校验先于 JSON 解析；节点一致性检查放在 body 解析之后。
+        const auto authenticated_node =
+            authenticator_->require_agent_node(request, callback);
+        if (!authenticated_node) {
+            return;
+        }
         if (!http::require_json_content_type(request, callback)) {
             return;
         }
         const auto node = parse_registration(parse_json_body(request));
+        if (!HttpAuthenticator::require_declared_node(
+                *authenticated_node, node.node_code, callback)) {
+            return;
+        }
         const auto status = register_node_handler_(node);
         if (!status.ok) {
             callback(http::status_error_response(status));
@@ -185,10 +201,19 @@ void AgentControlHttpController::post_heartbeat(
     const drogon::HttpRequestPtr& request,
     ResponseCallback&& callback) const {
     http::handle_request(kComponent, "POST /api/v1/agents/heartbeat", [&] {
+        const auto authenticated_node =
+            authenticator_->require_agent_node(request, callback);
+        if (!authenticated_node) {
+            return;
+        }
         if (!http::require_json_content_type(request, callback)) {
             return;
         }
         const auto heartbeat = parse_heartbeat(parse_json_body(request));
+        if (!HttpAuthenticator::require_declared_node(
+                *authenticated_node, heartbeat.node_code, callback)) {
+            return;
+        }
         const auto status = heartbeat_handler_(heartbeat);
         if (!status.ok) {
             callback(http::status_error_response(status));
@@ -204,9 +229,20 @@ void AgentControlHttpController::post_heartbeat(
 }
 
 void AgentControlHttpController::get_config(
+    const drogon::HttpRequestPtr& request,
     const std::string& node_code,
     ResponseCallback&& callback) const {
     http::handle_request(kComponent, "GET /api/v1/agents/{nodeCode}/config", [&] {
+        const auto authenticated_node =
+            authenticator_->require_agent_node(request, callback);
+        if (!authenticated_node) {
+            return;
+        }
+        // 拉配置的节点在路径里声明，路径解析后即可做一致性检查。
+        if (!HttpAuthenticator::require_declared_node(
+                *authenticated_node, node_code, callback)) {
+            return;
+        }
         const auto result = find_config_handler_(node_code);
         if (!result.status.ok) {
             callback(http::status_error_response(result.status));

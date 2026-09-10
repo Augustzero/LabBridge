@@ -2,22 +2,37 @@
 #include "labbridge/server/application/config_service.h"
 #include "labbridge/server/application/node_service.h"
 #include "labbridge/server/http/agent_control_http_controller.h"
+#include "labbridge/server/http/http_authenticator.h"
 #include "support/server/in_memory_repositories.h"
 #include "support/server/test_config_seed.h"
 
 #include <gtest/gtest.h>
 
+#include <drogon/HttpRequest.h>
 #include <drogon/HttpResponse.h>
 
+#include <memory>
 #include <string>
 
 namespace {
 
+// 投影测试只关心拉取行为，所有请求都以 node-22 的合法凭据发出。
+std::shared_ptr<const labbridge::server::HttpAuthenticator> test_authenticator() {
+    return std::make_shared<labbridge::server::HttpAuthenticator>(
+        labbridge::server::HttpAuthenticator::CredentialSet{
+            std::string(64, '1'), {{"node-22", std::string(64, 'a')}}});
+}
+
 drogon::HttpResponsePtr invoke_config(
     const labbridge::server::AgentControlHttpController& controller,
     const std::string& node_code) {
+    auto request = drogon::HttpRequest::newHttpRequest();
+    request->setMethod(drogon::Get);
+    request->addHeader("Authorization", "Bearer " + std::string(64, 'a'));
+    request->addHeader("X-LabBridge-Node-Code", node_code);
     drogon::HttpResponsePtr response;
     controller.get_config(
+        request,
         node_code,
         [&response](const drogon::HttpResponsePtr& current) {
             response = current;
@@ -75,6 +90,7 @@ TEST(AgentConfigProjectionTest, ReturnsOnlyCompleteEnabledProjection) {
     EXPECT_EQ(projection.data_sources.front().id, enabled_source);
 
     labbridge::server::AgentControlHttpController controller{
+        test_authenticator(),
         [&service](const labbridge::core::NodeInfo& node) {
             return service.register_node(node);
         },
@@ -103,6 +119,7 @@ TEST(AgentConfigProjectionTest, ReturnsOnlyCompleteEnabledProjection) {
 
 TEST(AgentConfigProjectionTest, SanitizesInvalidStoredJsonObject) {
     labbridge::server::AgentControlHttpController controller{
+        test_authenticator(),
         [](const labbridge::core::NodeInfo&) {
             return labbridge::core::Status::success();
         },

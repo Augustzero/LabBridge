@@ -51,6 +51,7 @@ target_link_libraries(labbridge_server_postgres
 add_library(labbridge_server_http
     src/http/agent_control_http_controller.cpp
     src/http/agent_report_http_controller.cpp
+    src/http/http_authenticator.cpp
     src/http/http_json_response.cpp
     src/http/management_http_controller.cpp
     src/http/task_run_http_controller.cpp
@@ -60,6 +61,10 @@ target_link_libraries(labbridge_server_http
     PUBLIC
         labbridge_server_domain
         Drogon::Drogon
+    PRIVATE
+        # CRYPTO_memcmp 常量时间密钥比较；yaml-cpp 解析节点凭据映射。
+        OpenSSL::Crypto
+        yaml-cpp
 )
 
 add_executable(labbridge_server src/main.cpp)

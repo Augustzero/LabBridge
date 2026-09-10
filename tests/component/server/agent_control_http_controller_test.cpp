@@ -2,6 +2,7 @@
 #include "support/server/test_config_seed.h"
 #include "labbridge/core/version.h"
 #include "labbridge/server/http/agent_control_http_controller.h"
+#include "labbridge/server/http/http_authenticator.h"
 #include "labbridge/server/application/agent_control_service.h"
 #include "labbridge/server/application/config_service.h"
 #include "labbridge/server/application/node_service.h"
@@ -11,10 +12,28 @@
 #include <json/writer.h>
 
 #include <gtest/gtest.h>
+#include <memory>
 #include <stdexcept>
 #include <string>
 
 namespace {
+
+// Agent 接口凭据：节点 lab-node-http-control-019 的独立密钥。
+const std::string kNodeCode = "lab-node-http-control-019";
+const std::string kAgentToken(64, 'a');
+
+std::shared_ptr<const labbridge::server::HttpAuthenticator> test_authenticator() {
+    return std::make_shared<labbridge::server::HttpAuthenticator>(
+        labbridge::server::HttpAuthenticator::CredentialSet{
+            std::string(64, '1'), {{kNodeCode, kAgentToken}}});
+}
+
+void add_agent_credentials(drogon::HttpRequest& request,
+                           const std::string& node_code = kNodeCode,
+                           const std::string& token = kAgentToken) {
+    request.addHeader("Authorization", "Bearer " + token);
+    request.addHeader("X-LabBridge-Node-Code", node_code);
+}
 
 std::string write_json(const Json::Value& value) {
     Json::StreamWriterBuilder builder;
@@ -32,6 +51,7 @@ drogon::HttpResponsePtr invoke_register(
         request->setContentTypeCode(drogon::CT_APPLICATION_JSON);
     }
     request->setBody(body);
+    add_agent_credentials(*request);
 
     drogon::HttpResponsePtr response;
     controller.post_register(
@@ -53,6 +73,7 @@ drogon::HttpResponsePtr invoke_heartbeat(
     request->setMethod(drogon::Post);
     request->setContentTypeCode(drogon::CT_APPLICATION_JSON);
     request->setBody(write_json(body));
+    add_agent_credentials(*request);
 
     drogon::HttpResponsePtr response;
     controller.post_heartbeat(
@@ -70,8 +91,12 @@ drogon::HttpResponsePtr invoke_heartbeat(
 drogon::HttpResponsePtr invoke_config(
     const labbridge::server::AgentControlHttpController& controller,
     const std::string& node_code) {
+    auto request = drogon::HttpRequest::newHttpRequest();
+    request->setMethod(drogon::Get);
+    add_agent_credentials(*request);
     drogon::HttpResponsePtr response;
     controller.get_config(
+        request,
         node_code,
         [&response](const drogon::HttpResponsePtr& current) {
             response = current;
@@ -135,6 +160,7 @@ TEST(AgentControlHttpControllerTest, MapsRegistrationHeartbeatConfigAndErrors) {
         config_service};
 
     labbridge::server::AgentControlHttpController controller{
+        test_authenticator(),
         [&agent_control_service](const labbridge::core::NodeInfo& node) {
             return agent_control_service.register_node(node);
         },
@@ -161,7 +187,8 @@ TEST(AgentControlHttpControllerTest, MapsRegistrationHeartbeatConfigAndErrors) {
         drogon::k400BadRequest,
         "invalid_argument");
 
-    auto empty_name = registration_body("phase19-empty-name", "");
+    // 名称校验在认证节点自身的请求上触发；声明其他节点会先被 403 拦截。
+    auto empty_name = registration_body(kNodeCode, "");
     assert_error(
         invoke_register(controller, write_json(empty_name)),
         drogon::k400BadRequest,
@@ -192,10 +219,11 @@ TEST(AgentControlHttpControllerTest, MapsRegistrationHeartbeatConfigAndErrors) {
         drogon::k400BadRequest,
         "invalid_argument");
 
+    // 凭据有效但 body 声明其他节点：HTTP 边界直接 403，不再进入业务层。
     assert_error(
         invoke_heartbeat(controller, heartbeat_body("phase19-missing-node")),
-        drogon::k404NotFound,
-        "not_found");
+        drogon::k403Forbidden,
+        "forbidden");
 
     const auto heartbeat_response =
         invoke_heartbeat(controller, heartbeat_body(node_code));
@@ -221,14 +249,15 @@ TEST(AgentControlHttpControllerTest, MapsRegistrationHeartbeatConfigAndErrors) {
             "phase19 disabled task", false);
     EXPECT_FALSE(disabled_task.empty());
 
+    // 路径声明的节点与认证节点不一致时，统一 403，不进入业务查询。
     assert_error(
         invoke_config(controller, ""),
-        drogon::k400BadRequest,
-        "invalid_argument");
+        drogon::k403Forbidden,
+        "forbidden");
     assert_error(
         invoke_config(controller, "phase19-missing-node"),
-        drogon::k404NotFound,
-        "not_found");
+        drogon::k403Forbidden,
+        "forbidden");
 
     const auto config_response = invoke_config(controller, node_code);
     EXPECT_TRUE(config_response->statusCode() == drogon::k200OK);
@@ -247,6 +276,7 @@ TEST(AgentControlHttpControllerTest, MapsRegistrationHeartbeatConfigAndErrors) {
     EXPECT_TRUE(config["tasks"][Json::ArrayIndex{0}]["enabled"].asBool());
 
     labbridge::server::AgentControlHttpController throwing_controller{
+        test_authenticator(),
         [](const labbridge::core::NodeInfo&) -> labbridge::core::Status {
             throw std::runtime_error("database password must stay private");
         },

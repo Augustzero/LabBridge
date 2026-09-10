@@ -68,7 +68,9 @@ TEST(StartupHandshakeTest, RegistersHeartbeatsAndFetchesConfigInOrder) {
     }};
     labbridge::agent::ControlPlaneClient client{
         local_server_url(server.port()),
-        2s};
+        2s,
+        "phase20-node",
+        std::string(64, 'a')};
 
     const auto fixed_reported_at = std::chrono::system_clock::from_time_t(0);
     const auto result = labbridge::agent::perform_startup_handshake(

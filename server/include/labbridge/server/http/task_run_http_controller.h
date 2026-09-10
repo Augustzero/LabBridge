@@ -1,6 +1,7 @@
 #pragma once
 
 #include "labbridge/server/application/task_run_service.h"
+#include "labbridge/server/http/http_authenticator.h"
 #include "labbridge/server/http/http_json_response.h"
 
 #include <drogon/HttpAppFramework.h>
@@ -19,13 +20,15 @@ public:
         std::function<TaskRunCreateResult(const StartTaskRunRequest&)>;
     using ResponseCallback = http::ResponseCallback;
 
-    explicit TaskRunHttpController(StartHandler start_handler);
+    TaskRunHttpController(std::shared_ptr<const HttpAuthenticator> authenticator,
+                          StartHandler start_handler);
 
     void register_routes(drogon::HttpAppFramework& app);
     void post_start(const drogon::HttpRequestPtr& request,
                     ResponseCallback&& callback) const;
 
 private:
+    std::shared_ptr<const HttpAuthenticator> authenticator_;
     StartHandler start_handler_;
 };
 

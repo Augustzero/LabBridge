@@ -1,5 +1,6 @@
 #include "labbridge/core/version.h"
 #include "labbridge/server/http/agent_report_http_controller.h"
+#include "labbridge/server/http/http_authenticator.h"
 #include "labbridge/server/application/config_service.h"
 #include "labbridge/server/postgres/libpq_sql_session.h"
 #include "labbridge/server/application/node_service.h"
@@ -27,6 +28,10 @@
 
 namespace {
 
+// phase17 冒烟的节点凭据：请求头与 body 声明同一节点。
+const std::string kNodeCode = "lab-node-real-http-report-017";
+const std::string kAgentToken(64, 'a');
+
 std::string write_json(const Json::Value& value) {
     Json::StreamWriterBuilder builder;
     builder["indentation"] = "";
@@ -41,6 +46,8 @@ drogon::HttpResponsePtr invoke(
     request->setMethod(drogon::Post);
     request->setContentTypeCode(drogon::CT_APPLICATION_JSON);
     request->setBody(write_json(body));
+    request->addHeader("Authorization", "Bearer " + kAgentToken);
+    request->addHeader("X-LabBridge-Node-Code", kNodeCode);
 
     drogon::HttpResponsePtr response;
     auto callback = [&response](const drogon::HttpResponsePtr& current) {
@@ -120,6 +127,9 @@ int main() {
         std::make_shared<labbridge::server::PostgresAgentReportExecutor>(
             connection_info);
     labbridge::server::AgentReportHttpController controller{
+        std::make_shared<labbridge::server::HttpAuthenticator>(
+            labbridge::server::HttpAuthenticator::CredentialSet{
+                std::string(64, '1'), {{kNodeCode, kAgentToken}}}),
         [executor](const labbridge::server::RawFileManifestRequest& request) {
             return executor->accept_raw_file_manifest(request);
         },

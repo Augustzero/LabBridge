@@ -4,6 +4,9 @@ agent:
   server_url: http://127.0.0.1:18080
   request_timeout_seconds: 5
   heartbeat_interval_seconds: 15
+  # 本节点访问控制面的密钥文件（必填）：内容为一个 64 位小写十六进制 token，
+  # 与 Server 侧 agent-tokens.yaml 中本节点的密钥一致；相对路径相对本配置文件目录解析。
+  token_file: /etc/labbridge/auth/agent-lab-node-001.token
 
 storage:
   queue_db: ./data/agent_queue.db

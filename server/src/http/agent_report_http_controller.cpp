@@ -210,10 +210,16 @@ const Json::Value& parse_json_body(const drogon::HttpRequestPtr& request) {
 }  // namespace
 
 AgentReportHttpController::AgentReportHttpController(
+    std::shared_ptr<const HttpAuthenticator> authenticator,
     RawFileManifestHandler raw_file_manifest_handler,
     TaskRunReportHandler task_run_report_handler)
-    : raw_file_manifest_handler_(std::move(raw_file_manifest_handler)),
+    : authenticator_(std::move(authenticator)),
+      raw_file_manifest_handler_(std::move(raw_file_manifest_handler)),
       task_run_report_handler_(std::move(task_run_report_handler)) {
+    if (!authenticator_) {
+        throw std::invalid_argument(
+            "agent report HTTP authenticator is required");
+    }
     if (!raw_file_manifest_handler_ || !task_run_report_handler_) {
         throw std::invalid_argument("agent report HTTP handlers are required");
     }
@@ -239,10 +245,19 @@ void AgentReportHttpController::post_raw_file_manifest(
     const drogon::HttpRequestPtr& request,
     ResponseCallback&& callback) const {
     http::handle_request("agent-report-http", "POST /api/v1/raw-files/manifest", [&] {
+        const auto authenticated_node =
+            authenticator_->require_agent_node(request, callback);
+        if (!authenticated_node) {
+            return;
+        }
         if (!http::require_json_content_type(request, callback)) {
             return;
         }
         const auto parsed = parse_raw_file_manifest(parse_json_body(request));
+        if (!HttpAuthenticator::require_declared_node(
+                *authenticated_node, parsed.node_code, callback)) {
+            return;
+        }
         const auto result = raw_file_manifest_handler_(parsed);
         if (!result.status.ok) {
             callback(http::status_error_response(result.status));
@@ -260,10 +275,19 @@ void AgentReportHttpController::post_task_run_report(
     const drogon::HttpRequestPtr& request,
     ResponseCallback&& callback) const {
     http::handle_request("agent-report-http", "POST /api/v1/task-runs/report", [&] {
+        const auto authenticated_node =
+            authenticator_->require_agent_node(request, callback);
+        if (!authenticated_node) {
+            return;
+        }
         if (!http::require_json_content_type(request, callback)) {
             return;
         }
         const auto parsed = parse_task_run_report(parse_json_body(request));
+        if (!HttpAuthenticator::require_declared_node(
+                *authenticated_node, parsed.node_code, callback)) {
+            return;
+        }
         const auto result = task_run_report_handler_(parsed);
         if (!result.status.ok) {
             callback(http::status_error_response(result.status));
