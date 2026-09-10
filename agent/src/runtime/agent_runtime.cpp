@@ -41,6 +41,18 @@ void log_control_plane_failure(std::string_view operation,
     labbridge::core::log_warn(kComponent, message.str());
 }
 
+// 心跳/配置拉取被 401/403 拒绝时，把操作、节点和状态码记全再抛出，
+// 方便运维直接定位是哪个节点的凭据需要修正。
+void log_auth_rejection(std::string_view operation,
+                        const ControlPlaneClientError& error,
+                        const std::string& node_code) {
+    std::ostringstream message;
+    message << operation << " rejected by authentication"
+            << "; node_code=" << node_code
+            << "; http_status=" << error.http_status();
+    labbridge::core::log_error(kComponent, message.str());
+}
+
 }  // namespace
 
 IRuntimeTimeSource::SteadyTimePoint SystemRuntimeTimeSource::steady_now() const {
@@ -120,7 +132,9 @@ PulledAgentConfig AgentRuntime::run() {
                         continue;
                     }
                 } catch (const ControlPlaneClientError& error) {
-                    if (!error.is_transient()) {
+                    // 认证被拒跟其他非瞬时错误一样直接抛出终止进程：
+                    // 反复重连救不了配错的凭据。
+                    if (error.is_auth_rejection() || !error.is_transient()) {
                         throw;
                     }
                     log_control_plane_failure("reconnect", error);
@@ -192,6 +206,11 @@ void AgentRuntime::send_heartbeat() {
             labbridge::core::format_utc_timestamp(time_source_.system_now()),
         });
     } catch (const ControlPlaneClientError& error) {
+        // 凭据问题重试无意义，记日志后抛出让进程停下；其他错误照旧下个周期再试。
+        if (error.is_auth_rejection()) {
+            log_auth_rejection("heartbeat", error, node_.node_code);
+            throw;
+        }
         log_control_plane_failure("heartbeat", error);
     }
 }
@@ -208,6 +227,10 @@ void AgentRuntime::refresh_config() {
             "config updated; enabled_tasks=" +
                 std::to_string(current_config_.tasks.size()));
     } catch (const ControlPlaneClientError& error) {
+        if (error.is_auth_rejection()) {
+            log_auth_rejection("config fetch", error, node_.node_code);
+            throw;
+        }
         // 拉取失败时保留最后一次成功快照，下一周期再尝试替换。
         log_control_plane_failure("config fetch", error);
     }

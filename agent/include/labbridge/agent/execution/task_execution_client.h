@@ -18,6 +18,9 @@ public:
     unsigned int http_status() const noexcept;
     // 瞬时错误统一判定：网络/服务端故障，或 408/429/5xx 状态。
     bool is_transient() const noexcept;
+    // 认证被拒（401/403）：凭据或节点身份配错了，原地重试只会继续被拒。
+    // 调用方应保留现场后停止进程，等修正配置重启再继续。
+    bool is_auth_rejection() const noexcept;
 private:
     TaskExecutionErrorKind kind_;
     unsigned int http_status_;

@@ -82,6 +82,23 @@ Result ReliableDeliveryClient::deliver(
             return call();
         } catch (const TaskExecutionClientError& error) {
             ++attempt;
+            // 401/403 说明凭据配错了，本进程内重试只会继续被拒：
+            // 按零延迟记回 retry_wait，让修正配置重启后立刻恢复这条投递，
+            // 然后把原异常抛出去终止进程；不走 requires_attention。
+            if (error.is_auth_rejection()) {
+                store_.record_delivery_failure(
+                    request_type, idempotency_key, true,
+                    error_kind_name(error.kind()), error.http_status(),
+                    error.what(), std::chrono::milliseconds::zero());
+                std::ostringstream message;
+                message << "delivery rejected by authentication"
+                        << "; request_type=" << request_type
+                        << "; attempt=" << attempt
+                        << "; http_status=" << error.http_status()
+                        << "; kept pending until restart";
+                labbridge::core::log_error(kComponent, message.str());
+                throw;
+            }
             const bool should_retry = error.is_transient();
             const auto delay = retry_delay(
                 idempotency_key + "\n" + request_type, attempt);

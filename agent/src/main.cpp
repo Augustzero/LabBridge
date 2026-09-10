@@ -43,7 +43,8 @@ int main(int argc, char* argv[]) {
             remote_config = labbridge::agent::perform_startup_handshake(
                 control_client, config.node);
         } catch (const labbridge::agent::ControlPlaneClientError& error) {
-            if (!error.is_transient()) {
+            // 401/403 说明凭据配错，断网重连模式只会原地打转，直接退出等修正配置。
+            if (error.is_auth_rejection() || !error.is_transient()) {
                 throw;
             }
             connected = false;

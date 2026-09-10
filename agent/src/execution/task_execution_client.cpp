@@ -25,6 +25,12 @@ bool TaskExecutionClientError::is_transient() const noexcept {
            (http_status_ >= 500 && http_status_ <= 599);
 }
 
+// 服务端的 401/403 走统一错误 envelope，到客户端会被归成 ServerError，
+// 仅凭 is_transient() 区分不出来，所以这里按状态码单独判定。
+bool TaskExecutionClientError::is_auth_rejection() const noexcept {
+    return http_status_ == 401 || http_status_ == 403;
+}
+
 std::string make_scheduled_execution_key(
     const std::string& node_code,
     const std::string& task_id,
