@@ -198,4 +198,98 @@ TEST(AgentApplicationTest, WorkerFailureStopsRuntimeAndPropagates) {
               << "process_result=nonzero_boundary" << std::endl;
 }
 
+// 两个控制面入口都要让异常走到 application，唤醒并收回调度线程。
+class RejectingControlClient final : public labbridge::agent::IRuntimeControlClient {
+public:
+    RejectingControlClient(bool reject_heartbeat, unsigned int status)
+        : reject_heartbeat_(reject_heartbeat), status_(status) {}
+
+    void send_heartbeat(const labbridge::core::NodeHeartbeat&) const override {
+        if (reject_heartbeat_) {
+            reject();
+        }
+    }
+
+    labbridge::agent::PulledAgentConfig fetch_config(const std::string&) const override {
+        reject();
+    }
+
+private:
+    [[noreturn]] void reject() const {
+        throw labbridge::agent::ControlPlaneClientError{
+            labbridge::agent::ControlPlaneErrorKind::ServerError,
+            "credential rejected", status_, "unauthenticated"};
+    }
+
+    bool reject_heartbeat_;
+    unsigned int status_;
+};
+
+TEST(AgentApplicationTest, ControlAuthenticationFailureJoinsScheduler) {
+    for (const bool heartbeat : {true, false}) {
+        for (const unsigned int status : {401U, 403U}) {
+            SCOPED_TRACE(status);
+            SCOPED_TRACE(heartbeat);
+            RejectingControlClient client{heartbeat, status};
+            labbridge::agent::SystemRuntimeTimeSource runtime_time;
+            BlockingSchedulerTimeSource scheduler_time;
+            NoopExecutor executor;
+            labbridge::agent::TaskScheduler scheduler{executor, scheduler_time};
+            labbridge::agent::AgentRuntime runtime{
+                {"phase027-node", "auth lifecycle", "0.1.0"},
+                heartbeat ? 1ms : 1h, heartbeat ? 1h : 1ms,
+                client, {}, runtime_time, &scheduler};
+            labbridge::agent::AgentApplication application{runtime, scheduler};
+
+            try {
+                static_cast<void>(application.run());
+                FAIL() << "authentication failure should reach the process boundary";
+            } catch (const labbridge::agent::ControlPlaneClientError& error) {
+                EXPECT_EQ(error.http_status(), status);
+            }
+            EXPECT_EQ(executor.stop_requests.load(), 1);
+        }
+    }
+}
+
+class AuthFailingExecutor final : public labbridge::agent::ITaskExecutor {
+public:
+    explicit AuthFailingExecutor(unsigned int status) : status_(status) {}
+
+    void execute(labbridge::agent::ScheduledTaskExecution) override {
+        throw labbridge::agent::TaskExecutionClientError{
+            labbridge::agent::TaskExecutionErrorKind::ServerError,
+            "delivery credential rejected", status_};
+    }
+
+    void request_stop() noexcept override { stopped = true; }
+
+    bool stopped{false};
+
+private:
+    unsigned int status_;
+};
+
+TEST(AgentApplicationTest, DeliveryAuthenticationFailureWakesControlLoop) {
+    for (const unsigned int status : {401U, 403U}) {
+        FakeControlClient client;
+        BlockingRuntimeTimeSource runtime_time;
+        AdvancingSchedulerTimeSource scheduler_time;
+        AuthFailingExecutor executor{status};
+        labbridge::agent::TaskScheduler scheduler{executor, scheduler_time};
+        labbridge::agent::AgentRuntime runtime{
+            {"phase022-node", "auth lifecycle", "0.1.0"}, 1h, 1h,
+            client, initial_config_with_task(), runtime_time, &scheduler};
+        labbridge::agent::AgentApplication application{runtime, scheduler};
+
+        try {
+            static_cast<void>(application.run());
+            FAIL() << "delivery rejection should reach the process boundary";
+        } catch (const labbridge::agent::TaskExecutionClientError& error) {
+            EXPECT_EQ(error.http_status(), status);
+        }
+        EXPECT_TRUE(executor.stopped);
+    }
+}
+
 }  // namespace

@@ -2,6 +2,7 @@ agent:
   node_code: demo-node-001
   name: LabBridge demo node
   server_url: http://server:18080
+  token_file: /etc/labbridge/auth/agent.token
   request_timeout_seconds: 5
   heartbeat_interval_seconds: 5
 

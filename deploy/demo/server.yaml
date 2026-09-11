@@ -21,4 +21,7 @@ custom_config:
   storage:
     type: local
     root: /var/lib/labbridge/archive
+  auth:
+    management_token_file: /etc/labbridge/auth/management.token
+    agent_tokens_file: /etc/labbridge/auth/agent-tokens.yaml
 

@@ -13,6 +13,7 @@ from demo_support import (
     ApiClient,
     DemoError,
     load_evidence,
+    load_management_token,
     require_run_key,
     validate_evidence,
 )
@@ -60,8 +61,12 @@ def main() -> int:
     if not task_id.isdigit() or not run_id.isdigit():
         raise DemoError("stored task_id and run_id must be decimal strings")
 
+    token_file = os.getenv("DEMO_MANAGEMENT_TOKEN_FILE")
+    if not token_file:
+        raise DemoError("DEMO_MANAGEMENT_TOKEN_FILE is required for inspection")
     client = ApiClient(
-        os.getenv("DEMO_API_BASE_URL", "http://server:18080/api/v1")
+        os.getenv("DEMO_API_BASE_URL", "http://server:18080/api/v1"),
+        management_token=load_management_token(token_file),
     )
     evidence = load_evidence(client, result["node_code"], run_id)
     validate_evidence(
@@ -168,7 +173,7 @@ def main() -> int:
         f"sha256={digest} (matches PostgreSQL)"
     )
     print(
-        "Phase 026-02 engineering verification passed for "
+        "Authenticated demo verification passed for "
         f"demo_run_key={run_key}"
     )
     return 0

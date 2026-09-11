@@ -1,5 +1,3 @@
-// 真实库认证回验：被 401/403 拒绝的请求不允许产生任何业务写入。
-// 通过拒绝前后各业务表的行数对比证明“拒绝请求无写入”。
 #include "labbridge/core/version.h"
 #include "labbridge/server/http/agent_control_http_controller.h"
 #include "labbridge/server/http/agent_report_http_controller.h"
@@ -14,12 +12,15 @@
 #include "labbridge/server/postgres/task_run_executor.h"
 #include "labbridge/server/postgres/storage_mapping.h"
 
+#include <drogon/HttpClient.h>
 #include <drogon/HttpRequest.h>
 #include <drogon/HttpResponse.h>
 #include <gtest/gtest.h>
 #include <json/writer.h>
 
 #include <cstdlib>
+#include <future>
+#include <thread>
 #include <iostream>
 #include <map>
 #include <memory>
@@ -45,25 +46,19 @@ std::string write_json(const Json::Value& value) {
     return Json::writeString(builder, value);
 }
 
-std::map<std::string, long long> business_row_counts(LibpqSqlSession& session) {
-    const auto rows = session.query_all(
-        "SELECT 'nodes' AS entity, count(*)::bigint AS count FROM nodes "
-        "UNION ALL SELECT 'data_sources', count(*) FROM data_sources "
-        "UNION ALL SELECT 'tasks', count(*) FROM tasks "
-        "UNION ALL SELECT 'task_runs', count(*) FROM task_runs "
-        "UNION ALL SELECT 'raw_files', count(*) FROM raw_files "
-        "UNION ALL SELECT 'parsed_records', count(*) FROM parsed_records "
-        "UNION ALL SELECT 'qc_results', count(*) FROM qc_results "
-        "UNION ALL SELECT 'alerts', count(*) FROM alerts "
-        "UNION ALL SELECT 'agent_report_receipts', count(*) "
-        "  FROM agent_report_receipts",
-        {});
-    std::map<std::string, long long> counts;
-    for (const auto& row : rows) {
-        counts[value_or_empty(row, "entity")] =
-            std::stoll(value_or_empty(row, "count"));
+// 连字段值一起比较，心跳时间或任务状态被误改也能发现。
+std::map<std::string, std::string> business_snapshot(LibpqSqlSession& session) {
+    std::map<std::string, std::string> snapshot;
+    for (const std::string table : {
+             "nodes", "data_sources", "tasks", "task_runs", "raw_files",
+             "parsed_records", "qc_rules", "qc_results", "alerts",
+             "agent_report_receipts", "task_qc_rules"}) {
+        const auto row = session.query_one(
+            "SELECT COALESCE(jsonb_agg(to_jsonb(t) ORDER BY to_jsonb(t)::text), "
+            "'[]'::jsonb)::text AS data FROM " + table + " t", {});
+        snapshot[table] = value_or_empty(*row, "data");
     }
-    return counts;
+    return snapshot;
 }
 
 class AuthRejectionPostgresTest : public testing::Test {
@@ -93,7 +88,7 @@ protected:
 
         report_executor_ =
             std::make_shared<PostgresAgentReportExecutor>(connection_info_);
-        report_controller_ = std::make_unique<AgentReportHttpController>(
+        report_controller_ = std::make_shared<AgentReportHttpController>(
             authenticator,
             [this](const RawFileManifestRequest& request) {
                 return report_executor_->accept_raw_file_manifest(request);
@@ -104,7 +99,7 @@ protected:
 
         auto task_run_executor =
             std::make_shared<PostgresTaskRunExecutor>(connection_info_);
-        task_run_controller_ = std::make_unique<TaskRunHttpController>(
+        task_run_controller_ = std::make_shared<TaskRunHttpController>(
             authenticator,
             [task_run_executor](const StartTaskRunRequest& request) {
                 return task_run_executor->start(request);
@@ -112,7 +107,7 @@ protected:
 
         auto control_executor =
             std::make_shared<PostgresAgentControlExecutor>(connection_info_);
-        control_controller_ = std::make_unique<AgentControlHttpController>(
+        control_controller_ = std::make_shared<AgentControlHttpController>(
             authenticator,
             [control_executor](const labbridge::core::NodeInfo& node) {
                 return control_executor->register_node(node);
@@ -134,7 +129,6 @@ protected:
             [query_executor](const NodeListRequest& request) {
                 return query_executor->list_nodes(request);
             };
-        // 其余 handler 用 404 桩占位：本测试只验证拒绝请求无写入。
         query_handlers.find_node =
             [query_executor](const std::string& node_code) {
                 return query_executor->find_node(node_code);
@@ -193,18 +187,63 @@ protected:
             [command_executor](const std::string& task_id, bool enabled) {
                 return command_executor->set_task_enabled(task_id, enabled);
             };
-        management_controller_ = std::make_unique<ManagementHttpController>(
+        management_controller_ = std::make_shared<ManagementHttpController>(
             authenticator, std::move(query_handlers),
             std::move(command_handlers));
 
-        before_ = business_row_counts(*session_);
+        for (const auto& node : {kNodeA, kNodeB}) {
+            const auto source = insert_id(
+                "INSERT INTO data_sources (node_id,source_type,name,config_json,enabled) "
+                "SELECT id,'local_directory','isolation source','{}',true "
+                "FROM nodes WHERE node_code=$1 RETURNING id::text AS id", {node});
+            const auto task = insert_id(
+                "INSERT INTO tasks (node_id,data_source_id,name,task_type,schedule_expr,"
+                "parser_type,enabled) SELECT id,$2::bigint,'isolation task',"
+                "'local_file_import','* * * * *','csv_observation',true "
+                "FROM nodes WHERE node_code=$1 RETURNING id::text AS id", {node, source});
+            task_ids_[node] = task;
+            run_ids_[node] = insert_id(
+                "INSERT INTO task_runs (node_id,task_id,status,started_at,trigger_type) "
+                "SELECT id,$2::bigint,'running',now(),'scheduled' "
+                "FROM nodes WHERE node_code=$1 RETURNING id::text AS id", {node, task});
+        }
+        raw_id_ = insert_id(
+            "INSERT INTO raw_files (node_id,task_run_id,original_name,storage_path,"
+            "size_bytes,ingest_status) SELECT id,$2::bigint,'b.csv','/archive/b.csv',1,"
+            "'archived' FROM nodes WHERE node_code=$1 RETURNING id::text AS id",
+            {kNodeB, run_ids_.at(kNodeB)});
+
+        // 使用生产路由注册，经过 listener 和请求分发后再进入 controller。
+        auto& app = drogon::app();
+        control_controller_->register_routes(app);
+        task_run_controller_->register_routes(app);
+        report_controller_->register_routes(app);
+        management_controller_->register_routes(app);
+        app.addListener("127.0.0.1", 0).setThreadNum(1);
+        std::promise<unsigned short> ready;
+        auto port = ready.get_future();
+        app.registerBeginningAdvice([&app, &ready] {
+            ready.set_value(app.getListeners().front().toPort());
+        });
+        server_thread_ = std::thread([&app] { app.run(); });
+        client_ = drogon::HttpClient::newHttpClient(
+            "http://127.0.0.1:" + std::to_string(port.get()));
     }
 
     void TearDown() override {
+        if (server_thread_.joinable()) {
+            drogon::app().quit();
+            server_thread_.join();
+        }
         if (!session_) {
             return;
         }
         try {
+            for (const std::string table : {"raw_files", "task_runs", "tasks", "data_sources"}) {
+                session_->execute(
+                    "DELETE FROM " + table + " WHERE node_id IN "
+                    "(SELECT id FROM nodes WHERE node_code IN ($1,$2))", {kNodeA, kNodeB});
+            }
             session_->execute(
                 "DELETE FROM nodes WHERE node_code IN ($1,$2)",
                 {kNodeA, kNodeB});
@@ -236,200 +275,143 @@ protected:
         return request;
     }
 
-    // 与既有 HTTP 测试一致的调用方式：operation 接收一个响应回调并向
-    // controller 转发（std::move 避免拷贝），捕获到的响应作为结果返回。
-    template <typename Operation>
-    static drogon::HttpResponsePtr invoke(Operation operation) {
-        drogon::HttpResponsePtr response;
-        operation([&response](const drogon::HttpResponsePtr& current) {
-            response = current;
-        });
-        EXPECT_NE(response, nullptr);
-        return response;
+    std::string insert_id(const std::string& sql, const SqlParams& params) {
+        return value_or_empty(*session_->query_one(sql, params), "id");
     }
 
-    void expect_rejected(const drogon::HttpResponsePtr& response,
-                         drogon::HttpStatusCode status,
-                         const std::string& code) const {
+    void expect_rejected(const std::string& path,
+                         const drogon::HttpRequestPtr& request,
+                         int expected_status) {
+        SCOPED_TRACE(path);
+        const auto before = business_snapshot(*session_);
+        request->setPath(path);
+        const auto [result, response] = client_->sendRequest(request, 5.0);
+        ASSERT_EQ(result, drogon::ReqResult::Ok);
         ASSERT_NE(response, nullptr);
-        EXPECT_EQ(response->statusCode(), status);
-        const auto& json = *response->getJsonObject();
-        EXPECT_EQ(json["error"]["code"].asString(), code);
+        EXPECT_EQ(response->statusCode(), expected_status);
+        if (expected_status == 401) {
+            EXPECT_EQ(response->getHeader("WWW-Authenticate"), "Bearer");
+        }
+        ASSERT_NE(response->getJsonObject(), nullptr);
+        EXPECT_FALSE((*response->getJsonObject())["ok"].asBool());
+        EXPECT_EQ(business_snapshot(*session_), before);
     }
 
     std::string connection_info_;
     std::unique_ptr<LibpqSqlSession> session_;
     std::string suffix_;
     std::shared_ptr<PostgresAgentReportExecutor> report_executor_;
-    std::unique_ptr<AgentReportHttpController> report_controller_;
-    std::unique_ptr<TaskRunHttpController> task_run_controller_;
-    std::unique_ptr<AgentControlHttpController> control_controller_;
-    std::unique_ptr<ManagementHttpController> management_controller_;
-    std::map<std::string, long long> before_;
+    std::shared_ptr<AgentReportHttpController> report_controller_;
+    std::shared_ptr<TaskRunHttpController> task_run_controller_;
+    std::shared_ptr<AgentControlHttpController> control_controller_;
+    std::shared_ptr<ManagementHttpController> management_controller_;
+    std::map<std::string, std::string> task_ids_;
+    std::map<std::string, std::string> run_ids_;
+    std::string raw_id_;
+    std::thread server_thread_;
+    drogon::HttpClientPtr client_;
 };
 
-TEST_F(AuthRejectionPostgresTest, RejectedRequestsWriteNothing) {
-    Json::Value register_body;
-    register_body["node_code"] = kNodeA;
-    register_body["name"] = "auth reject node a";
-    register_body["agent_version"] = labbridge::core::kVersion;
+TEST_F(AuthRejectionPostgresTest, RejectedRoutesLeaveEveryBusinessRowUnchanged) {
+    Json::Value registration;
+    registration["node_code"] = kNodeB;
+    registration["name"] = "attempted rename";
+    registration["agent_version"] = "0.1.0";
+    Json::Value heartbeat = registration;
+    heartbeat["reported_at"] = "2026-09-11T00:00:00Z";
+    Json::Value start;
+    start["node_code"] = kNodeB;
+    start["task_id"] = task_ids_.at(kNodeB);
+    start["execution_key"] = "isolation-start-" + suffix_;
+    start["scheduled_for"] = "2026-09-11T00:00:00Z";
+    start["started_at"] = "2026-09-11T00:00:01Z";
+    start["trigger_type"] = "scheduled";
+    Json::Value manifest;
+    manifest["node_code"] = kNodeB;
+    manifest["task_run_id"] = run_ids_.at(kNodeB);
+    manifest["idempotency_key"] = "isolation-manifest-" + suffix_;
+    manifest["files"] = Json::Value{Json::arrayValue};
+    Json::Value report;
+    report["node_code"] = kNodeB;
+    report["task_run_id"] = run_ids_.at(kNodeB);
+    report["idempotency_key"] = "isolation-report-" + suffix_;
+    report["status"] = "succeeded";
+    report["finished_at"] = "2026-09-11T00:00:02Z";
+    report["items_total"] = 0;
+    report["items_success"] = 0;
+    report["items_failed"] = 0;
+    report["parsed_records"] = Json::Value{Json::arrayValue};
 
-    Json::Value heartbeat_body;
-    heartbeat_body["node_code"] = kNodeA;
-    heartbeat_body["agent_version"] = labbridge::core::kVersion;
-    heartbeat_body["reported_at"] = "2026-09-10 08:00:00+08";
-
-    Json::Value start_body;
-    start_body["node_code"] = kNodeA;
-    start_body["task_id"] = "1";
-    start_body["execution_key"] = "auth-reject-key";
-    start_body["scheduled_for"] = "2026-09-10T00:00:00Z";
-    start_body["started_at"] = "2026-09-10T00:00:01Z";
-    start_body["trigger_type"] = "scheduled";
-
-    Json::Value manifest_body;
-    manifest_body["task_run_id"] = "1";
-    manifest_body["node_code"] = kNodeA;
-    manifest_body["idempotency_key"] = "auth-reject-manifest";
-    manifest_body["files"] = Json::Value{Json::arrayValue};
-
-    Json::Value report_body;
-    report_body["task_run_id"] = "1";
-    report_body["node_code"] = kNodeA;
-    report_body["idempotency_key"] = "auth-reject-report";
-    report_body["status"] = "succeeded";
-    report_body["parsed_records"] = Json::Value{Json::arrayValue};
-
-    Json::Value source_body;
-    source_body["node_code"] = kNodeA;
-    source_body["source_type"] = "local_directory";
-    source_body["name"] = "auth reject source";
-    source_body["config"]["root_path"] = "/srv/inbox";
-    source_body["config"]["extension"] = ".csv";
-    source_body["enabled"] = true;
-
-    struct RejectedCall {
-        std::string name;
-        drogon::HttpResponsePtr response;
+    struct Route {
+        std::string path;
+        drogon::HttpMethod method;
+        Json::Value body;
     };
-
-    // 各请求按场景携带不同凭据：构造即发，捕获响应。
-    auto foreign_body = [](Json::Value body) {
-        body["node_code"] = kNodeB;
-        return write_json(body);
+    const std::vector<Route> agents = {
+        {"/api/v1/agents/register", drogon::Post, registration},
+        {"/api/v1/agents/heartbeat", drogon::Post, heartbeat},
+        {"/api/v1/agents/" + kNodeB + "/config", drogon::Get, {}},
+        {"/api/v1/task-runs/start", drogon::Post, start},
+        {"/api/v1/raw-files/manifest", drogon::Post, manifest},
+        {"/api/v1/task-runs/report", drogon::Post, report},
     };
-
-    const std::vector<RejectedCall> rejections = {
-        // 管理接口：无 token / 节点密钥 → 401。
-        {"management list nodes without token",
-         invoke([&](auto callback) {
-             management_controller_->get_nodes(
-                 agent_request(drogon::Get, "", "", ""), std::move(callback));
-         })},
-        {"management list nodes with agent token",
-         invoke([&](auto callback) {
-             management_controller_->get_nodes(
-                 agent_request(drogon::Get, "", kTokenA, kNodeA),
-                 std::move(callback));
-         })},
-        {"management create data source without token",
-         invoke([&](auto callback) {
-             management_controller_->post_data_source(
-                 agent_request(drogon::Post, write_json(source_body), "", ""),
-                 std::move(callback));
-         })},
-
-        // Agent 接口：无 token / 错 token / 冒充请求头 → 401。
-        {"register without token",
-         invoke([&](auto callback) {
-             control_controller_->post_register(
-                 agent_request(drogon::Post, write_json(register_body), "", ""),
-                 std::move(callback));
-         })},
-        {"heartbeat with management token",
-         invoke([&](auto callback) {
-             control_controller_->post_heartbeat(
-                 agent_request(drogon::Post, write_json(heartbeat_body),
-                               kManagementToken, kNodeA),
-                 std::move(callback));
-         })},
-        {"heartbeat with node b token",
-         invoke([&](auto callback) {
-             control_controller_->post_heartbeat(
-                 agent_request(drogon::Post, write_json(heartbeat_body),
-                               kTokenB, kNodeA),
-                 std::move(callback));
-         })},
-        {"config for foreign node",
-         invoke([&](auto callback) {
-             control_controller_->get_config(
-                 agent_request(drogon::Get, "", kTokenA, kNodeA), kNodeB,
-                 std::move(callback));
-         })},
-
-        // start / manifest / report：无 token → 401；跨节点声明 → 403。
-        {"start without token",
-         invoke([&](auto callback) {
-             task_run_controller_->post_start(
-                 agent_request(drogon::Post, write_json(start_body), "", ""),
-                 std::move(callback));
-         })},
-        {"start declaring foreign node",
-         invoke([&](auto callback) {
-             task_run_controller_->post_start(
-                 agent_request(drogon::Post, foreign_body(start_body), kTokenA,
-                               kNodeA),
-                 std::move(callback));
-         })},
-        {"manifest without token",
-         invoke([&](auto callback) {
-             report_controller_->post_raw_file_manifest(
-                 agent_request(drogon::Post, write_json(manifest_body), "", ""),
-                 std::move(callback));
-         })},
-        {"manifest declaring foreign node",
-         invoke([&](auto callback) {
-             report_controller_->post_raw_file_manifest(
-                 agent_request(drogon::Post, foreign_body(manifest_body),
-                               kTokenA, kNodeA),
-                 std::move(callback));
-         })},
-        {"report without token",
-         invoke([&](auto callback) {
-             report_controller_->post_task_run_report(
-                 agent_request(drogon::Post, write_json(report_body), "", ""),
-                 std::move(callback));
-         })},
-        {"report declaring foreign node",
-         invoke([&](auto callback) {
-             report_controller_->post_task_run_report(
-                 agent_request(drogon::Post, foreign_body(report_body),
-                               kTokenA, kNodeA),
-                 std::move(callback));
-         })},
-    };
-
-    for (const auto& rejection : rejections) {
-        ASSERT_NE(rejection.response, nullptr) << rejection.name;
-        const int status = static_cast<int>(rejection.response->statusCode());
-        EXPECT_TRUE(status == 401 || status == 403) << rejection.name;
-        const auto& json = *rejection.response->getJsonObject();
-        const std::string code = json["error"]["code"].asString();
-        EXPECT_TRUE(code == "unauthenticated" || code == "forbidden")
-            << rejection.name;
-        std::cout << "rejected " << rejection.name << " status=" << status
-                  << " code=" << code << std::endl;
+    for (const auto& route : agents) {
+        // B 的请求头配 A 的密钥先被拒；A 身份通过后再检查 body/路径归属。
+        for (const auto& token : {std::string{}, kTokenA, kManagementToken}) {
+            expect_rejected(route.path, agent_request(
+                route.method, write_json(route.body), token, kNodeB), 401);
+        }
+        expect_rejected(route.path, agent_request(
+            route.method, write_json(route.body), kTokenA, kNodeA), 403);
     }
 
-    // 核心断言：所有业务表在拒绝前后行数一致，无任何写入。
-    const auto after = business_row_counts(*session_);
-    EXPECT_EQ(after, before_);
-
-    std::cout << "auth_rejection rows_before=";
-    for (const auto& [entity, count] : before_) {
-        std::cout << entity << "=" << count << " ";
+    // 身份与声明都是 A，资源却属于 B，交给原有业务归属校验拒绝。
+    for (const auto& route : std::vector<Route>{agents[3], agents[4], agents[5]}) {
+        auto body = route.body;
+        body["node_code"] = kNodeA;
+        expect_rejected(route.path, agent_request(
+            route.method, write_json(body), kTokenA, kNodeA), 409);
     }
-    std::cout << std::endl;
+    report["node_code"] = kNodeA;
+    report["task_run_id"] = run_ids_.at(kNodeA);
+    Json::Value parsed;
+    parsed["raw_file_id"] = raw_id_;
+    parsed["station_code"] = "station-a";
+    parsed["device_code"] = "device-a";
+    parsed["record_time"] = "2026-09-11T00:00:00Z";
+    parsed["payload_json"] = "{}";
+    parsed["parse_status"] = "parsed";
+    report["parsed_records"].append(parsed);
+    report["items_total"] = 1;
+    report["items_success"] = 1;
+    expect_rejected("/api/v1/task-runs/report", agent_request(
+        drogon::Post, write_json(report), kTokenA, kNodeA), 409);
+
+    const std::vector<Route> management = {
+        {"/api/v1/nodes", drogon::Get, {}},
+        {"/api/v1/nodes/" + kNodeB, drogon::Get, {}},
+        {"/api/v1/data-sources", drogon::Get, {}},
+        {"/api/v1/qc-rules", drogon::Get, {}},
+        {"/api/v1/tasks", drogon::Get, {}},
+        {"/api/v1/task-runs", drogon::Get, {}},
+        {"/api/v1/task-runs/" + run_ids_.at(kNodeB), drogon::Get, {}},
+        {"/api/v1/raw-files", drogon::Get, {}},
+        {"/api/v1/parsed-records", drogon::Get, {}},
+        {"/api/v1/qc-results", drogon::Get, {}},
+        {"/api/v1/alerts", drogon::Get, {}},
+        {"/api/v1/data-sources", drogon::Post, {}},
+        {"/api/v1/qc-rules", drogon::Post, {}},
+        {"/api/v1/tasks", drogon::Post, {}},
+        {"/api/v1/tasks/" + task_ids_.at(kNodeB), drogon::Patch, {}},
+    };
+    for (const auto& route : management) {
+        for (const auto& token : {std::string{}, std::string(64, 'f'), kTokenA}) {
+            for (const std::string body : {std::string{"{}"}, std::string{"{"}}) {
+                expect_rejected(route.path, agent_request(
+                    route.method, body, token, ""), 401);
+            }
+        }
+    }
 }
 
 }  // namespace

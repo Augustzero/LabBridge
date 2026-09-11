@@ -18,6 +18,7 @@ web-console/**/*.local
 *.a
 *.o
 *.obj
+*.pyc
 
 data/
 *.db

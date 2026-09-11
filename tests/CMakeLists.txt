@@ -159,6 +159,19 @@ add_labbridge_test(
 )
 
 add_labbridge_test(
+    auth_recovery_execution_test
+    SOURCES component/agent/auth_recovery_execution_test.cpp
+    LINK_LIBRARIES
+        GTest::gtest_main
+        labbridge_agent_bootstrap
+        labbridge_agent_execution
+        labbridge_agent_storage
+        labbridge_agent_test_support
+    LABELS component
+    TIMEOUT 30
+)
+
+add_labbridge_test(
     csv_parser_test
     SOURCES component/agent/csv_parser_test.cpp
     LINK_LIBRARIES
@@ -451,6 +464,15 @@ add_labbridge_postgres_test(
 add_labbridge_postgres_test(
     auth_rejection_postgres_test
     SOURCES integration/postgres/auth_rejection_postgres_test.cpp
+    LINK_LIBRARIES
+        GTest::gtest
+        labbridge_server_http
+        labbridge_server_postgres
+)
+
+add_labbridge_postgres_test(
+    auth_replay_postgres_test
+    SOURCES integration/postgres/auth_replay_postgres_test.cpp
     LINK_LIBRARIES
         GTest::gtest
         labbridge_server_http

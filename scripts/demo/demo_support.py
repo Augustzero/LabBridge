@@ -9,10 +9,12 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable
 
 
 RUN_KEY_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{7,47}$")
+MANAGEMENT_TOKEN_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
 
 class DemoError(RuntimeError):
@@ -27,6 +29,22 @@ def require_run_key(value: str) -> str:
     return value
 
 
+def load_management_token(path: str) -> str:
+    """读取管理 token 文件：允许末尾换行，格式不对直接报错。"""
+    try:
+        content = Path(path).read_bytes().decode("ascii")
+    except (OSError, UnicodeError) as error:
+        raise DemoError(
+            f"cannot read management token file {path} as ASCII"
+        ) from error
+    token = content[:-1] if content.endswith("\n") else content
+    if not MANAGEMENT_TOKEN_PATTERN.fullmatch(token):
+        raise DemoError(
+            f"management token file {path} is not a 64-hex token"
+        )
+    return token
+
+
 @dataclass(frozen=True)
 class Evidence:
     detail: dict[str, Any]
@@ -37,9 +55,15 @@ class Evidence:
 
 
 class ApiClient:
-    def __init__(self, base_url: str, timeout_seconds: float = 10.0) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        timeout_seconds: float = 10.0,
+        management_token: str | None = None,
+    ) -> None:
         self.base_url = base_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
+        self.management_token = management_token
 
     def get(self, path: str, params: dict[str, str] | None = None) -> Any:
         suffix = path
@@ -75,11 +99,14 @@ class ApiClient:
         self, method: str, path: str, payload: dict[str, Any] | None = None
     ) -> Any:
         body = None if payload is None else json.dumps(payload).encode("utf-8")
+        headers = {"Accept": "application/json", "Content-Type": "application/json"}
+        if self.management_token:
+            headers["Authorization"] = f"Bearer {self.management_token}"
         request = urllib.request.Request(
             self.base_url + path,
             data=body,
             method=method,
-            headers={"Accept": "application/json", "Content-Type": "application/json"},
+            headers=headers,
         )
         try:
             with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
@@ -134,10 +161,6 @@ def find_business_run(items: list[dict[str, Any]]) -> dict[str, Any] | None:
         if item.get("status") == "succeeded" and item.get("items_total", 0) > 0:
             return item
     return None
-
-
-def task_is_projected(config: dict[str, Any], task_id: str) -> bool:
-    return any(task.get("id") == task_id for task in config.get("tasks", []))
 
 
 def validate_evidence(

@@ -16,8 +16,8 @@ from demo_support import (
     DemoError,
     find_business_run,
     load_evidence,
+    load_management_token,
     require_run_key,
-    task_is_projected,
     validate_evidence,
     wait_until,
 )
@@ -55,6 +55,13 @@ def write_result(run_dir: Path, result: dict[str, object]) -> None:
     temporary.replace(target)
 
 
+def management_token_from_env() -> str:
+    token_file = os.getenv("DEMO_MANAGEMENT_TOKEN_FILE")
+    if not token_file:
+        raise DemoError("DEMO_MANAGEMENT_TOKEN_FILE is required for the demo runner")
+    return load_management_token(token_file)
+
+
 def main() -> int:
     run_key = require_run_key(os.getenv("DEMO_RUN_KEY", generated_run_key()))
     node_code = os.getenv("DEMO_NODE_CODE", "demo-node-001")
@@ -62,7 +69,8 @@ def main() -> int:
     if timeout_seconds < 30 or timeout_seconds > 600:
         raise DemoError("DEMO_TIMEOUT_SECONDS must be between 30 and 600")
     client = ApiClient(
-        os.getenv("DEMO_API_BASE_URL", "http://server:18080/api/v1")
+        os.getenv("DEMO_API_BASE_URL", "http://server:18080/api/v1"),
+        management_token=management_token_from_env(),
     )
     deadline = time.monotonic() + timeout_seconds
 
@@ -150,15 +158,7 @@ def main() -> int:
         )
         print(f"created task id={task_id}")
 
-        # 先确认 Agent 真的拿到任务，再等调度结果，超时时才能分清是配置还是执行阻塞。
-        wait_until(
-            f"Agent config to include task {task_id}",
-            deadline,
-            lambda: client.get(f"/agents/{node_code}/config"),
-            lambda config: task_is_projected(config, task_id),
-        )
-        print(f"agent config includes task={task_id}")
-
+        # 成功运行能证明 Agent 已拉取并执行任务，runner 用管理接口等结果。
         print("[4/5] waiting for a succeeded run with two business records")
         runs = wait_until(
             f"task {task_id} succeeded business run",
@@ -192,12 +192,6 @@ def main() -> int:
         )
 
         disable_task(client, task_id)
-        wait_until(
-            f"Agent config to remove disabled task {task_id}",
-            deadline,
-            lambda: client.get(f"/agents/{node_code}/config"),
-            lambda config: not task_is_projected(config, task_id),
-        )
 
         result = {
             "demo_run_key": run_key,
