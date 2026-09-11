@@ -1,8 +1,12 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
+
+import { useAuth } from '@/composables/useAuth'
 
 const route = useRoute()
+const router = useRouter()
+const { signOut } = useAuth()
 
 const NAV_ITEMS = [
   { path: '/nodes', title: '节点管理' },
@@ -17,6 +21,12 @@ const activePath = computed(
 const pageTitle = computed(
   () => (route.meta.title as string | undefined) ?? 'LabBridge 控制台',
 )
+
+function clearCredentials(): void {
+  // 清凭据并回输入页；业务视图随导航整体卸载，已展示数据一并清空
+  signOut()
+  void router.replace({ name: 'auth' })
+}
 </script>
 
 <template>
@@ -30,7 +40,10 @@ const pageTitle = computed(
       </el-menu>
     </el-aside>
     <el-container>
-      <el-header height="56px" class="console-header">{{ pageTitle }}</el-header>
+      <el-header height="56px" class="console-header">
+        <span>{{ pageTitle }}</span>
+        <el-button size="small" @click="clearCredentials">清除访问凭据</el-button>
+      </el-header>
       <el-main class="console-main">
         <router-view />
       </el-main>
@@ -64,6 +77,7 @@ const pageTitle = computed(
 .console-header {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   background: #fff;
   border-bottom: 1px solid var(--labbridge-border);
   color: var(--labbridge-text);

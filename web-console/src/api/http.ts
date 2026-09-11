@@ -1,15 +1,29 @@
 import axios, { AxiosError, CanceledError } from 'axios'
 
+import { currentToken, notifyCredentialsRejected } from './credentials'
+
 // 后端无 CORS 且有严格参数白名单，前端只能同源访问；
 // 开发期由 Vite proxy、生产由 Nginx 反代 /api，代码中不出现后端绝对地址。
 export const httpClient = axios.create({
   baseURL: '/',
 })
 
+// 所有业务请求统一带管理凭据；输入页验证走同一入口（先保存再验证），
+// 不接受 URL 参数或 body 传 token
+httpClient.interceptors.request.use((config) => {
+  const token = currentToken()
+  if (token != null) {
+    config.headers.set('Authorization', `Bearer ${token}`)
+  }
+  return config
+})
+
 export type ApiErrorKind =
   | 'network'
   | 'timeout'
   | 'server'
+  | 'unauthenticated'
+  | 'forbidden'
   | 'not_found'
   | 'conflict'
   | 'bad_request'
@@ -40,6 +54,12 @@ interface Envelope<T> {
 }
 
 function kindFromStatus(status: number): ApiErrorKind {
+  if (status === 401) {
+    return 'unauthenticated'
+  }
+  if (status === 403) {
+    return 'forbidden'
+  }
   if (status === 404) {
     return 'not_found'
   }
@@ -77,6 +97,8 @@ export async function request<T>(
   config: Parameters<typeof httpClient.request>[0],
   signal?: AbortSignal,
 ): Promise<T> {
+  // 记下发出请求时的凭据，401 回来时若凭据已经换过，说明是迟到响应
+  const tokenAtRequest = currentToken()
   let response: { status: number; data: Envelope<T> }
   try {
     response = await httpClient.request<Envelope<T>>({ ...config, signal })
@@ -84,7 +106,12 @@ export async function request<T>(
     if (error instanceof CanceledError) {
       throw error
     }
-    throw toApiError(error)
+    const apiError = toApiError(error)
+    if (apiError.kind === 'unauthenticated' && tokenAtRequest !== null) {
+      // 匿名请求（无凭据）的 401 不广播，避免重复跳转
+      notifyCredentialsRejected(tokenAtRequest)
+    }
+    throw apiError
   }
 
   const body = response.data

@@ -7,6 +7,9 @@ import type { ApiError, ApiErrorKind } from '@/api/http'
 const CATEGORY_TEXT: Record<ApiErrorKind, string> = {
   network: '网络连接失败，请检查网络或后端服务是否可用',
   timeout: '请求超时，请稍后重试',
+  // 401 通常由全局监听清凭据并跳回输入页，这里只是兜底展示
+  unauthenticated: '访问凭据缺失或已失效，请重新输入',
+  forbidden: '当前访问凭据无权执行该操作',
   not_found: '请求的资源不存在',
   conflict: '操作与当前状态冲突',
   bad_request: '请求参数不被服务端接受',
