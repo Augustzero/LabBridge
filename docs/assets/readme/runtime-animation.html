@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LabBridge · Agent ↔ Control Plane</title>
+<style>
+:root{color-scheme:dark}*{box-sizing:border-box}body{margin:0;background:#070a0e;color:#edf1f5;font:14px system-ui,sans-serif;min-height:100vh;display:grid;place-items:center}main{width:min(1280px,100%);padding:12px}canvas{display:block;width:100%;height:auto;border-radius:16px}nav{display:flex;align-items:center;gap:16px;padding:16px 12px;flex-wrap:wrap}button{background:#151e29;color:#eaf1f7;border:1px solid #354151;border-radius:8px;padding:9px 16px;cursor:pointer}button:focus-visible,input:focus-visible{outline:2px solid #6cdec6;outline-offset:3px}input{flex:1;min-width:140px;accent-color:#6cdec6}output{font-variant-numeric:tabular-nums;color:#9aaaba}p{margin:0 12px 18px;color:#9aaaba;line-height:1.6}
+</style>
+</head>
+<body><main>
+<canvas id="scene" width="1280" height="800" aria-label="LabBridge Agent 与中心服务交互动画"></canvas>
+<nav aria-label="Animation controls"><button id="play">暂停</button><button id="restart">重播</button><input id="seek" type="range" min="0" max="36" step="0.05" value="0" aria-label="Animation position"><output id="time">0:00 / 0:36</output><button id="language">English</button></nav>
+<p id="note"></p>
+</main>
+<script>
+const canvas=document.querySelector('canvas'),ctx=canvas.getContext('2d');
+const colors={bg:'#070a0e',panel:'#101720',line:'#2b3745',text:'#edf1f5',muted:'#95a5b6',teal:'#6cdec6',blue:'#8bbaff',gold:'#e9c27b'};
+let lang=new URLSearchParams(location.search).get('lang')==='en'?'en':'zh';
+const tr=(zh,en)=>lang==='en'?en:zh;
+const ease=p=>{p=Math.max(0,Math.min(1,p));return p*p*(3-2*p)};
+const progress=(t,a,b)=>ease((t-a)/(b-a));
+const font=(size,weight=400)=>`${weight} ${size}px "Segoe UI", "Microsoft YaHei", sans-serif`;
+function text(value,x,y,size=18,color=colors.text,weight=400){ctx.font=font(size,weight);ctx.fillStyle=color;ctx.fillText(value,x,y)}
+function rr(x,y,w,h,r=12,fill=colors.panel,stroke=null){ctx.beginPath();ctx.roundRect(x,y,w,h,r);if(fill){ctx.fillStyle=fill;ctx.fill()}if(stroke){ctx.strokeStyle=stroke;ctx.lineWidth=1;ctx.stroke()}}
+function line(x1,y1,x2,y2,color,width=2){ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.strokeStyle=color;ctx.lineWidth=width;ctx.stroke()}
+function centered(value,x,y,size=17,color=colors.text,weight=400){ctx.font=font(size,weight);text(value,x-ctx.measureText(value).width/2,y,size,color,weight)}
+function pill(value,x,y,color=colors.teal){ctx.font=font(13,600);const w=ctx.measureText(value).width+24;rr(x,y,w,26,13,'#18242e');text(value,x+12,y+18,13,color,600)}
+function file(x,y,size=1,color=colors.blue){ctx.save();ctx.translate(x,y);ctx.scale(size,size);rr(0,0,32,40,4,'#1c2b3a',color);line(7,12,23,12,color,2);line(7,20,23,20,color,2);line(7,28,18,28,color,2);ctx.restore()}
+function check(x,y,color=colors.teal){ctx.beginPath();ctx.moveTo(x,y+7);ctx.lineTo(x+6,y+13);ctx.lineTo(x+17,y);ctx.strokeStyle=color;ctx.lineWidth=3;ctx.stroke()}
+function panel(x,title,subtitle,badge,color){rr(x,158,420,468,20,colors.panel,colors.line);rr(x+24,184,42,42,10,'#1a2b35');if(x<500){line(x+34,196,x+55,196,color);line(x+34,204,x+55,204,color);line(x+34,212,x+49,212,color)}else{ctx.strokeStyle=color;ctx.lineWidth=2;ctx.strokeRect(x+35,194,19,21);line(x+39,200,x+50,200,color);line(x+39,208,x+50,208,color)}text(title,x+80,202,26,colors.text,600);text(subtitle,x+80,229,14,colors.muted);pill(badge,x+24,246,color)}
+function taskCard(x,y,visible=1,compact=false){ctx.save();ctx.globalAlpha=visible;rr(x,y,compact?224:372,76,12,'#182a32',colors.teal);file(x+16,y+19,.85,colors.teal);text(tr('CSV 采集任务','CSV collection task'),x+59,y+31,compact?16:19,colors.text,600);text(tr('每分钟 · 本地目录','Every minute · local folder'),x+59,y+55,compact?12:14,colors.muted);ctx.restore()}
+// 每次交互单独出现、沿发送方向展开，再消失；不保留永久连接线。
+function wire(t,a,b,back,label,payload,color=colors.teal,labelY=370){if(t<a||t>=b)return;const p=(t-a)/(b-a),alpha=Math.min(1,p/.13,(1-p)/.13);ctx.save();ctx.globalAlpha=alpha;const x0=back?813:467,x1=back?467:813,y=412,end=x0+(x1-x0)*ease(Math.min(1,p/.32));line(x0,y,end,y,color,2);const dir=back?-1:1;ctx.beginPath();ctx.moveTo(end,y);ctx.lineTo(end-dir*10,y-5);ctx.lineTo(end-dir*10,y+5);ctx.closePath();ctx.fillStyle=color;ctx.fill();centered(label,640,labelY,16,color,600);const pos=x0+(x1-x0)*ease(p);if(payload){ctx.font=font(13);const width=ctx.measureText(payload).width+22;rr(pos-width/2,391,width,39,8,'#18232e',color);centered(payload,pos,415,13,colors.text)}ctx.restore()}
+const chapters=[
+ [0,2,tr('',''),['两端就位，等待一次正常采集','Ready for a normal collection run'],['Agent 已注册在线；中心保存任务配置。','The Agent is online; task configuration lives in the control plane.']],
+ [2,4.5,'',['Agent 主动询问：有没有我的任务？','The Agent asks for its configuration'],['拉取请求从现场发往中心，Agent 决定何时发起。','The field Agent initiates the configuration request.']],
+ [4.5,6,'',['中心读取该节点的任务','The control plane reads the assigned task'],['任务卡片来自已有配置，不是中心主动推送。','The card represents existing configuration, prepared for this response.']],
+ [6,8.5,'',['中心响应，任务卡片回到 Agent','The response carries the task to the Agent'],['配置随响应返回；交互完成，箭头消失。','Configuration travels back in the response; the arrow then disappears.']],
+ [8.5,10,'',['Agent 保存任务，等待调度时刻','The Agent waits for the next schedule'],['采集由现场调度器触发。','The scheduler on the field machine triggers execution.']],
+ [10,11.5,'',['调度到点，Agent 请求开始运行','The Agent requests a new run'],['稳定执行键随请求发送，中心建立运行记录。','A stable execution key identifies the run-start request.']],
+ [11.5,13,'',['中心返回运行编号','The control plane returns the run ID'],['后续文件与结果都关联到这次运行。','Files and results will reference this run.']],
+ [13,15.5,'',['Agent 从现场目录采集文件','The Agent collects a local file'],['原始 CSV 进入本次执行。','The original CSV enters the execution on the field machine.']],
+ [15.5,18,'',['原文件归档，待投递状态写入 SQLite','Archive locally and persist delivery state'],['文件留在 Agent；SQLite 保存下一步需要投递的内容。','The file stays on the Agent; SQLite preserves the pending delivery.']],
+ [18,20,'',['Agent 上报原始文件清单','The Agent sends the file manifest'],['发送路径、哈希等元数据，不是把原文件上传到中心。','Send path and hash metadata; the raw file is not uploaded.']],
+ [20,21.5,'',['中心确认文件清单，返回文件编号','The manifest response returns file IDs'],['文件清单已提交；返回编号供解析结果关联。','The manifest is committed; returned IDs link subsequent records.']],
+ [21.5,24,'',['Agent 解析 CSV，得到结构化记录','The Agent parses the archived CSV'],['解析记录关联刚收到的原始文件编号。','Parsed observations reference the returned raw-file ID.']],
+ [24,26,'',['Agent 完成质控，准备结果上报','The Agent validates the observations'],['这里演示正常通过场景；结果请求也保存到本地队列。','This example passes QC; the report is also persisted locally.']],
+ [26,28,'',['Agent 提交记录与质控结果','The Agent submits records and QC results'],['结构化数据跨越网络，原文件仍保留在现场。','Structured results cross the network; the original stays in the field.']],
+ [28,29.5,'',['中心在事务中保存结果','The control plane commits the report'],['记录、质控、运行终态与持久化回执一起提交。','Records, QC, final run status and a durable receipt commit together.']],
+ [29.5,31,'',['中心返回成功确认','The control plane acknowledges success'],['只有收到明确成功响应，Agent 才完成本次投递。','Only a successful response lets the Agent complete delivery.']],
+ [31,33,'',['Agent 清理已完成的队列项','The Agent completes its queued delivery'],['本地原文件继续保留；本次待投递项已清空。','The local original remains archived; the pending item is cleared.']],
+ [33,36,'',['一次运行，两端证据连在一起','One run connects evidence on both sides'],['中心可查询运行、文件元数据、解析记录与质控结果。','The run, file metadata, observations and QC results can now be queried.']]
+];
+function render(t){t=Math.max(0,Math.min(35.999,t));ctx.fillStyle=colors.bg;ctx.fillRect(0,0,1280,800);text('LABBRIDGE  /  RUNTIME STORY',40,40,14,colors.teal,600);text(tr('一次任务，如何在两端完成','How one task moves between two sides'),40,91,34,colors.text,600);text(tr('主动拉取 · 本地执行 · 分步上报 · 成功确认','Pull configuration · execute locally · report · acknowledge'),42,126,17,colors.muted);pill(tr('正常流程','NORMAL FLOW'),1100,58,colors.blue);
+ panel(40,'Edge Agent',tr('现场机器 · 主动连接中心','FIELD MACHINE · INITIATES REQUESTS'),tr('● 已注册在线','● REGISTERED / ONLINE'),colors.teal);
+ panel(820,tr('中心服务','Control Plane'),'SERVER · POSTGRESQL',tr('● 等待请求','● LISTENING'),colors.blue);
+ // 配置仅在中心处理拉取请求时显现；返回副本抵达后再显示 Agent 本地任务。
+ if(t>=4.5)taskCard(844,290,progress(t,4.5,5.2));else{rr(844,290,372,76,12,'#111c27',colors.line);text(tr('任务配置已保存','Task configuration stored'),864,323,18,colors.muted);text(tr('等待节点拉取','Waiting for the Agent to pull'),864,349,14,colors.muted)}
+ if(t>=8.5)taskCard(64,290,progress(t,8.5,8.85));else{rr(64,290,372,76,12,'#0d141c',colors.line);text(tr('本地任务：待拉取','Local task: awaiting configuration'),84,333,17,colors.muted)}
+ let agentTitle=tr('等待配置','Waiting for configuration'),agentSub=tr('控制面客户端已就绪','Control-plane client ready');
+ if(t>=2){agentTitle=tr('正在主动拉取','Requesting configuration');agentSub='GET configuration'}
+ if(t>=8.5){agentTitle=tr('任务已接收','Task received');agentSub=tr('等待 Cron 调度','Waiting for the Cron schedule')}
+ if(t>=10){agentTitle=tr('请求开始运行','Starting the run');agentSub=tr('执行键已持久化','Execution key persisted')}
+ if(t>=13){agentTitle=tr('采集现场文件','Collecting local CSV');agentSub='inbox / observations.csv'}
+ if(t>=15.5){agentTitle=tr('归档原始文件','Archiving original file');agentSub=tr('原文件 + SHA-256','Original file + SHA-256')}
+ if(t>=18){agentTitle=tr('上报文件清单','Reporting file manifest');agentSub=tr('等待 raw_file_id','Awaiting raw_file_id')}
+ if(t>=21.5){agentTitle=tr('解析归档文件','Parsing the archived CSV');agentSub=tr('两条结构化观测记录','Two structured observations')}
+ if(t>=24){agentTitle=tr('质控检查通过','Quality checks passed');agentSub=tr('结果上报已准备','Result report prepared')}
+ if(t>=26){agentTitle=tr('提交本次结果','Submitting results');agentSub=tr('记录与质控关联到运行 #42','Records and QC linked to run #42')}
+ if(t>=31){agentTitle=tr('本次执行完成','Execution complete');agentSub=tr('等待下次调度','Waiting for the next schedule')}
+ rr(64,386,372,108,12,'#111e28');text(agentTitle,84,416,20,colors.text,600);text(agentSub,84,443,15,colors.muted);
+ if(t>=13&&t<15.5){file(84+progress(t,13,15)*270,456,.55);line(94,478,406,478,colors.line,1)}
+ if(t>=21.5&&t<26){const q=progress(t,21.5,23.5);for(let i=0;i<2;i++){rr(84+i*166,461,148*q,17,4,'#244252');if(t>=24+i*.55)check(211+i*166,462)}}
+ if(t>=31)check(399,409);
+ let queue=t<10?tr('待投递 0','PENDING 0'):t<31?tr('待投递 1','PENDING 1'):tr('待投递 0 · 已确认','PENDING 0 · ACKNOWLEDGED');
+ rr(64,510,372,89,12,'#0c131c',t>=31?colors.teal:colors.line);text('SQLite',84,537,16,colors.teal,600);text(queue,183,537,14,t>=31?colors.teal:colors.muted);if(t>=15.5){file(85,552,.6,colors.blue);text(tr('原文件已归档 · 保留在现场','Original archived · retained locally'),113,573,14,colors.muted)}else text(tr('本地可靠队列','Durable local delivery queue'),84,574,15,colors.muted);
+ rr(844,386,372,108,12,'#111e28');text(t>=11.5?'RUN #42':tr('运行记录','Run record'),864,416,20,colors.text,600);text(t<11.5?tr('等待开始运行请求','Awaiting a run-start request'):t<29.5?tr('运行中','Running'):tr('成功 · 可查询','Succeeded · ready to query'),864,445,17,t>=29.5?colors.teal:colors.muted);if(t>=20){text(tr('原始文件元数据 1','Raw-file metadata 1'),864,477,14,colors.blue)}
+ rr(844,510,372,89,12,'#0c131c',t>=29.5?colors.blue:colors.line);text('PostgreSQL',864,537,16,colors.blue,600);if(t>=28&&t<29.5){text(tr('事务提交中…','Committing transaction…'),864,574,17,colors.gold);rr(864,584,330*progress(t,28,29.5),3,1,colors.blue)}else if(t>=29.5){text(tr('记录 2  ·  质控通过  ·  回执已保存','2 records · QC passed · receipt saved'),864,572,15,colors.text);check(1179,523)}else text(t>=20?tr('文件清单已提交','Manifest transaction committed'):tr('配置与运行持久化','Configuration and run persistence'),864,574,15,colors.muted);
+ wire(t,2,4.5,false,tr('Agent 主动拉取','Agent pulls configuration'),'GET config');
+ wire(t,6,8.5,true,tr('中心返回任务配置','Configuration response'),null,colors.blue,250);
+ if(t>=6&&t<8.5){let p=progress(t,6,8.5);taskCard(918-826*p,294+45*Math.sin(Math.PI*p),Math.min(1,(t-6)*5,(8.5-t)*5),true)}
+ wire(t,10,11.5,false,tr('请求开始运行','Request run start'),'execution key');
+ wire(t,11.5,13,true,tr('返回运行编号','Run-start response'),'run_id: 42',colors.blue);
+ wire(t,18,20,false,tr('上报文件清单','Send file manifest'),'path + SHA-256');
+ wire(t,20,21.5,true,tr('返回文件编号','Manifest response'),'raw_file_id: 7',colors.blue);
+ wire(t,26,28,false,tr('提交记录与质控','Submit records + QC'),'report');
+ wire(t,29.5,31,true,tr('提交成功，返回确认','Committed: success response'),'ACK',colors.blue);
+ if(t>=33){ctx.save();ctx.globalAlpha=progress(t,33,33.5);rr(484,480,312,104,14,'#14242a',colors.teal);centered(tr('同一条证据链','One chain of evidence'),640,514,21,colors.text,600);centered(tr('本地原文件 ↔ 中心结构化结果','Local original ↔ stored results'),640,547,15,colors.teal);ctx.restore()}
+ const index=chapters.findIndex(c=>t>=c[0]&&t<c[1]),ch=chapters[index];rr(40,650,1200,111,16,'#121b24');text(String(index+1).padStart(2,'0'),62,692,26,colors.teal,600);text(ch[3][lang==='en'?1:0],117,693,25,colors.text,600);text(ch[4][lang==='en'?1:0],117,731,17,colors.muted);rr(40,782,1200,3,1,'#23303b');rr(40,782,Math.max(1,1200*t/36),3,1,colors.teal);
+}
+window.renderFrame=render;window.setLanguage=value=>{lang=value;updateControls()};window.animationDuration=36;
+let playing=!matchMedia('(prefers-reduced-motion: reduce)').matches,current=0,last=performance.now();
+function updateControls(){document.documentElement.lang=lang==='en'?'en':'zh-CN';document.querySelector('#play').textContent=playing?tr('暂停','Pause'):tr('播放','Play');document.querySelector('#restart').textContent=tr('重播','Replay');document.querySelector('#language').textContent=tr('English','简体中文');document.querySelector('#note').textContent=tr('正常通过场景的交互动画。初始状态：Agent 已注册。时长经过压缩，原文件保存在 Agent；中心接收元数据和结构化结果。','Normal successful execution, starting with an already registered Agent. Timing is compressed. Raw files stay on the Agent; the center receives metadata and structured results.');render(current)}
+document.querySelector('#play').onclick=()=>{playing=!playing;last=performance.now();updateControls()};document.querySelector('#restart').onclick=()=>{current=0;playing=true;last=performance.now();updateControls()};document.querySelector('#language').onclick=()=>{lang=lang==='en'?'zh':'en';updateControls()};document.querySelector('#seek').oninput=e=>{current=+e.target.value;playing=false;updateControls()};
+function tick(now){if(window.exportMode){requestAnimationFrame(tick);return}if(playing)current=(current+(now-last)/1000)%36;last=now;render(current);document.querySelector('#seek').value=current;document.querySelector('#time').textContent=`0:${String(Math.floor(current)).padStart(2,'0')} / 0:36`;requestAnimationFrame(tick)}
+window.freezeAnimation=()=>{playing=false;window.exportMode=true};updateControls();requestAnimationFrame(tick);
+</script></body></html>

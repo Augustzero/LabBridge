@@ -30,4 +30,9 @@ data/
 .idea/
 .DS_Store
 
+/docs/*
+!/docs/assets/
+
 *.md
+!/README.md
+!/README.en.md
