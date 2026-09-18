@@ -2,11 +2,17 @@
 #include "labbridge/agent/execution/sha256.h"
 #include "labbridge/core/utc_time.h"
 
+#include <fcntl.h>
+#include <unistd.h>
+
 #include <atomic>
 #include <cctype>
+#include <cerrno>
+#include <cstring>
 #include <limits>
 #include <stdexcept>
 #include <utility>
+#include <vector>
 
 namespace labbridge::agent {
 namespace {
@@ -49,6 +55,75 @@ std::string sanitized_filename(const std::string& original_name) {
         return "file";
     }
     return result;
+}
+
+// 只为落盘同步服务的 fd RAII：打开失败直接抛错，析构必关，
+// 省得每个错误分支都记得 close。不做通用文件封装。
+class SyncDescriptor {
+public:
+    SyncDescriptor(labbridge::core::fs::path path, int flags)
+        : path_{std::move(path)},
+          fd_{::open(path_.c_str(), flags)} {
+        if (fd_ < 0) {
+            throw std::runtime_error(
+                "failed to open " + path_.string() +
+                " for sync: " + std::strerror(errno));
+        }
+    }
+
+    ~SyncDescriptor() { ::close(fd_); }
+
+    SyncDescriptor(const SyncDescriptor&) = delete;
+    SyncDescriptor& operator=(const SyncDescriptor&) = delete;
+
+    void sync() const {
+        // Agent 停止时会收到信号，fsync 被信号打断返回 EINTR 属正常，接着重试。
+        while (::fsync(fd_) != 0) {
+            if (errno != EINTR) {
+                throw std::runtime_error(
+                    "failed to sync " + path_.string() + ": " +
+                    std::strerror(errno));
+            }
+        }
+    }
+
+private:
+    labbridge::core::fs::path path_;
+    int fd_;
+};
+
+// 把文件已写入的内容压到稳定存储。只读 fd 调 fsync 一样能把脏页刷下去，
+// 这里本来也只做同步，不需要写权限。
+void sync_file(const labbridge::core::fs::path& path) {
+    SyncDescriptor descriptor{path, O_RDONLY};
+    descriptor.sync();
+}
+
+// 同步目录项。rename/mkdir 改的目录项先挂在内存里，不同步所在目录，
+// 掉电后名字可能就没了，所以每次改名后都要补这一下。
+void sync_directory(const labbridge::core::fs::path& directory) {
+    SyncDescriptor descriptor{directory, O_RDONLY | O_DIRECTORY};
+    descriptor.sync();
+}
+
+// 建归档层级目录，并让新建的每一层都真正落盘：新目录自己 fsync 一次，
+// 它的父目录再 fsync 一次（父目录多了个名字也要持久化）。跳过已存在的层级，
+// 这样日常运行的额外开销就是 rename 后那一次目录同步。
+void create_and_sync_directories(const labbridge::core::fs::path& directory) {
+    std::vector<labbridge::core::fs::path> missing;
+    labbridge::core::fs::path prefix;
+    for (const auto& part : directory) {
+        prefix /= part;
+        if (labbridge::core::fs::exists(prefix)) {
+            continue;
+        }
+        missing.push_back(prefix);
+    }
+    labbridge::core::fs::create_directories(directory);
+    for (const auto& created : missing) {
+        sync_directory(created);
+        sync_directory(created.parent_path());
+    }
 }
 
 }  // namespace
@@ -96,7 +171,7 @@ ArchivedLocalFile LocalArchiveStore::archive(
     const auto destination =
         plan_archive_path(task_id, task_run_id, ordinal, source.original_name);
     const auto directory = destination.parent_path();
-    labbridge::core::fs::create_directories(directory);
+    create_and_sync_directories(directory);
     if (labbridge::core::fs::exists(destination)) {
         throw ArchiveConflictError("archive destination already exists");
     }
@@ -106,8 +181,8 @@ ArchivedLocalFile LocalArchiveStore::archive(
         directory /
         (filename + ".tmp-" +
          std::to_string(temporary_sequence.fetch_add(1, std::memory_order_relaxed)));
-        // 先写同目录临时文件并校验内容，再 rename，manifest 永远不会
-        // 指向半写入的归档证据。
+        // 先写同目录临时文件并校验内容，再同步、再 rename，
+        // manifest 永远不会指向半写入的归档证据。
     try {
         labbridge::core::fs::copy_file(
             source.source_path, temporary,
@@ -118,7 +193,11 @@ ArchivedLocalFile LocalArchiveStore::archive(
             archive_hash != source.file_hash) {
             throw std::runtime_error("source changed while it was being archived");
         }
+        // 内容先落盘再改名：否则掉电后可能出现“名字在了、内容还是空的”。
+        sync_file(temporary);
         labbridge::core::fs::rename(temporary, destination);
+        // rename 本身不同步目录项，这里补上，改名才算真正定下来。
+        sync_directory(directory);
     } catch (...) {
         std::error_code ignored;
         labbridge::core::fs::remove(temporary, ignored);
@@ -138,6 +217,11 @@ ArchivedLocalFile LocalArchiveStore::recover_archive(
             throw ArchiveConflictError(
                 "persisted archive conflicts with expected evidence");
         }
+        // 上次归档可能在同步完成前就被打断（比如进程被杀后重启）。
+        // 文件还在且内容对，只说明页缓存里有它，不等于已经落盘，
+        // 所以恢复分支也要把文件和目录项补同步，再对外宣布归档成功。
+        sync_file(archive_path);
+        sync_directory(archive_path.parent_path());
         return {source, labbridge::core::fs::weakly_canonical(archive_path)};
     }
     const auto filename = archive_path.filename().string();
