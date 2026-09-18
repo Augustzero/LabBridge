@@ -1,0 +1,29 @@
+# LabBridge Agent 现场服务单元。
+# 安装到 /etc/systemd/system/labbridge-agent.service；
+# 二进制经 /opt/labbridge/current 间接引用，升级时切换链接后 restart 即可。
+# 安装与目录约定见 docs/operations/agent-deployment.md。
+
+[Unit]
+Description=LabBridge Agent (site data collection node)
+# 只等本地网络就绪；中心暂时不可用不影响启动，Agent 会以断网模式运行并重试。
+Wants=network-online.target
+After=network-online.target
+# 5 分钟内最多启动 5 次，超限进入 failed；修正故障后先 reset-failed 再启动。
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=labbridge
+Group=labbridge
+ExecStart=/opt/labbridge/current/labbridge_agent /etc/labbridge/agent.yaml
+WorkingDirectory=/var/lib/labbridge
+Restart=on-failure
+RestartSec=10s
+# SIGTERM 走 Agent 现有优雅停止路径（排空当前执行后退出）。
+# 初值 300 秒，按现场单次任务处理的文件规模实测后调整；被 SIGKILL 强杀不算正常停机。
+TimeoutStopSec=300
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

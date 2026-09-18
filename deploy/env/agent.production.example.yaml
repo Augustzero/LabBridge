@@ -1,0 +1,35 @@
+# LabBridge Agent 现场正式配置模板。
+# 安装时复制为 /etc/labbridge/agent.yaml，root:labbridge、0640，
+# 运行账户只经组读取；目录布局与填写说明见 docs/operations/agent-deployment.md。
+
+agent:
+  # 本节点编号：与中心 generate-credentials.sh 生成凭据时登记的编号一致。
+  node_code: station-001
+  name: station-001
+  # 中心 Web 入口（不是 Server 直连地址），末尾不带 /api，Agent 自己拼 /api/v1/...。
+  server_url: http://192.168.1.10:8080
+  request_timeout_seconds: 5
+  heartbeat_interval_seconds: 15
+  # 本节点密钥文件：内容为中心生成的 <node_code>.token（64 位十六进制）。
+  token_file: /etc/labbridge/auth/station-001.token
+
+storage:
+  # 状态目录固定在 /var/lib/labbridge，由运行账户 labbridge 写入；
+  # 备份/恢复按这两个路径整目录处理，不要改动。
+  queue_db: /var/lib/labbridge/agent.db
+  work_dir: /var/lib/labbridge/work
+  # 待处理作业上限：超过后新任务会被拒绝，按现场最长断网时间的文件量评估。
+  max_pending_jobs: 1000
+  # 指纹容量：要覆盖“每任务输入保留窗口内累计处理过的文件数”并留余量，
+  # 估算方法见 docs/operations/agent-deployment.md 的现场参数表。
+  processed_fingerprint_capacity_per_task: 10000
+
+delivery:
+  retry_initial_seconds: 2
+  retry_max_seconds: 300
+
+tasks:
+  poll_interval_seconds: 10
+  # 允许采集的本地目录（绝对路径）。数据源配置里的路径必须落在这些根之内。
+  allowed_local_roots:
+    - /srv/labbridge/inbox
