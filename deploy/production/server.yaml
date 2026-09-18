@@ -1,0 +1,26 @@
+# 中心 Server 正式配置：由 deploy/production/compose.yaml 挂载进容器。
+# 这里只放结构参数，秘密一律走启动环境与只读挂载的凭据文件。
+listeners:
+  - address: 0.0.0.0
+    port: 18080
+    https: false
+
+app:
+  number_of_threads: 1
+  enable_session: false
+  client_max_body_size: 1M
+  client_max_memory_body_size: 64K
+  log:
+    log_level: INFO
+    display_local_time: false
+
+custom_config:
+  # 数据库连接串由 compose 通过 LABBRIDGE_DATABASE_URL 注入，
+  # 生产库密码只存在于仓库外的环境文件里，配置文件和镜像里都没有。
+  management:
+    node_offline_after_seconds: 120
+    task_run_stale_after_seconds: 3600
+  auth:
+    # 两个凭据文件都来自 /etc/labbridge/auth 只读挂载，内容在仓库外生成。
+    management_token_file: /etc/labbridge/auth/management.token
+    agent_tokens_file: /etc/labbridge/auth/agent-tokens.yaml
