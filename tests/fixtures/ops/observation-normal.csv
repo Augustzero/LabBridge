@@ -1,0 +1,4 @@
+station_code,device_code,record_time,temperature,humidity
+DRILL-A,DV001,2026-09-18 08:00:00,22.5,57
+DRILL-A,DV001,2026-09-18 08:05:00,22.7,58
+DRILL-A,DV001,2026-09-18 08:10:00,22.9,59

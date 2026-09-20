@@ -9,7 +9,10 @@ app:
   number_of_threads: 1
   enable_session: false
   client_max_body_size: 1M
-  client_max_memory_body_size: 64K
+  # 内存体上限与最大请求体保持一致：Agent 一次运行的报告可能到几百 KB。
+  # 超过内存阈值时 Drogon 会把请求体转写到临时文件，而容器运行账户对工作
+  # 目录没有写权限，转写失败会退化成 400 invalid JSON（028-05 演练实测）。
+  client_max_memory_body_size: 1M
   log:
     log_level: INFO
     display_local_time: false

@@ -24,6 +24,9 @@
 
 set -Eeuo pipefail
 
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+source "$script_dir/lib/backup-common.sh"
+
 usage() { awk 'NR > 1 { if ($0 !~ /^#/) exit; sub(/^# ?/, ""); print }' "${BASH_SOURCE[0]}"; }
 
 die() { printf '%s\n' "$*" >&2; exit 1; }
@@ -34,6 +37,7 @@ backup_id=''
 output_root=''
 
 while (($#)); do
+  [[ $1 == -h || $1 == --help || $# -ge 2 ]] || die "选项缺少取值: $1"
   case $1 in
     --env-file) env_file=$2; shift 2 ;;
     --compose) compose_file=$2; shift 2 ;;
@@ -49,14 +53,29 @@ done
   || die "批次号得是字母或数字开头的 1-64 位 [A-Za-z0-9._-]: $backup_id"
 [[ -r $env_file ]] || die "环境文件不可读: $env_file（用 --env-file 指定）"
 [[ -r $compose_file ]] || die "Compose 文件不可读: $compose_file（用 --compose 指定，需在仓库根目录执行）"
+command -v python3 >/dev/null 2>&1 || die '缺少 python3 命令'
 command -v docker >/dev/null 2>&1 || die '缺少 docker 命令'
 docker info >/dev/null 2>&1 || die 'Docker daemon 未运行'
 
 # 批次里有 token 和数据库密码，产物按私有权限落盘
 umask 077
 
-auth_dir=$(sed -n 's/^LABBRIDGE_AUTH_DIR=//p' "$env_file" | tail -n 1)
-auth_dir=${auth_dir%\"}; auth_dir=${auth_dir#\"}
+compose_cmd=(docker compose --env-file "$env_file" -f "$compose_file")
+# 环境文件的引号、变量展开交给 Compose，自行 sed 容易和实际部署读出不同值。
+resolved_config=$("${compose_cmd[@]}" config --format json)
+config_values=$(python3 -c '
+import json, pathlib, sys
+services = json.load(sys.stdin)["services"]
+mount = next(v for v in services["server"]["volumes"]
+             if v["target"] == "/etc/labbridge/auth/management.token")
+values = (str(pathlib.Path(mount["source"]).parent),
+          services["server"]["image"].rsplit(":", 1)[-1], services["postgres"]["image"])
+if any(any(c in v for c in "\t\r\n") for v in values):
+    sys.exit("部署配置含非法控制字符")
+print("\t".join(values))
+' <<<"$resolved_config")
+unset resolved_config
+IFS=$'\t' read -r auth_dir image_tag postgres_image <<<"$config_values"
 [[ -n $auth_dir && -d $auth_dir ]] || die "环境文件里的 LABBRIDGE_AUTH_DIR 不存在: ${auth_dir:-<空>}"
 env_real=$(realpath -- "$env_file")
 auth_real=$(realpath -- "$auth_dir")
@@ -73,7 +92,7 @@ for src in "$(dirname -- "$env_real")" "$auth_real"; do
   fi
 done
 
-compose_cmd=(docker compose --env-file "$env_file" -f "$compose_file")
+
 
 # 前置状态：postgres 在跑（导出走容器内连接），server/web 已停。
 # 停写是为了让中心状态和各节点备份时对得上，这是维护文档定的顺序。
@@ -95,18 +114,15 @@ if (( avail_b < db_size )); then
   die "输出目录可用 ${avail_b} 字节，小于数据库当前大小 ${db_size} 字节，先清理或换目录"
 fi
 
-mkdir -p -- "$batch_dir"
+mkdir -- "$batch_dir"
 
 printf '[1/6] 导出数据库（pg_dump 自定义格式）\n'
 "${compose_cmd[@]}" exec -T postgres pg_dump -U labbridge -d labbridge --format=custom \
   > "$batch_dir/center.pgdump"
 
 printf '[2/6] 回读校验导出文件\n'
-# 把导出文件送回容器里用 pg_restore --list 过一遍，确认 dump 结构能读
-"${compose_cmd[@]}" exec -T postgres sh -c 'cat > /tmp/labbridge-backup-verify.dump' \
-  < "$batch_dir/center.pgdump"
-"${compose_cmd[@]}" exec -T postgres pg_restore --list /tmp/labbridge-backup-verify.dump > /dev/null
-"${compose_cmd[@]}" exec -T postgres rm -f /tmp/labbridge-backup-verify.dump
+# pg_restore 从 stdin 回读，不在容器中留下共享临时文件。
+"${compose_cmd[@]}" exec -T postgres pg_restore --list < "$batch_dir/center.pgdump" > /dev/null
 
 printf '[3/6] 记录版本与各表行数\n'
 pg_version=$("${compose_cmd[@]}" exec -T postgres psql -U labbridge -d labbridge -tAc \
@@ -127,26 +143,22 @@ cp -a -- "$env_real" "$batch_dir/config/production.env"
 cp -a -- "$auth_real" "$batch_dir/config/auth"
 
 printf '[5/6] 生成 SHA-256 清单并回验\n'
-(
-  cd "$batch_dir"
-  sha256sum center.pgdump config/production.env config/auth/* > SHA256SUMS
-  sha256sum -c SHA256SUMS > /dev/null
-)
+(cd -- "$batch_dir"; backup_checksums . center.pgdump config/production.env config/auth/*)
 
 printf '[6/6] 写 manifest（有 manifest 才算完整批次）\n'
-image_tag=$(sed -n 's/^LABBRIDGE_IMAGE_TAG=//p' "$env_file" | tail -n 1)
-postgres_image=$(sed -n 's/^LABBRIDGE_POSTGRES_IMAGE=//p' "$env_file" | tail -n 1)
 # 节点清单从凭据目录的 <node>.token 文件名取，恢复后核对“同批备份齐全”靠它
 node_codes=$(find "$auth_real" -maxdepth 1 -name '*.token' ! -name 'management.token' \
   -printf '%f\n' | sed 's/\.token$//' | sort | tr '\n' ' ')
 [[ -n $node_codes ]] && node_codes=" ${node_codes% }"
-manifest="$batch_dir/manifest.txt"
+manifest="$batch_dir/manifest.pending"
+created_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+backup_host=$(hostname)
 {
   printf 'LabBridge center backup\n'
   printf 'backup_id: %s\n' "$backup_id"
-  printf 'created_at_utc: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  printf 'created_at_utc: %s\n' "$created_at"
   printf 'role: center\n'
-  printf 'host: %s\n' "$(hostname)"
+  printf 'host: %s\n' "$backup_host"
   printf 'image_tag: %s\n' "${image_tag:-<未设置>}"
   printf 'postgres_image: %s\n' "${postgres_image:-postgres:16.15-bookworm}"
   printf 'postgres_server_version: %s\n' "$pg_version"
@@ -163,6 +175,7 @@ manifest="$batch_dir/manifest.txt"
   printf '  SHA256SUMS           数据文件校验清单\n'
   printf '\nrestore guide: docs/operations/maintenance.md\n'
 } > "$manifest"
+publish_backup "$batch_dir"
 
 printf '备份完成: %s\n' "$(realpath -- "$batch_dir")"
 printf '后续: 各节点跑同批次的 backup-agent.sh，收集核对办法见 maintenance.md。\n'

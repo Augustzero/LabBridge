@@ -158,6 +158,17 @@ add_labbridge_test(
     LABELS component
 )
 
+# Linux 落盘失败回归：只包装系统调用，仍链接生产 target。
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+add_labbridge_test(
+    local_archive_durability_test
+    SOURCES component/agent/local_archive_durability_test.cpp
+    LINK_LIBRARIES GTest::gtest_main labbridge_agent_execution
+    LABELS component
+)
+target_link_options(local_archive_durability_test PRIVATE "-Wl,--wrap=fsync")
+endif()
+
 add_labbridge_test(
     auth_recovery_execution_test
     SOURCES component/agent/auth_recovery_execution_test.cpp
@@ -608,3 +619,9 @@ add_custom_target(
     USES_TERMINAL
 )
 endif()
+
+# 运维脚本的边界回归，Docker/systemd 使用替身，不接触运行中的部署。
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
+add_test(NAME operations_script_test
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/component/ops/operations_script_test.py)
+set_tests_properties(operations_script_test PROPERTIES LABELS component TIMEOUT 60)

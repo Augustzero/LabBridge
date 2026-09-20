@@ -12,7 +12,6 @@
 #include <limits>
 #include <stdexcept>
 #include <utility>
-#include <vector>
 
 namespace labbridge::agent {
 namespace {
@@ -106,23 +105,16 @@ void sync_directory(const labbridge::core::fs::path& directory) {
     descriptor.sync();
 }
 
-// 建归档层级目录，并让新建的每一层都真正落盘：新目录自己 fsync 一次，
-// 它的父目录再 fsync 一次（父目录多了个名字也要持久化）。跳过已存在的层级，
-// 这样日常运行的额外开销就是 rename 后那一次目录同步。
-void create_and_sync_directories(const labbridge::core::fs::path& directory) {
-    std::vector<labbridge::core::fs::path> missing;
-    labbridge::core::fs::path prefix;
-    for (const auto& part : directory) {
-        prefix /= part;
-        if (labbridge::core::fs::exists(prefix)) {
-            continue;
+// 存在的目录也可能是上次中断留下的，不能据此跳过同步。
+// 从文件所在目录一直同步到根，先保住子项，再保住通往它的整条路径。
+void sync_directory_chain(labbridge::core::fs::path directory) {
+    for (;;) {
+        sync_directory(directory);
+        const auto parent = directory.parent_path();
+        if (parent == directory) {
+            break;
         }
-        missing.push_back(prefix);
-    }
-    labbridge::core::fs::create_directories(directory);
-    for (const auto& created : missing) {
-        sync_directory(created);
-        sync_directory(created.parent_path());
+        directory = parent;
     }
 }
 
@@ -171,7 +163,7 @@ ArchivedLocalFile LocalArchiveStore::archive(
     const auto destination =
         plan_archive_path(task_id, task_run_id, ordinal, source.original_name);
     const auto directory = destination.parent_path();
-    create_and_sync_directories(directory);
+    labbridge::core::fs::create_directories(directory);
     if (labbridge::core::fs::exists(destination)) {
         throw ArchiveConflictError("archive destination already exists");
     }
@@ -181,8 +173,8 @@ ArchivedLocalFile LocalArchiveStore::archive(
         directory /
         (filename + ".tmp-" +
          std::to_string(temporary_sequence.fetch_add(1, std::memory_order_relaxed)));
-        // 先写同目录临时文件并校验内容，再同步、再 rename，
-        // manifest 永远不会指向半写入的归档证据。
+    // 先写同目录临时文件并校验内容，再同步、再 rename，
+    // manifest 永远不会指向半写入的归档证据。
     try {
         labbridge::core::fs::copy_file(
             source.source_path, temporary,
@@ -196,8 +188,8 @@ ArchivedLocalFile LocalArchiveStore::archive(
         // 内容先落盘再改名：否则掉电后可能出现“名字在了、内容还是空的”。
         sync_file(temporary);
         labbridge::core::fs::rename(temporary, destination);
-        // rename 本身不同步目录项，这里补上，改名才算真正定下来。
-        sync_directory(directory);
+        // 内容就位后补齐目录链，包含之前失败留下的层级。
+        sync_directory_chain(directory);
     } catch (...) {
         std::error_code ignored;
         labbridge::core::fs::remove(temporary, ignored);
@@ -221,7 +213,7 @@ ArchivedLocalFile LocalArchiveStore::recover_archive(
         // 文件还在且内容对，只说明页缓存里有它，不等于已经落盘，
         // 所以恢复分支也要把文件和目录项补同步，再对外宣布归档成功。
         sync_file(archive_path);
-        sync_directory(archive_path.parent_path());
+        sync_directory_chain(archive_path.parent_path());
         return {source, labbridge::core::fs::weakly_canonical(archive_path)};
     }
     const auto filename = archive_path.filename().string();

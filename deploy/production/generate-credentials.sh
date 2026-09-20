@@ -30,6 +30,10 @@ fi
 
 # 文件名和 YAML 键都来自节点编号，先统一收窄字符集，避免转义问题。
 for node in "${node_codes[@]}"; do
+  if [[ $node == management ]]; then
+    printf "Node code management is reserved.\n" >&2
+    exit 1
+  fi
   if [[ ! $node =~ ^[a-z0-9][a-z0-9._-]{0,63}$ ]]; then
     printf 'Invalid node code %q: use 1-64 chars of a-z 0-9 . _ - starting with a letter or digit.\n' "$node" >&2
     exit 1
@@ -55,12 +59,16 @@ read_hex_credential() {
   printf '%s' "$token"
 }
 
-# 先生成到临时目录再整体搬过去：中途失败不会留下半套凭据。
-work_dir=$(mktemp -d)
-cleanup() { rm -rf -- "$work_dir"; }
-trap cleanup EXIT
+# 在目标的父目录里暂存，保证最后改名发生在同一个文件系统。
+if [[ -e $auth_dir || -L $auth_dir ]]; then
+  printf 'Auth directory %s already exists; refusing to overwrite.\n' "$auth_dir" >&2
+  exit 1
+fi
+umask 077
+mkdir -p -- "$(dirname -- "$auth_dir")"
+work_dir=$(mktemp -d "$(dirname -- "$auth_dir")/.labbridge-auth.XXXXXX")
+trap 'printf "Credentials not published; staging directory retained: %s\n" "$work_dir" >&2' EXIT
 
-# umask 只影响这批新文件；目录本身最后统一收紧到 0700。
 generate_token() { openssl rand -hex 32; }
 
 management_token=$(generate_token)
@@ -73,39 +81,35 @@ for node in "${node_codes[@]}"; do
   fi
 done
 
-if [[ -e $auth_dir ]]; then
-  printf 'Auth directory %s already exists.\n' "$auth_dir" >&2
-  printf 'Refusing to overwrite; move it away or pick a new directory.\n' >&2
-  exit 1
+printf '%s\n' "$management_token" > "$work_dir/management.token"
+
+if (( ${#node_codes[@]} == 0 )); then
+  printf 'agent_tokens: {}\n' > "$work_dir/agent-tokens.yaml"
+else
+  printf 'agent_tokens:\n' > "$work_dir/agent-tokens.yaml"
+  for node in "${node_codes[@]}"; do
+    printf '  "%s": "%s"\n' "$node" "${node_tokens[$node]}" >> "$work_dir/agent-tokens.yaml"
+    printf '%s\n' "${node_tokens[$node]}" > "$work_dir/$node.token"
+  done
 fi
 
-(umask 077
- mkdir -p -- "$auth_dir"
-
- printf '%s\n' "$management_token" > "$work_dir/management.token"
-
- if (( ${#node_codes[@]} == 0 )); then
-   printf 'agent_tokens: {}\n' > "$work_dir/agent-tokens.yaml"
- else
-   printf 'agent_tokens:\n' > "$work_dir/agent-tokens.yaml"
-   for node in "${node_codes[@]}"; do
-     printf '  "%s": "%s"\n' "$node" "${node_tokens[$node]}" >> "$work_dir/agent-tokens.yaml"
-     printf '%s\n' "${node_tokens[$node]}" > "$work_dir/$node.token"
-   done
- fi
-
- for file in "$work_dir"/*; do
-   install -m 0640 -g "$auth_group" -- "$file" "$auth_dir/$(basename -- "$file")"
- done
-)
-chmod 0700 "$auth_dir"
+chgrp "$auth_group" "$work_dir"/*
+chmod 0640 "$work_dir"/*
 
 # 生成完立刻自校验格式，凭据不对 Server 会拒绝启动，问题在这里就暴露。
-read_hex_credential "$auth_dir/management.token" >/dev/null
+read_hex_credential "$work_dir/management.token" >/dev/null
 for node in "${node_codes[@]}"; do
-  read_hex_credential "$auth_dir/$node.token" >/dev/null
-  grep -q "\"$node\": \"$(cat -- "$auth_dir/$node.token")\"" "$auth_dir/agent-tokens.yaml"
+  read_hex_credential "$work_dir/$node.token" >/dev/null
+  grep -Fq "\"$node\": \"$(cat -- "$work_dir/$node.token")\"" "$work_dir/agent-tokens.yaml"
 done
+
+# -n 拒绝并发生成时覆盖其他进程刚发布的目录；失败保留暂存目录。
+mv -Tn -- "$work_dir" "$auth_dir"
+if [[ -d $work_dir ]]; then
+  printf 'Auth directory appeared during generation: %s\n' "$auth_dir" >&2
+  exit 1
+fi
+trap - EXIT
 
 printf 'Credentials written to %s (dir 0700, files 0640, group %s):\n' "$auth_dir" "$auth_group"
 printf '  management.token      for administrators and the Web console\n'

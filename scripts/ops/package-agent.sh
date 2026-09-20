@@ -93,6 +93,7 @@ deps_file="$output_dir/dependencies.txt"
   docker run --rm --entrypoint /usr/bin/dpkg-query "$image" \
     --show --showformat='${Package} ${Version}\n' \
     libsqlite3-0 libssl3t64 libyaml-cpp0.8 ca-certificates
+  printf '# 运维工具另需：sqlite3 python3 python3-yaml（Ubuntu 24.04 系统包）\n'
   printf 'glibc '
   docker run --rm --entrypoint /usr/bin/ldd "$image" --version | head -1
 } > "$deps_file"
@@ -102,6 +103,10 @@ cp -- deploy/systemd/labbridge-agent.service "$output_dir/systemd/"
 cp -- deploy/env/agent.production.example.yaml "$output_dir/config/"
 
 printf '[4/4] writing manifest and SHA-256 checksums\n'
+mkdir -p -- "$output_dir/scripts/ops"
+cp -- scripts/ops/check.sh scripts/ops/backup-agent.sh scripts/ops/backup-center.sh "$output_dir/scripts/ops/"
+cp -a -- scripts/ops/lib "$output_dir/scripts/ops/"
+
 manifest="$output_dir/manifest.txt"
 {
   printf 'LabBridge agent deployment artifacts\n'
@@ -126,7 +131,7 @@ manifest="$output_dir/manifest.txt"
 (
   cd "$output_dir"
   sha256sum bin/labbridge_agent systemd/labbridge-agent.service \
-    config/agent.production.example.yaml dependencies.txt > SHA256SUMS
+    config/agent.production.example.yaml dependencies.txt scripts/ops/*.sh scripts/ops/lib/* > SHA256SUMS
 )
 
 printf 'done: %s\n' "$output_dir"

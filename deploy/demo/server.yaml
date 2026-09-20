@@ -7,7 +7,9 @@ app:
   number_of_threads: 1
   enable_session: false
   client_max_body_size: 1M
-  client_max_memory_body_size: 64K
+  # 与正式配置同口径：内存体上限不低于最大请求体，避免大报告触发
+  # 请求体落盘转写（容器里转写目录不可写，会退化成 400 invalid JSON）。
+  client_max_memory_body_size: 1M
   log:
     log_level: INFO
     display_local_time: false

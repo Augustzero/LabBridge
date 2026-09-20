@@ -110,6 +110,10 @@ cp -a --parents \
 printf '[3/3] writing manifest and SHA-256 checksums\n'
 image_id() { docker image inspect --format '{{.Id}}' "$1"; }
 
+mkdir -p -- "$output_dir/scripts/ops"
+cp -- scripts/ops/check.sh scripts/ops/backup-agent.sh scripts/ops/backup-center.sh "$output_dir/scripts/ops/"
+cp -a -- scripts/ops/lib "$output_dir/scripts/ops/"
+
 manifest="$output_dir/manifest.txt"
 {
   printf 'LabBridge center deployment artifacts\n'
@@ -136,6 +140,7 @@ manifest="$output_dir/manifest.txt"
   cd "$output_dir"
   sha256sum images/*.tar config/deploy/schema.sql \
     config/deploy/production/* config/deploy/env/* config/deploy/migrations/* \
+    scripts/ops/*.sh scripts/ops/lib/* \
     > SHA256SUMS
 )
 
