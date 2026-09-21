@@ -8,7 +8,7 @@
 
 **简体中文** · [English](README.en.md)
 
-![C++](https://img.shields.io/badge/C%2B%2B-00599C?style=flat-square)
+![C++](https://img.shields.io/badge/C%2B%2B-17-00599C?style=flat-square)
 ![Architecture](https://img.shields.io/badge/Architecture-Control_Plane_%2B_Edge_Agent-247B72?style=flat-square)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-4169E1?style=flat-square)
 ![Vue](https://img.shields.io/badge/Vue-3-42B883?style=flat-square)
@@ -33,14 +33,15 @@ LabBridge 将这条分散的工作链路收拢到一套可私有部署的系统�
 - **原始文件归档**：保留原文件，方便从处理结果追溯数据来源。
 - **运行追踪**：在控制台查看节点状态、采集任务和运行历史。
 - **问题排查**：查看解析记录、质控结果和关联告警。
-- **断网恢复**：暂存未完成的上报，网络恢复后继续投递。
+- **断网恢复**：通过 SQLite 保存已登记作业，重启或网络恢复后继续投递。
+- **部署运维**：提供中心 Compose、Linux Agent systemd 模板，以及巡检、备份和恢复演练工具。
 
-**状态：早期 MVP，已形成带认证的单机演示闭环。** FTP、Oracle、MinIO/对象存储、完整管理页面和生产运维能力尚未完成。当前演示使用 HTTP 与静态凭据，仅监听本机回环地址，适合本机评估；生产部署还需 TLS、凭据运维、备份恢复等工作。
+**状态：早期 MVP，已形成带认证的演示闭环，并推进到小规模受控内网部署与运维验证。** 已完成备份恢复、升级回退等演练；真实掉电、systemd 主机重启和离线新机安装仍待验证。FTP、Oracle、MinIO/对象存储和完整管理页面尚未完成。当前使用 HTTP 与静态凭据，演示默认仅监听本机回环地址；接入不可信网络前需配置 HTTPS。
 
 ## 开发环境与环境要求
 
 - **开发系统**：WSL2 Ubuntu 24.04。
-- **编译器**：GCC/G++ 13，使用 C++。
+- **编译器**：GCC/G++ 13，使用 C++17。
 - **构建工具**：CMake、Ninja。
 - **Demo 环境**：Linux / WSL2，安装 Docker Engine 与 Compose 即可，无需本机编译。
 
@@ -100,6 +101,16 @@ cat "${LABBRIDGE_DEMO_AUTH_DIR:-$HOME/.local/state/labbridge/demo-auth}/manageme
 ```bash
 bash scripts/demo/stop.sh
 ```
+
+## 部署与运维
+
+部署基线为 Ubuntu 24.04 x86_64，采用中心 Docker Compose + 现场 Linux Agent：
+
+- **中心部署**：[Compose 配置](deploy/production/compose.yaml)与[环境变量模板](deploy/env/production.env.example)，数据库持久化，凭据保存在仓库外。
+- **现场 Agent**：[systemd 服务模板](deploy/systemd/labbridge-agent.service)与[打包脚本](scripts/ops/package-agent.sh)。
+- **日常维护**：[巡检](scripts/ops/check.sh)、[中心备份](scripts/ops/backup-center.sh)、[Agent 备份](scripts/ops/backup-agent.sh)与[隔离演练](scripts/ops/drill.sh)。
+
+备份需在统一维护窗口停写，保存同批中心数据和各 Agent 的队列、归档及输入文件。断网恢复覆盖已登记作业；离线重启后的新周期仍需连接中心，源文件需由现场妥善保留。
 
 ## 参与贡献
 

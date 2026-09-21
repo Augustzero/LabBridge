@@ -8,7 +8,7 @@ A privately deployed data ingestion, quality control and archival platform for l
 
 [简体中文](README.md) · **English**
 
-![C++](https://img.shields.io/badge/C%2B%2B-00599C?style=flat-square)
+![C++](https://img.shields.io/badge/C%2B%2B-17-00599C?style=flat-square)
 ![Architecture](https://img.shields.io/badge/Architecture-Control_Plane_%2B_Edge_Agent-247B72?style=flat-square)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-4169E1?style=flat-square)
 ![Vue](https://img.shields.io/badge/Vue-3-42B883?style=flat-square)
@@ -33,14 +33,15 @@ Typical uses include laboratory instrument exports, environmental monitoring obs
 - **Raw-file archival**: retain originals and trace results back to their source.
 - **Run tracking**: view node status, collection tasks and run history in the console.
 - **Issue investigation**: inspect parsed records, QC results and linked alerts.
-- **Offline recovery**: retain pending reports and resume delivery when connectivity returns.
+- **Offline recovery**: persist registered jobs in SQLite and resume delivery after restart or reconnection.
+- **Deployment and operations**: central Compose configuration, a Linux Agent systemd template, and inspection, backup and recovery drill tools.
 
-**Status: early MVP with an authenticated single-machine demo.** FTP, Oracle, MinIO/object storage, comprehensive management pages and production operations are not yet complete. The demo uses HTTP and static credentials with loopback-only ports for local evaluation. Production deployment still needs TLS, credential operations, backup/recovery and other operational work.
+**Status: early MVP with an authenticated demo, now undergoing deployment and operations validation for small, controlled internal networks.** Backup/recovery and upgrade/rollback drills have been run; real power-loss recovery, systemd host restarts and offline installation on a new machine remain unverified. FTP, Oracle, MinIO/object storage and comprehensive management pages are not yet complete. HTTP and static credentials are used today, with the demo bound to loopback by default; configure HTTPS before connecting over untrusted networks.
 
 ## Development environment and requirements
 
 - **Development OS**: WSL2 Ubuntu 24.04.
-- **Compiler**: GCC/G++ 13 with C++.
+- **Compiler**: GCC/G++ 13 with C++17.
 - **Build tools**: CMake and Ninja.
 - **Demo environment**: Linux / WSL2 with Docker Engine and Compose; no local compilation needed.
 
@@ -140,8 +141,18 @@ Stop the demo and keep its data:
 bash scripts/demo/stop.sh
 ```
 
+## Deployment and operations
+
+The deployment baseline is Ubuntu 24.04 x86_64, with Docker Compose at the center and Linux Agents at each site:
+
+- **Center**: [Compose configuration](deploy/production/compose.yaml) and [environment template](deploy/env/production.env.example), with persistent database storage and credentials kept outside the repository.
+- **Field Agent**: [systemd service template](deploy/systemd/labbridge-agent.service) and [packaging script](scripts/ops/package-agent.sh).
+- **Maintenance**: [inspection](scripts/ops/check.sh), [center backup](scripts/ops/backup-center.sh), [Agent backup](scripts/ops/backup-agent.sh) and [isolated drills](scripts/ops/drill.sh).
+
+Backups require a coordinated maintenance window with writes stopped, preserving the center data and each Agent's queue, archive and input files in the same batch. Offline recovery covers registered jobs; new cycles after an offline restart still require a connection to the center, and source files must be retained at the site.
+
 ## Contribute
 
-Share bugs and suggestions through [Issues](https://github.com/Augustzero/LabBridge/issues). Before contributing, read the [project guidelines](AGENTS.md) and [development baseline](docs/00-preparation/labbridge-development-baseline.md).
+Share bugs and suggestions through [Issues](https://github.com/Augustzero/LabBridge/issues).
 
 **License:** the repository currently has no `LICENSE` file. Contact the maintainer to confirm authorization before use or redistribution.
