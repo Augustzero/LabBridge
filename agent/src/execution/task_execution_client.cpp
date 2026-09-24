@@ -19,8 +19,9 @@ unsigned int TaskExecutionClientError::http_status() const noexcept {
 }
 
 bool TaskExecutionClientError::is_transient() const noexcept {
+    // 统一错误包络会被归成 ServerError，但里面既有 500 也有 400/409，
+    // 所以能不能重试只看真实状态码：网络故障、408、429 和 5xx 之外都算永久失败。
     return kind_ == TaskExecutionErrorKind::Network ||
-           kind_ == TaskExecutionErrorKind::ServerError ||
            http_status_ == 408 || http_status_ == 429 ||
            (http_status_ >= 500 && http_status_ <= 599);
 }

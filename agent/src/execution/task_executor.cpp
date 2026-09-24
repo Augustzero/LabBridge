@@ -3,6 +3,7 @@
 #include "labbridge/agent/collectors/local_dir_collector.h"
 #include "labbridge/core/logging.h"
 #include "labbridge/core/utc_time.h"
+#include "labbridge/agent/execution/reliable_delivery_client.h"
 #include "labbridge/agent/parsers/csv_parser.h"
 #include "labbridge/agent/qc/basic_qc_rules.h"
 
@@ -173,7 +174,23 @@ RecoveredJob TaskExecutor::load_job(
 
 void TaskExecutor::recover_pending_jobs() {
     for (const auto& job : queue_store_.recover_jobs()) {
-        run_reliable_job(job);
+        // 每条恢复开始前先看停止标志，停止后不再启动新的积压作业。
+        if (stop_requested_.load(std::memory_order_acquire)) {
+            return;
+        }
+        try {
+            run_reliable_job(job);
+        } catch (const DeliveryAbandoned& error) {
+            // 这条作业已被投递层标成 requires_attention，是它自己的终局；
+            // 其他积压作业还得继续恢复，所以这里只记日志接着往下走。
+            labbridge::core::log_warn(
+                kComponent,
+                "recovered job abandoned; execution_key=" + job.execution_key +
+                    "; reason=" + error.what());
+            if (stop_requested_.load(std::memory_order_acquire)) {
+                return;
+            }
+        }
     }
 }
 

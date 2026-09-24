@@ -12,6 +12,7 @@
 #include <fstream>
 #include <functional>
 #include <iostream>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -133,6 +134,13 @@ public:
         if (on_start) {
             on_start();
         }
+        if (permanently_rejected_keys.count(request.execution_key) != 0) {
+            // 模拟控制面统一错误包络里的 409：归成 ServerError 但状态码是永久失败。
+            throw labbridge::agent::TaskExecutionClientError{
+                labbridge::agent::TaskExecutionErrorKind::ServerError,
+                "idempotency conflict",
+                409};
+        }
         return {"run-" + std::to_string(++run_sequence), false};
     }
 
@@ -177,6 +185,8 @@ public:
     mutable bool fail_next_report_retryable{false};
     std::function<void()> on_start;
     bool return_wrong_manifest_count{false};
+    // 这些 execution_key 的 start 请求会被 409 永久拒绝。
+    std::set<std::string> permanently_rejected_keys;
 };
 
 labbridge::core::TaskConfig executable_task(
@@ -766,6 +776,91 @@ TEST(TaskExecutorTest, RetainsPersistentDedupAcrossRestart) {
     std::cout << "recovery stage=report_pending replayed_report=1 "
               << "rescheduled_runs=1 pending_jobs=0 "
               << "next_run_manifest_files=0" << std::endl;
+}
+
+TEST(TaskExecutorTest, PermanentFailureOfOneJobDoesNotBlockOtherRecovery) {
+    TemporaryExecutionTree tree;
+    tree.write_csv(
+        "first.csv",
+        "station_code,device_code,record_time,value\n"
+        "ST001,DV001,2026-08-08 08:00:00,41\n");
+    tree.write_csv(
+        "second.csv",
+        "station_code,device_code,record_time,value\n"
+        "ST002,DV002,2026-08-08 08:05:00,42\n");
+    FakeExecutionClient client;
+    const auto task = executable_task(tree.inbox());
+    labbridge::agent::AgentQueueStore store{
+        tree.queue_database().string(), task.node_code, 10, 100};
+    labbridge::agent::ReliableDeliveryClient delivery{
+        client, store, std::chrono::seconds{1}, std::chrono::seconds{2}};
+    QueueExecutor executor{
+        delivery, store, tree.work(), {tree.inbox()}, fixed_now()};
+
+    // 两条独立作业排进队列：第一条 start 被 409 永久拒绝，第二条正常。
+    // 恢复顺序是 created_at + execution_key：失败作业先入队，时间戳不会
+    // 晚于成功作业；万一在同一毫秒打平，就靠 key 的字典序兜底。所以把
+    // 失败作业命名为 a- 前缀，保证它无条件排第一，不需要额外等待。
+    labbridge::agent::StartTaskRunRequest rejected_request{
+        task.node_code, task.id, "execution-a-rejected",
+        "2026-09-20T08:00:00Z", "2026-09-20T08:00:01Z", "scheduled"};
+    labbridge::agent::StartTaskRunRequest healthy_request{
+        task.node_code, task.id, "execution-b-healthy",
+        "2026-09-20T08:05:00Z", "2026-09-20T08:05:01Z", "scheduled"};
+    store.begin_job(task, rejected_request);
+    store.begin_job(task, healthy_request);
+    client.permanently_rejected_keys = {rejected_request.execution_key};
+
+    // 同一轮恢复：第一条转人工，第二条照常跑完，互不影响。
+    executor.recover_pending_jobs();
+
+    // 失败作业确实先执行，后面的作业仍在同一轮被恢复。
+    ASSERT_EQ(client.starts.size(), 2U);
+    EXPECT_EQ(client.starts.front().execution_key,
+              rejected_request.execution_key);
+    for (const auto& manifest : client.manifests) {
+        for (const auto& file : manifest.files) {
+            tree.track_archive(file.storage_path);
+        }
+    }
+    ASSERT_EQ(client.reports.size(), 1U);
+    EXPECT_EQ(client.reports.front().status,
+              labbridge::core::TaskRunStatus::Succeeded);
+    // 第一条作业保留在队列里等人工处理，不再参与自动恢复。
+    EXPECT_EQ(store.pending_job_count(), 1U);
+    EXPECT_TRUE(store.recover_jobs().empty());
+    std::cout << "recovery_isolation abandoned=1 completed=1 "
+              << "pending_jobs=1 recoverable=0" << std::endl;
+}
+
+TEST(TaskExecutorTest, StopRequestPreventsRecoveryOfRemainingJobs) {
+    TemporaryExecutionTree tree;
+    tree.write_csv(
+        "first.csv",
+        "station_code,device_code,record_time,value\n"
+        "ST001,DV001,2026-08-08 08:00:00,41\n");
+    FakeExecutionClient client;
+    const auto task = executable_task(tree.inbox());
+    labbridge::agent::AgentQueueStore store{
+        tree.queue_database().string(), task.node_code, 10, 100};
+    QueueExecutor executor = make_executor(client, store, tree);
+
+    labbridge::agent::StartTaskRunRequest first{
+        task.node_code, task.id, "execution-stop-first",
+        "2026-09-20T08:00:00Z", "2026-09-20T08:00:01Z", "scheduled"};
+    labbridge::agent::StartTaskRunRequest second{
+        task.node_code, task.id, "execution-stop-second",
+        "2026-09-20T08:05:00Z", "2026-09-20T08:05:01Z", "scheduled"};
+    store.begin_job(task, first);
+    store.begin_job(task, second);
+
+    // 停止请求先到：恢复循环一条作业都不启动，两条原样留在队列里。
+    executor.request_stop();
+    executor.recover_pending_jobs();
+
+    EXPECT_TRUE(client.events.empty());
+    EXPECT_EQ(store.pending_job_count(), 2U);
+    ASSERT_EQ(store.recover_jobs().size(), 2U);
 }
 
 }  // namespace

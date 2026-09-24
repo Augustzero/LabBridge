@@ -74,7 +74,14 @@ Result ReliableDeliveryClient::deliver(
     if (attempt > 0) {
         const auto remaining = store_.delivery_retry_remaining(request_type, idempotency_key);
         std::unique_lock<std::mutex> lock{wait_mutex_};
-        wait_condition_.wait_for(lock, remaining);
+        // 重启后补齐上次没等完的退避时间；等待期间收到停止请求就立即让出，
+        // 投递原样留在队列里，下次启动再继续。
+        wait_condition_.wait_for(lock, remaining, [this] {
+            return stop_requested_.load(std::memory_order_acquire);
+        });
+        if (stop_requested_.load(std::memory_order_acquire)) {
+            throw DeliveryAbandoned{"delivery stopped and remains pending"};
+        }
         store_.resume_delivery(request_type, idempotency_key);
     }
     while (!stop_requested_.load(std::memory_order_acquire)) {

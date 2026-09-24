@@ -48,4 +48,32 @@ TEST(TaskExecutionClientTest, GeneratesStableSeparatedRequestKeys) {
             "node-a", "42", "2026-08-08T10:05:00Z"));
 }
 
+bool is_transient_with(
+    labbridge::agent::TaskExecutionErrorKind kind,
+    unsigned int http_status = 0) {
+    return labbridge::agent::TaskExecutionClientError{
+        kind, "probe", http_status}
+        .is_transient();
+}
+
+TEST(TaskExecutionClientErrorTest, ClassifiesTransientByHttpStatus) {
+    using labbridge::agent::TaskExecutionErrorKind;
+    // 网络故障没有状态码，等条件恢复后重试就有意义。
+    EXPECT_TRUE(is_transient_with(TaskExecutionErrorKind::Network));
+    EXPECT_TRUE(is_transient_with(TaskExecutionErrorKind::Network, 0));
+    // 408/429/5xx 是暂时性状态，可以退避重试。
+    EXPECT_TRUE(is_transient_with(TaskExecutionErrorKind::HttpStatus, 408));
+    EXPECT_TRUE(is_transient_with(TaskExecutionErrorKind::HttpStatus, 429));
+    EXPECT_TRUE(is_transient_with(TaskExecutionErrorKind::ServerError, 500));
+    EXPECT_TRUE(is_transient_with(TaskExecutionErrorKind::ServerError, 503));
+    EXPECT_TRUE(is_transient_with(TaskExecutionErrorKind::ServerError, 599));
+    // 统一错误包络会归成 ServerError，但 400/409/413 这类拒绝重试也一样被拒，
+    // 首次失败就要按永久错误处理。
+    EXPECT_FALSE(is_transient_with(TaskExecutionErrorKind::ServerError, 400));
+    EXPECT_FALSE(is_transient_with(TaskExecutionErrorKind::ServerError, 409));
+    EXPECT_FALSE(is_transient_with(TaskExecutionErrorKind::ServerError, 413));
+    EXPECT_FALSE(is_transient_with(TaskExecutionErrorKind::HttpStatus, 404));
+    EXPECT_FALSE(is_transient_with(TaskExecutionErrorKind::InvalidResponse, 200));
+}
+
 }  // namespace

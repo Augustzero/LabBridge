@@ -125,8 +125,101 @@ TEST(CsvObservationParserTest, ProducesValidJsonForEscapedPayloadText) {
     ASSERT_TRUE(result.status.ok) << result.status.message;
     ASSERT_EQ(result.records.size(), 1U);
     const auto payload = Json::parse(result.records.front().payload_json);
+    // """quoted""" 按 CSV 引号语义解出带字面引号的 "quoted"。
     EXPECT_EQ(payload.at("note"), "\"quoted\"");
     EXPECT_EQ(payload.at("path"), "C:\\temp");
+}
+
+TEST(CsvObservationParserTest, AcceptsBomAndCrlfLineEndings) {
+    TemporaryCsvFile file{
+        "\xEF\xBB\xBFstation_code,device_code,record_time,value\r\n"
+        "ST001,DV001,2026-08-08 08:00:00,42\r\n"
+        "\r\n"};
+
+    const auto result = parse_file(file.path().string());
+
+    ASSERT_TRUE(result.status.ok) << result.status.message;
+    ASSERT_EQ(result.records.size(), 1U);
+    EXPECT_EQ(result.records.front().payload_json,
+              R"({"value":"42"})");
+}
+
+TEST(CsvObservationParserTest, KeepsTrailingEmptyAndQuotedCommaField) {
+    TemporaryCsvFile file{
+        "station_code,device_code,record_time,value,note\n"
+        "ST001,DV001,2026-08-08 08:00:00,,\"a,b\"\n"};
+
+    const auto result = parse_file(file.path().string());
+
+    ASSERT_TRUE(result.status.ok) << result.status.message;
+    ASSERT_EQ(result.records.size(), 1U);
+    const auto payload = Json::parse(result.records.front().payload_json);
+    // 空值原样保留为空字符串，引号里的逗号不是分隔符。
+    EXPECT_EQ(payload.at("value"), "");
+    EXPECT_EQ(payload.at("note"), "a,b");
+}
+
+TEST(CsvObservationParserTest, RejectsRowsWithMismatchedFieldCount) {
+    TemporaryCsvFile file{
+        "station_code,device_code,record_time,value\n"
+        "ST001,DV001,2026-08-08 08:00:00,1,2\n"
+        "ST002,DV002,2026-08-08 08:01:00\n"
+        "ST003,DV003,2026-08-08 08:02:00,3\n"};
+
+    const auto result = parse_file(file.path().string());
+
+    ASSERT_TRUE(result.status.ok) << result.status.message;
+    ASSERT_EQ(result.errors.size(), 2U);
+    EXPECT_NE(result.errors[0].find("line 2"), std::string::npos);
+    EXPECT_NE(result.errors[1].find("line 3"), std::string::npos);
+    // 多列不截断、少列不补齐，只有列数正好对上的行才发布。
+    ASSERT_EQ(result.records.size(), 1U);
+    EXPECT_EQ(result.records.front().station_code, "ST003");
+}
+
+TEST(CsvObservationParserTest, RejectsDuplicateAndBlankHeaderColumns) {
+    TemporaryCsvFile duplicated{
+        "station_code,device_code,record_time,value,value\n"};
+    EXPECT_FALSE(parse_file(duplicated.path().string()).status.ok);
+
+    TemporaryCsvFile blank{"station_code,device_code,record_time,\n"};
+    EXPECT_FALSE(parse_file(blank.path().string()).status.ok);
+}
+
+TEST(CsvObservationParserTest, UnclosedQuoteFailsWholeFile) {
+    TemporaryCsvFile file{
+        "station_code,device_code,record_time,value\n"
+        "ST001,DV001,2026-08-08 08:00:00,42\n"
+        "ST002,DV002,2026-08-08 08:01:00,\"open\n"
+        "ST003,DV003,2026-08-08 08:02:00,44\n"};
+
+    const auto result = parse_file(file.path().string());
+
+    // 引号没闭上意味着字段可能跨行，后面的行没法再按记录切分，
+    // 整个文件按失败处理，而不是把第 4 行误当新记录。
+    EXPECT_FALSE(result.status.ok);
+    EXPECT_NE(result.status.message.find("line 3"), std::string::npos);
+    EXPECT_NE(
+        result.status.message.find("unclosed quote"), std::string::npos);
+}
+
+TEST(CsvObservationParserTest, ReportsQuotedFieldSyntaxErrorsAndContinues) {
+    TemporaryCsvFile file{
+        "station_code,device_code,record_time,value\n"
+        "ST001,DV001,2026-08-08 08:00:00,bad\"quote\n"
+        "ST002,DV002,2026-08-08 08:01:00,\"closed\"extra\n"
+        "ST003,DV003,2026-08-08 08:02:00,46\n"};
+
+    const auto result = parse_file(file.path().string());
+
+    ASSERT_TRUE(result.status.ok) << result.status.message;
+    ASSERT_EQ(result.errors.size(), 2U);
+    EXPECT_NE(result.errors[0].find("line 2"), std::string::npos);
+    EXPECT_NE(result.errors[0].find("unquoted"), std::string::npos);
+    EXPECT_NE(result.errors[1].find("line 3"), std::string::npos);
+    EXPECT_NE(result.errors[1].find("closing quote"), std::string::npos);
+    ASSERT_EQ(result.records.size(), 1U);
+    EXPECT_EQ(result.records.front().station_code, "ST003");
 }
 
 }  // namespace
