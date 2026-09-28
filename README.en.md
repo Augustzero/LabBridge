@@ -155,4 +155,4 @@ Backups require a coordinated maintenance window with writes stopped, preserving
 
 Share bugs and suggestions through [Issues](https://github.com/Augustzero/LabBridge/issues).
 
-**License:** the repository currently has no `LICENSE` file. Contact the maintainer to confirm authorization before use or redistribution.
+**License:** This project is licensed under the [MIT License](LICENSE).

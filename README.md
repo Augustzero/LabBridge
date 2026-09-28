@@ -116,4 +116,4 @@ bash scripts/demo/stop.sh
 
 欢迎通过 [Issues](https://github.com/Augustzero/LabBridge/issues) 反馈问题和建议。
 
-**许可证：** 当前仓库未附 `LICENSE` 文件；使用或再分发前请联系维护者确认授权。
+**许可证：** 本项目采用 [MIT License](LICENSE) 开源。
