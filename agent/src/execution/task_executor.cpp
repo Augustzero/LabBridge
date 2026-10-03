@@ -148,14 +148,17 @@ TaskExecutor::TaskExecutor(
     IReliableExecutionStore& queue_store,
     labbridge::core::fs::path work_dir,
     std::vector<labbridge::core::fs::path> allowed_local_roots,
+    std::size_t max_files_per_run,
     NowFunction now)
     : client_(client),
       queue_store_(queue_store),
       archive_store_(std::move(work_dir)),
+      max_files_per_run_(max_files_per_run),
       now_(std::move(now)) {
-    if (!now_ || allowed_local_roots.empty()) {
+    if (!now_ || allowed_local_roots.empty() || max_files_per_run_ == 0) {
         throw std::invalid_argument(
-            "executor requires a clock and at least one allowed local root");
+            "executor requires a clock, at least one allowed local root "
+            "and a positive file limit per run");
     }
     allowed_local_roots_.reserve(allowed_local_roots.size());
     for (auto& root : allowed_local_roots) {
@@ -209,9 +212,16 @@ RecoveredJob TaskExecutor::run_collecting_stage(
         std::vector<PendingFilePlan> plan;
         int ordinal = 0;
         for (const auto& item : collected.items) {
+            // 单轮最多带走 max_files_per_run 个文件，剩下的留给后续槽位；
+            // 文件数限制不保证整批请求一定在限额内，超限由投递入口兜底。
+            if (plan.size() >= max_files_per_run_) {
+                break;
+            }
             auto metadata = archive_store_.inspect(item);
             const auto fingerprint = job.task.id + "\n" + metadata.fingerprint;
-            if (queue_store_.is_file_processed(job.task.id, fingerprint)) {
+            // 已处理过或正被其他作业（含 requires_attention）占用的文件跳过，
+            // 避免同槽位、跨重启重复入计划。
+            if (queue_store_.is_file_occupied(job.task.id, fingerprint)) {
                 continue;
             }
             const auto archive_path = archive_store_.plan_archive_path(
@@ -293,7 +303,7 @@ void TaskExecutor::run_reliable_job(RecoveredJob job) {
         } catch (const ArchiveConflictError& error) {
             // 归档证据与持久化指纹不一致：自动重试可能覆盖现场证据，转人工处理。
             queue_store_.mark_requires_attention(
-                job.execution_key, error.what());
+                job.execution_key, "archive_conflict", error.what());
             labbridge::core::log_warn(
                 kComponent,
                 "job requires attention; execution_key=" + job.execution_key +

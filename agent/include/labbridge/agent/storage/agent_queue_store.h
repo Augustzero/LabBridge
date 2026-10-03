@@ -39,6 +39,7 @@ public:
                      const std::vector<bool>& parsed_without_errors) override;
     void complete_job(const std::string& execution_key) override;
     void mark_requires_attention(const std::string& execution_key,
+                                 const std::string& error_kind,
                                  const std::string& reason) override;
     void record_delivery_failure(
         const std::string& request_type, const std::string& idempotency_key,
@@ -50,9 +51,12 @@ public:
         const std::string& request_type, const std::string& idempotency_key) const;
     int delivery_attempt_count(const std::string& request_type,
                                const std::string& idempotency_key) const;
+    // 按投递身份（请求类型 + 幂等键）反查所属作业，供投递层转人工时定位作业。
+    std::string delivery_execution_key(const std::string& request_type,
+                                       const std::string& idempotency_key) const;
     bool has_capacity() const override;
-    bool is_file_processed(const std::string& task_id,
-                           const std::string& fingerprint) const override;
+    bool is_file_occupied(const std::string& task_id,
+                          const std::string& fingerprint) const override;
     std::size_t pending_job_count() const;
 
 private:

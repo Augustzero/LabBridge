@@ -67,12 +67,17 @@ public:
         const TaskRunReportRequest& request,
         const std::vector<bool>& parsed_without_errors) = 0;
     virtual void complete_job(const std::string& execution_key) = 0;
-    // 归档冲突等不可自动重试的作业级故障：作业停留 requires_attention 等待人工处理。
+    // 归档冲突、请求体超限等不可自动重试的作业级故障：作业停留
+    // requires_attention 等待人工处理。error_kind 记录错误种类
+    // （如 archive_conflict、payload_too_large），恢复阶段由存储自行保存。
     virtual void mark_requires_attention(const std::string& execution_key,
+                                         const std::string& error_kind,
                                          const std::string& reason) = 0;
     virtual bool has_capacity() const = 0;
-    virtual bool is_file_processed(const std::string& task_id,
-                                   const std::string& fingerprint) const = 0;
+    // 文件是否已被处理过或正被某个排队作业（含 requires_attention）占用，
+    // 用于新计划去重；按 task_id 隔离，不同任务互不影响。
+    virtual bool is_file_occupied(const std::string& task_id,
+                                  const std::string& fingerprint) const = 0;
 };
 
 }  // namespace labbridge::agent

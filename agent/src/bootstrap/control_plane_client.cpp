@@ -745,10 +745,9 @@ PulledAgentConfig ControlPlaneClient::fetch_config(
 
 StartTaskRunResult ControlPlaneClient::start_task_run(
     const StartTaskRunRequest& request_value) const {
-    Json body = encode_start_task_run_request_json(request_value);
-    body.erase("codec_version");
     const auto response = request(
-        "POST", "/api/v1/task-runs/start", body.dump());
+        "POST", "/api/v1/task-runs/start",
+        encode_start_task_run_http_body(request_value));
     const auto data = success_data(response.status, response.body);
     return {
         required_string(data, "task_run_id", response.status),
@@ -758,10 +757,9 @@ StartTaskRunResult ControlPlaneClient::start_task_run(
 
 RawFileManifestResult ControlPlaneClient::report_raw_file_manifest(
     const RawFileManifestRequest& request_value) const {
-    Json body = encode_raw_file_manifest_request_json(request_value);
-    body.erase("codec_version");
     const auto response = request(
-        "POST", "/api/v1/raw-files/manifest", body.dump());
+        "POST", "/api/v1/raw-files/manifest",
+        encode_raw_file_manifest_http_body(request_value));
     const auto data = success_data(response.status, response.body);
     return {
         required_string_array(data, "raw_file_ids", response.status),
@@ -771,10 +769,9 @@ RawFileManifestResult ControlPlaneClient::report_raw_file_manifest(
 
 TaskRunReportResult ControlPlaneClient::report_task_run(
     const TaskRunReportRequest& request_value) const {
-    Json body = encode_task_run_report_request_json(request_value);
-    body.erase("codec_version");
     const auto response = request(
-        "POST", "/api/v1/task-runs/report", body.dump());
+        "POST", "/api/v1/task-runs/report",
+        encode_task_run_report_http_body(request_value));
     const auto data = success_data(response.status, response.body);
     return {
         required_string_array(data, "parsed_record_ids", response.status),

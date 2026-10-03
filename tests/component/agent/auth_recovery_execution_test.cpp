@@ -1,3 +1,4 @@
+#include "labbridge/agent/bootstrap/agent_config.h"
 #include "labbridge/agent/bootstrap/control_plane_client.h"
 #include "labbridge/agent/execution/execution_request_codec.h"
 #include "labbridge/agent/execution/reliable_delivery_client.h"
@@ -99,9 +100,10 @@ public:
         : client_{base_url, std::chrono::milliseconds{2000}, kNodeCode, token},
           store_{tree.queue_database().string(), kNodeCode, 10, 10},
           delivery_{client_, store_, std::chrono::seconds{1},
-                    std::chrono::seconds{2}},
+                    std::chrono::seconds{2},
+                    labbridge::agent::kDefaultMaxRequestBodyBytes},
           executor_{delivery_, store_, tree.work(), {tree.inbox()},
-                    fixed_now} {}
+                    labbridge::agent::kDefaultMaxFilesPerRun, fixed_now} {}
 
     labbridge::agent::TaskExecutor& executor() { return executor_; }
     labbridge::agent::AgentQueueStore& store() { return store_; }

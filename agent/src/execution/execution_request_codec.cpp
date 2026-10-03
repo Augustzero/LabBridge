@@ -408,4 +408,25 @@ TaskRunReportRequest decode_task_run_report_request(const std::string& json) {
     return request;
 }
 
+std::string encode_start_task_run_http_body(
+    const StartTaskRunRequest& request) {
+    auto body = encode_start_task_run_request_json(request);
+    body.erase("codec_version");
+    return body.dump();
+}
+
+std::string encode_raw_file_manifest_http_body(
+    const RawFileManifestRequest& request) {
+    auto body = encode_raw_file_manifest_request_json(request);
+    body.erase("codec_version");
+    return body.dump();
+}
+
+std::string encode_task_run_report_http_body(
+    const TaskRunReportRequest& request) {
+    auto body = encode_task_run_report_request_json(request);
+    body.erase("codec_version");
+    return body.dump();
+}
+
 }  // namespace labbridge::agent

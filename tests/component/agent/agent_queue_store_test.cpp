@@ -196,7 +196,7 @@ TEST(AgentQueueStoreTest, PersistsStageTransitionsAndCompletesAtomically) {
     EXPECT_EQ(job.report_request.idempotency_key, "report-key");
     store.complete_job("execution-1");
     EXPECT_EQ(store.pending_job_count(), 0U);
-    EXPECT_TRUE(store.is_file_processed("42", "fingerprint"));
+    EXPECT_TRUE(store.is_file_occupied("42", "fingerprint"));
     std::cout << "queue_flow=start_pending->collecting->manifest_pending"
               << "->report_building->report_pending->completed "
               << "raw_file_id=raw-1 processed_fingerprint=1" << std::endl;

@@ -23,6 +23,8 @@ constexpr int kMaximumRequestTimeoutSeconds = 300;
 constexpr int kMaximumIntervalSeconds = 86400;
 constexpr int kMaximumPendingJobs = 1000000;
 constexpr int kMaximumFingerprintCapacity = 1000000;
+constexpr int kMaximumFilesPerRun = 1000000;
+constexpr int kMaximumRequestBodyBytes = 1073741824;
 
 bool is_blank(const std::string& value) {
     for (const unsigned char ch : value) {
@@ -52,15 +54,13 @@ std::string required_string(const YAML::Node& object,
     }
 }
 
-int required_positive_integer(const YAML::Node& object,
-                              const std::string& field,
-                              const std::string& path,
-                              int maximum) {
-    const auto value = object[field];
-    if (!value || !value.IsScalar()) {
+int parse_positive_integer(const YAML::Node& value,
+                           const std::string& field,
+                           const std::string& path,
+                           int maximum) {
+    if (!value.IsScalar()) {
         throw AgentConfigError(path + "." + field + " must be an integer");
     }
-
     try {
         const auto result = value.as<int>();
         if (result <= 0 || result > maximum) {
@@ -74,6 +74,30 @@ int required_positive_integer(const YAML::Node& object,
     } catch (const YAML::Exception&) {
         throw AgentConfigError(path + "." + field + " must be an integer");
     }
+}
+
+int required_positive_integer(const YAML::Node& object,
+                              const std::string& field,
+                              const std::string& path,
+                              int maximum) {
+    const auto value = object[field];
+    if (!value) {
+        throw AgentConfigError(path + "." + field + " must be an integer");
+    }
+    return parse_positive_integer(value, field, path, maximum);
+}
+
+// 可选数值项：没填就用默认值，填了就必须是合法正整数。
+int optional_positive_integer(const YAML::Node& object,
+                              const std::string& field,
+                              const std::string& path,
+                              int maximum,
+                              int default_value) {
+    const auto value = object[field];
+    if (!value) {
+        return default_value;
+    }
+    return parse_positive_integer(value, field, path, maximum);
 }
 
 labbridge::core::fs::path normalized_absolute_path(
@@ -179,6 +203,10 @@ AgentStartupConfig parse_agent_config_node(
         kMaximumIntervalSeconds);
     config.config_poll_interval =
         std::chrono::seconds{config_poll_interval_seconds};
+    config.max_files_per_run = static_cast<std::size_t>(
+        optional_positive_integer(tasks, "max_files_per_run", "tasks",
+                                  kMaximumFilesPerRun,
+                                  static_cast<int>(kDefaultMaxFilesPerRun)));
 
     const auto storage = root["storage"];
     if (!storage || !storage.IsMap()) {
@@ -225,6 +253,10 @@ AgentStartupConfig parse_agent_config_node(
     }
     config.retry_initial = std::chrono::seconds{retry_initial_seconds};
     config.retry_max = std::chrono::seconds{retry_max_seconds};
+    config.max_request_body_bytes = static_cast<std::size_t>(
+        optional_positive_integer(delivery, "max_request_body_bytes",
+                                  "delivery", kMaximumRequestBodyBytes,
+                                  static_cast<int>(kDefaultMaxRequestBodyBytes)));
     return config;
 }
 

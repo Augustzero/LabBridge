@@ -21,7 +21,8 @@ public:
     ReliableDeliveryClient(ITaskExecutionClient& client,
                            AgentQueueStore& store,
                            std::chrono::seconds retry_initial,
-                           std::chrono::seconds retry_max);
+                           std::chrono::seconds retry_max,
+                           std::size_t max_request_body_bytes);
 
     StartTaskRunResult start_task_run(
         const StartTaskRunRequest& request) const override;
@@ -35,7 +36,13 @@ private:
     template <typename Result, typename Call>
     Result deliver(const std::string& request_type,
                    const std::string& idempotency_key,
+                   const std::string& http_body,
                    Call&& call) const;
+    // 请求体超过限额：作业转 requires_attention 并终止本次投递，不发送请求。
+    [[noreturn]] void abandon_oversized_body(
+        const std::string& request_type,
+        const std::string& idempotency_key,
+        std::size_t body_bytes) const;
     std::chrono::milliseconds retry_delay(
         const std::string& key, int attempt) const;
 
@@ -43,6 +50,7 @@ private:
     AgentQueueStore& store_;
     std::chrono::seconds retry_initial_;
     std::chrono::seconds retry_max_;
+    std::size_t max_request_body_bytes_;
     mutable std::mutex wait_mutex_;
     mutable std::condition_variable wait_condition_;
     std::atomic<bool> stop_requested_{false};

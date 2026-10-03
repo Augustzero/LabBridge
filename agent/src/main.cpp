@@ -58,10 +58,11 @@ int main(int argc, char* argv[]) {
             allowed_local_roots.emplace_back(root);
         }
         labbridge::agent::ReliableDeliveryClient delivery_client{
-            control_client, queue_store, config.retry_initial, config.retry_max};
+            control_client, queue_store, config.retry_initial,
+            config.retry_max, config.max_request_body_bytes};
         labbridge::agent::TaskExecutor executor{
             delivery_client, queue_store, config.work_dir,
-            std::move(allowed_local_roots),
+            std::move(allowed_local_roots), config.max_files_per_run,
             [] { return std::chrono::system_clock::now(); }};
         labbridge::agent::SystemSchedulerTimeSource scheduler_time;
         labbridge::agent::TaskScheduler scheduler{executor, scheduler_time};

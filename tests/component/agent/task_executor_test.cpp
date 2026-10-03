@@ -1,5 +1,6 @@
 #include "labbridge/agent/execution/task_executor.h"
 #include "labbridge/agent/execution/reliable_delivery_client.h"
+#include "labbridge/agent/bootstrap/agent_config.h"
 #include "labbridge/agent/storage/agent_queue_store.h"
 #include "labbridge/core/utc_time.h"
 
@@ -222,6 +223,16 @@ labbridge::agent::ScheduledTaskExecution scheduled(
     };
 }
 
+// 后续调度槽位：scheduled_for 不同才会生成新的 execution_key。
+labbridge::agent::ScheduledTaskExecution scheduled_after(
+    labbridge::core::TaskConfig task,
+    std::chrono::seconds offset) {
+    return {
+        std::move(task),
+        std::chrono::system_clock::time_point{} + 1786176000s + offset,
+    };
+}
+
 auto fixed_now() {
     return [] {
         return std::chrono::system_clock::time_point{} + 1786176001s;
@@ -234,7 +245,8 @@ QueueExecutor make_executor(FakeExecutionClient& client,
                             labbridge::agent::AgentQueueStore& store,
                             const TemporaryExecutionTree& tree) {
     return QueueExecutor{
-        client, store, tree.work(), {tree.inbox()}, fixed_now()};
+        client, store, tree.work(), {tree.inbox()},
+        labbridge::agent::kDefaultMaxFilesPerRun, fixed_now()};
 }
 
 TEST(TaskExecutorTest, StopBeforeStartDoesNotCreateTaskRun) {
@@ -265,9 +277,11 @@ TEST(TaskExecutorTest,
         labbridge::agent::AgentQueueStore store{
             tree.queue_database().string(), task.node_code, 10, 100};
         labbridge::agent::ReliableDeliveryClient delivery{
-            client, store, std::chrono::seconds{1}, std::chrono::seconds{2}};
+            client, store, std::chrono::seconds{1}, std::chrono::seconds{2},
+            labbridge::agent::kDefaultMaxRequestBodyBytes};
         QueueExecutor executor{
-            delivery, store, tree.work(), {tree.inbox()}, fixed_now()};
+            delivery, store, tree.work(), {tree.inbox()},
+            labbridge::agent::kDefaultMaxFilesPerRun, fixed_now()};
         client.on_start = [&executor] { executor.request_stop(); };
 
         // 停止发生在 start 之后：作业推进到 manifest_pending 即挂起，
@@ -643,9 +657,11 @@ TEST(TaskExecutorTest, RestoresJobAlreadyRecoveredFromRetryWait) {
         labbridge::agent::AgentQueueStore store{
             tree.queue_database().string(), task.node_code, 10, 10};
         labbridge::agent::ReliableDeliveryClient delivery{
-            client, store, std::chrono::seconds{1}, std::chrono::seconds{2}};
+            client, store, std::chrono::seconds{1}, std::chrono::seconds{2},
+            labbridge::agent::kDefaultMaxRequestBodyBytes};
         QueueExecutor executor{
-            delivery, store, tree.work(), {tree.inbox()}, fixed_now()};
+            delivery, store, tree.work(), {tree.inbox()},
+            labbridge::agent::kDefaultMaxFilesPerRun, fixed_now()};
 
         // 报告首次投掷可重试失败 -> retry_wait；等待到期 resume 已把阶段恢复为
         // report_pending 后，第二次调用抛普通异常，模拟进程在重投完成前被杀。
@@ -765,7 +781,7 @@ TEST(TaskExecutorTest, RetainsPersistentDedupAcrossRestart) {
         executor.recover_pending_jobs();
         EXPECT_EQ(store.pending_job_count(), 0U);
         EXPECT_TRUE(
-            store.is_file_processed(task.id, persisted_fingerprint));
+            store.is_file_occupied(task.id, persisted_fingerprint));
         EXPECT_EQ(client.reports.back().idempotency_key,
                   frozen_report.idempotency_key);
         // 任务重新调度后指纹去重仍生效，不重复发布历史文件。
@@ -793,9 +809,11 @@ TEST(TaskExecutorTest, PermanentFailureOfOneJobDoesNotBlockOtherRecovery) {
     labbridge::agent::AgentQueueStore store{
         tree.queue_database().string(), task.node_code, 10, 100};
     labbridge::agent::ReliableDeliveryClient delivery{
-        client, store, std::chrono::seconds{1}, std::chrono::seconds{2}};
+        client, store, std::chrono::seconds{1}, std::chrono::seconds{2},
+        labbridge::agent::kDefaultMaxRequestBodyBytes};
     QueueExecutor executor{
-        delivery, store, tree.work(), {tree.inbox()}, fixed_now()};
+        delivery, store, tree.work(), {tree.inbox()},
+        labbridge::agent::kDefaultMaxFilesPerRun, fixed_now()};
 
     // 两条独立作业排进队列：第一条 start 被 409 永久拒绝，第二条正常。
     // 恢复顺序是 created_at + execution_key：失败作业先入队，时间戳不会
@@ -831,6 +849,109 @@ TEST(TaskExecutorTest, PermanentFailureOfOneJobDoesNotBlockOtherRecovery) {
     EXPECT_TRUE(store.recover_jobs().empty());
     std::cout << "recovery_isolation abandoned=1 completed=1 "
               << "pending_jobs=1 recoverable=0" << std::endl;
+}
+
+TEST(TaskExecutorTest, AttentionJobKeepsFileOccupiedAcrossSlotsAndRestarts) {
+    TemporaryExecutionTree tree;
+    tree.write_csv(
+        "occupied-by-attention.csv",
+        "station_code,device_code,record_time,value\n"
+        "ST001,DV001,2026-08-08 08:00:00,42\n");
+    FakeExecutionClient client;
+    const auto task = executable_task(tree.inbox());
+
+    // 限额卡在 start 与 manifest 的请求体之间：作业推进到 manifest 阶段
+    // 才因超限转人工，文件计划已持久化，指纹被 attention 作业占住。
+    {
+        labbridge::agent::AgentQueueStore store{
+            tree.queue_database().string(), task.node_code, 10, 100};
+        labbridge::agent::ReliableDeliveryClient delivery{
+            client, store, std::chrono::seconds{1}, std::chrono::seconds{2},
+            300};
+        QueueExecutor executor{
+            delivery, store, tree.work(), {tree.inbox()},
+            labbridge::agent::kDefaultMaxFilesPerRun, fixed_now()};
+
+        EXPECT_THROW(executor.execute(scheduled(task)),
+                     labbridge::agent::DeliveryAbandoned);
+        EXPECT_EQ(client.events, (std::vector<std::string>{"start"}));
+        EXPECT_TRUE(client.manifests.empty());
+        EXPECT_EQ(store.pending_job_count(), 1U);
+        // attention 作业不参与自动恢复。
+        EXPECT_TRUE(store.recover_jobs().empty());
+    }
+
+    // 后续槽位（换个进程范围模拟运行中调度）：文件被占用，不再入计划。
+    {
+        labbridge::agent::AgentQueueStore store{
+            tree.queue_database().string(), task.node_code, 10, 100};
+        auto executor = make_executor(client, store, tree);
+        executor.execute(scheduled_after(task, 60s));
+
+        EXPECT_TRUE(client.manifests.empty());
+        ASSERT_EQ(client.reports.size(), 1U);
+        EXPECT_EQ(client.reports.back().items_total, 0);
+        // 新 run 正常完成，队列里只剩 attention 作业。
+        EXPECT_EQ(store.pending_job_count(), 1U);
+    }
+
+    // 再跨一次重启，占用依旧成立。
+    {
+        labbridge::agent::AgentQueueStore store{
+            tree.queue_database().string(), task.node_code, 10, 100};
+        auto executor = make_executor(client, store, tree);
+        executor.execute(scheduled_after(task, 120s));
+
+        EXPECT_TRUE(client.manifests.empty());
+        ASSERT_EQ(client.reports.size(), 2U);
+        EXPECT_EQ(client.reports.back().items_total, 0);
+        EXPECT_EQ(store.pending_job_count(), 1U);
+    }
+    std::cout << "attention_occupancy slots=3 restarts=2 manifests=0 "
+                 "pending_attention=1" << std::endl;
+}
+
+TEST(TaskExecutorTest, AdvancesToLaterFilesAfterOperatorRemovesBadOnes) {
+    TemporaryExecutionTree tree;
+    tree.write_csv(
+        "a-bad-header.csv",
+        "site,instrument,time,value\n"
+        "ST001,DV001,2026-08-08 08:00:00,42\n");
+    tree.write_csv(
+        "b-good.csv",
+        "station_code,device_code,record_time,value\n"
+        "ST002,DV002,2026-08-08 08:05:00,43\n");
+    FakeExecutionClient client;
+    const auto task = executable_task(tree.inbox());
+    labbridge::agent::AgentQueueStore store{
+        tree.queue_database().string(), task.node_code, 10, 100};
+    // 单轮只带 1 个文件：坏文件排在路径序第一位，占据第一个槽位。
+    QueueExecutor executor{
+        client, store, tree.work(), {tree.inbox()}, 1, fixed_now()};
+
+    executor.execute(scheduled(task));
+    tree.track_archive(client.manifests.front().files.front().storage_path);
+    ASSERT_EQ(client.manifests.size(), 1U);
+    ASSERT_EQ(client.manifests.front().files.size(), 1U);
+    EXPECT_EQ(client.manifests.front().files.front().original_name,
+              "a-bad-header.csv");
+    ASSERT_EQ(client.reports.size(), 1U);
+    // 解析失败的文件不写 processed_files：失败报告已被中心接收（job 完成）。
+    EXPECT_EQ(client.reports.front().status,
+              labbridge::core::TaskRunStatus::Failed);
+
+    // 运维处置：确认失败报告已入库后把坏文件移出采集目录，好文件才能推进。
+    std::filesystem::remove(tree.inbox() / "a-bad-header.csv");
+
+    executor.execute(scheduled_after(task, 60s));
+    tree.track_archive(client.manifests.back().files.front().storage_path);
+    ASSERT_EQ(client.manifests.size(), 2U);
+    EXPECT_EQ(client.manifests.back().files.front().original_name, "b-good.csv");
+    EXPECT_EQ(client.reports.back().status,
+              labbridge::core::TaskRunStatus::Succeeded);
+    EXPECT_EQ(store.pending_job_count(), 0U);
+    std::cout << "starvation_recovery bad_slots=1 disposal=remove "
+                 "next_slot_status=succeeded" << std::endl;
 }
 
 TEST(TaskExecutorTest, StopRequestPreventsRecoveryOfRemainingJobs) {

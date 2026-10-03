@@ -887,24 +887,62 @@ void AgentQueueStore::complete_job(const std::string& execution_key) {
 
 void AgentQueueStore::mark_requires_attention(
     const std::string& execution_key,
+    const std::string& error_kind,
     const std::string& reason) {
     std::lock_guard<std::mutex> lock{impl_->mutex};
     Transaction transaction{impl_->database, "mark requires attention"};
+
+    // 先读当前阶段再决定人工恢复后回到哪：retry_wait 沿用已保存的
+    // retry_stage，正常执行阶段把它记进 retry_stage，同一事务内落库。
+    auto reader = prepare(
+        impl_->database,
+        "SELECT stage, COALESCE(retry_stage, '') FROM pending_jobs "
+        "WHERE execution_key = ?",
+        "read attention stage");
+    bind_text(impl_->database, reader.get(), 1, execution_key,
+              "read attention stage");
+    if (sqlite3_step(reader.get()) != SQLITE_ROW) {
+        throw AgentQueueError(
+            "mark requires attention requires a pending job");
+    }
+    const auto stage = read_text(reader.get(), 0);
+    auto resume_stage = read_text(reader.get(), 1);
+    if (stage == "retry_wait") {
+        // retry_wait 保存的 retry_stage 必须指向可执行阶段，
+        // 缺失或不可执行说明内部状态已经坏了，直接报错不猜。
+        if (resume_stage.empty() || resume_stage == "retry_wait" ||
+            resume_stage == "requires_attention") {
+            throw AgentQueueError(
+                "retry_wait job has no executable retry_stage: " +
+                execution_key);
+        }
+    } else if (stage != "requires_attention") {
+        resume_stage = stage;
+    } else {
+        // attention 作业不会再被加载执行，走到这里说明状态流转出了问题。
+        throw AgentQueueError(
+            "job is already requires_attention: " + execution_key);
+    }
+
     auto statement = prepare(
         impl_->database,
         "UPDATE pending_jobs SET stage = 'requires_attention', "
-        "last_error_kind = 'archive_conflict', last_error = ?, "
+        "retry_stage = ?, last_error_kind = ?, last_error = ?, "
         "updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') "
         "WHERE execution_key = ?",
         "mark requires attention");
+    bind_text(impl_->database, statement.get(), 1, resume_stage,
+              "mark requires attention");
+    bind_text(impl_->database, statement.get(), 2, error_kind,
+              "mark requires attention");
     bind_text(impl_->database,
               statement.get(),
-              1,
+              3,
               reason.substr(0, 512),
               "mark requires attention");
     bind_text(impl_->database,
               statement.get(),
-              2,
+              4,
               execution_key,
               "mark requires attention");
     check_result(sqlite3_step(statement.get()), impl_->database,
@@ -1081,23 +1119,52 @@ int AgentQueueStore::delivery_attempt_count(
     return sqlite3_column_int(statement.get(), 0);
 }
 
+std::string AgentQueueStore::delivery_execution_key(
+    const std::string& request_type,
+    const std::string& idempotency_key) const {
+    std::lock_guard<std::mutex> lock{impl_->mutex};
+    auto statement = prepare(
+        impl_->database,
+        "SELECT execution_key FROM pending_deliveries "
+        "WHERE request_type = ? AND idempotency_key = ?",
+        "find delivery job");
+    bind_text(impl_->database, statement.get(), 1, request_type,
+              "find delivery job");
+    bind_text(impl_->database, statement.get(), 2, idempotency_key,
+              "find delivery job");
+    if (sqlite3_step(statement.get()) != SQLITE_ROW) {
+        throw AgentQueueError("delivery does not exist");
+    }
+    return read_text(statement.get(), 0);
+}
+
 bool AgentQueueStore::has_capacity() const {
     std::lock_guard<std::mutex> lock{impl_->mutex};
     return read_pending_job_count(impl_->database) < impl_->max_pending_jobs;
 }
 
-bool AgentQueueStore::is_file_processed(
+bool AgentQueueStore::is_file_occupied(
     const std::string& task_id,
     const std::string& fingerprint) const {
     std::lock_guard<std::mutex> lock{impl_->mutex};
+    // 两处都算占用：已经处理完写进 processed_files 的，
+    // 以及还挂在任意排队作业（含 requires_attention）计划里的。
     auto statement = prepare(
         impl_->database,
-        "SELECT 1 FROM processed_files WHERE task_id = ? AND fingerprint = ?",
-        "find processed fingerprint");
+        "SELECT 1 WHERE EXISTS "
+        "(SELECT 1 FROM processed_files WHERE task_id = ? AND fingerprint = ?) "
+        "OR EXISTS (SELECT 1 FROM pending_files files "
+        "JOIN pending_jobs jobs ON jobs.execution_key = files.execution_key "
+        "WHERE jobs.task_id = ? AND files.fingerprint = ?)",
+        "find occupied fingerprint");
     bind_text(impl_->database, statement.get(), 1, task_id,
-              "find processed fingerprint");
+              "find occupied fingerprint");
     bind_text(impl_->database, statement.get(), 2, fingerprint,
-              "find processed fingerprint");
+              "find occupied fingerprint");
+    bind_text(impl_->database, statement.get(), 3, task_id,
+              "find occupied fingerprint");
+    bind_text(impl_->database, statement.get(), 4, fingerprint,
+              "find occupied fingerprint");
     return sqlite3_step(statement.get()) == SQLITE_ROW;
 }
 

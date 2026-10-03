@@ -114,6 +114,125 @@ tasks:
     EXPECT_EQ(config.allowed_local_roots.front(), "/srv/labbridge/inbox");
 }
 
+TEST_F(AgentConfigTest, AppliesCapacityDefaultsWhenOptionsAbsent) {
+    const auto config = labbridge::agent::parse_agent_config(R"(
+agent:
+  node_code: phase30-node
+  name: phase30 agent
+  server_url: http://127.0.0.1:18080
+  request_timeout_seconds: 7
+  heartbeat_interval_seconds: 15
+  token_file: )" + token_file_.string() + R"(
+
+storage:
+  queue_db: ./data/agent_queue.db
+  work_dir: ./data/work
+  max_pending_jobs: 1000
+  processed_fingerprint_capacity_per_task: 10000
+
+delivery:
+  retry_initial_seconds: 2
+  retry_max_seconds: 300
+
+tasks:
+  poll_interval_seconds: 10
+  allowed_local_roots:
+    - /srv/labbridge/inbox
+)");
+
+    // 旧配置不填容量项时按默认值运行：单轮 10 个文件、请求体 900 KiB。
+    EXPECT_EQ(config.max_files_per_run,
+              labbridge::agent::kDefaultMaxFilesPerRun);
+    EXPECT_EQ(config.max_request_body_bytes,
+              labbridge::agent::kDefaultMaxRequestBodyBytes);
+}
+
+TEST_F(AgentConfigTest, ReadsCapacityOptionsAndRejectsInvalidValues) {
+    const auto config = labbridge::agent::parse_agent_config(R"(
+agent:
+  node_code: phase30-node
+  name: phase30 agent
+  server_url: http://127.0.0.1:18080
+  request_timeout_seconds: 7
+  heartbeat_interval_seconds: 15
+  token_file: )" + token_file_.string() + R"(
+
+storage:
+  queue_db: ./data/agent_queue.db
+  work_dir: ./data/work
+  max_pending_jobs: 1000
+  processed_fingerprint_capacity_per_task: 10000
+
+delivery:
+  retry_initial_seconds: 2
+  retry_max_seconds: 300
+  max_request_body_bytes: 2048
+
+tasks:
+  poll_interval_seconds: 10
+  max_files_per_run: 3
+  allowed_local_roots:
+    - /srv/labbridge/inbox
+)");
+
+    EXPECT_EQ(config.max_files_per_run, 3U);
+    EXPECT_EQ(config.max_request_body_bytes, 2048U);
+
+    expect_config_error(R"(
+agent:
+  node_code: phase30-node
+  name: phase30 agent
+  server_url: http://127.0.0.1:18080
+  request_timeout_seconds: 7
+  heartbeat_interval_seconds: 15
+  token_file: )" + token_file_.string() + R"(
+
+storage:
+  queue_db: ./data/agent_queue.db
+  work_dir: ./data/work
+  max_pending_jobs: 1000
+  processed_fingerprint_capacity_per_task: 10000
+
+delivery:
+  retry_initial_seconds: 2
+  retry_max_seconds: 300
+
+tasks:
+  poll_interval_seconds: 10
+  max_files_per_run: 0
+  allowed_local_roots:
+    - /srv/labbridge/inbox
+)",
+                        "tasks.max_files_per_run");
+
+    expect_config_error(R"(
+agent:
+  node_code: phase30-node
+  name: phase30 agent
+  server_url: http://127.0.0.1:18080
+  request_timeout_seconds: 7
+  heartbeat_interval_seconds: 15
+  token_file: )" + token_file_.string() + R"(
+
+storage:
+  queue_db: ./data/agent_queue.db
+  work_dir: ./data/work
+  max_pending_jobs: 1000
+  processed_fingerprint_capacity_per_task: 10000
+
+delivery:
+  retry_initial_seconds: 2
+  retry_max_seconds: 300
+  max_request_body_bytes: not-a-number
+
+tasks:
+  poll_interval_seconds: 10
+  allowed_local_roots:
+    - /srv/labbridge/inbox
+)",
+                        "delivery.max_request_body_bytes");
+}
+
 TEST_F(AgentConfigTest, AcceptsTokenFileWithoutTrailingNewline) {
     write_token_file(std::string(64, 'b'));
     const auto config = labbridge::agent::parse_agent_config(

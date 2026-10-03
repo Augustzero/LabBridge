@@ -1,5 +1,6 @@
 #include "labbridge/agent/execution/reliable_delivery_client.h"
 
+#include "labbridge/agent/execution/execution_request_codec.h"
 #include "labbridge/core/logging.h"
 
 #include <algorithm>
@@ -40,14 +41,20 @@ ReliableDeliveryClient::ReliableDeliveryClient(
     ITaskExecutionClient& client,
     AgentQueueStore& store,
     std::chrono::seconds retry_initial,
-    std::chrono::seconds retry_max)
+    std::chrono::seconds retry_max,
+    std::size_t max_request_body_bytes)
     : client_(client),
       store_(store),
       retry_initial_(retry_initial),
-      retry_max_(retry_max) {
+      retry_max_(retry_max),
+      max_request_body_bytes_(max_request_body_bytes) {
     if (retry_initial_ <= std::chrono::seconds::zero() ||
         retry_max_ < retry_initial_) {
         throw std::invalid_argument("invalid reliable delivery retry interval");
+    }
+    if (max_request_body_bytes_ == 0) {
+        throw std::invalid_argument(
+            "reliable delivery request body limit must be positive");
     }
 }
 
@@ -65,11 +72,35 @@ std::chrono::milliseconds ReliableDeliveryClient::retry_delay(
                          base_ms.count() * jitter / 1000};
 }
 
+void ReliableDeliveryClient::abandon_oversized_body(
+    const std::string& request_type,
+    const std::string& idempotency_key,
+    std::size_t body_bytes) const {
+    std::ostringstream message;
+    message << "delivery payload too large"
+            << "; request_type=" << request_type
+            << "; body_bytes=" << body_bytes
+            << "; limit_bytes=" << max_request_body_bytes_;
+    // 超限请求重试也不会变小：转人工等容量调整，已持久化的请求和证据全保留。
+    store_.mark_requires_attention(
+        store_.delivery_execution_key(request_type, idempotency_key),
+        "payload_too_large", message.str());
+    labbridge::core::log_error(kComponent, message.str());
+    throw DeliveryAbandoned{message.str()};
+}
+
 template <typename Result, typename Call>
 Result ReliableDeliveryClient::deliver(
     const std::string& request_type,
     const std::string& idempotency_key,
+    const std::string& http_body,
     Call&& call) const {
+    // 大小检查放在任何退避等待之前：retry_wait 的作业恢复时超限，
+    // 立即转人工并保留原执行阶段，不再傻等退避时间。
+    if (http_body.size() > max_request_body_bytes_) {
+        abandon_oversized_body(request_type, idempotency_key,
+                               http_body.size());
+    }
     int attempt = store_.delivery_attempt_count(request_type, idempotency_key);
     if (attempt > 0) {
         const auto remaining = store_.delivery_retry_remaining(request_type, idempotency_key);
@@ -138,24 +169,29 @@ Result ReliableDeliveryClient::deliver(
 
 StartTaskRunResult ReliableDeliveryClient::start_task_run(
     const StartTaskRunRequest& request) const {
-    return deliver<StartTaskRunResult>("start", request.execution_key, [&] {
-        return client_.start_task_run(request);
-    });
+    const auto http_body = encode_start_task_run_http_body(request);
+    return deliver<StartTaskRunResult>(
+        "start", request.execution_key, http_body, [&] {
+            return client_.start_task_run(request);
+        });
 }
 
 RawFileManifestResult ReliableDeliveryClient::report_raw_file_manifest(
     const RawFileManifestRequest& request) const {
-    return deliver<RawFileManifestResult>("manifest", request.idempotency_key,
-                                         [&] {
-        return client_.report_raw_file_manifest(request);
-    });
+    const auto http_body = encode_raw_file_manifest_http_body(request);
+    return deliver<RawFileManifestResult>(
+        "manifest", request.idempotency_key, http_body, [&] {
+            return client_.report_raw_file_manifest(request);
+        });
 }
 
 TaskRunReportResult ReliableDeliveryClient::report_task_run(
     const TaskRunReportRequest& request) const {
-    return deliver<TaskRunReportResult>("report", request.idempotency_key, [&] {
-        return client_.report_task_run(request);
-    });
+    const auto http_body = encode_task_run_report_http_body(request);
+    return deliver<TaskRunReportResult>(
+        "report", request.idempotency_key, http_body, [&] {
+            return client_.report_task_run(request);
+        });
 }
 
 void ReliableDeliveryClient::request_stop() noexcept {

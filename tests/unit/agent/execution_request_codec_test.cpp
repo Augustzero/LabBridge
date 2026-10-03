@@ -114,6 +114,35 @@ TEST(ExecutionRequestCodecTest, RoundTripsCanonicalPayloads) {
             labbridge::agent::decode_task_run_report_request(report_json)));
 }
 
+// HTTP body 编码与持久化编码同源，只少一个 codec_version 字段；
+// 大小检查和实际发送共用它，字节数必须一致。
+TEST(ExecutionRequestCodecTest, HttpBodyEncodingDropsOnlyCodecVersion) {
+    const auto strip_version = [](const std::string& persisted) {
+        auto payload = nlohmann::json::parse(persisted);
+        payload.erase("codec_version");
+        return payload.dump();
+    };
+
+    EXPECT_EQ(labbridge::agent::encode_start_task_run_http_body(start_request()),
+              strip_version(
+                  labbridge::agent::encode_start_task_run_request(
+                      start_request())));
+    EXPECT_EQ(labbridge::agent::encode_raw_file_manifest_http_body(
+                  manifest_request()),
+              strip_version(
+                  labbridge::agent::encode_raw_file_manifest_request(
+                      manifest_request())));
+    EXPECT_EQ(labbridge::agent::encode_task_run_report_http_body(
+                  report_request()),
+              strip_version(
+                  labbridge::agent::encode_task_run_report_request(
+                      report_request())));
+
+    const auto body =
+        labbridge::agent::encode_task_run_report_http_body(report_request());
+    EXPECT_EQ(nlohmann::json::parse(body).contains("codec_version"), false);
+}
+
 TEST(ExecutionRequestCodecTest,
      RejectsUnknownVersionAndInvalidTerminalStatus) {
     EXPECT_THROW(

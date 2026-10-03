@@ -626,6 +626,8 @@ delivery:
 
 tasks:
   poll_interval_seconds: 5
+  # 规模场景要一批带走 100 个文件，这里显式放开单轮文件数
+  max_files_per_run: 100
   allowed_local_roots:
     - $WORKDIR/inbox/$node
 EOF
@@ -1021,6 +1023,7 @@ delivery:
 
 tasks:
   poll_interval_seconds: 5
+  max_files_per_run: 100
   allowed_local_roots:
     - /drill/inbox
 EOF
@@ -1377,10 +1380,11 @@ cmd_scenario_scale() {
       *) die "scenario-scale 未知选项: $1" ;;
     esac
   done
-  # 单轮报告体要控制在 server 的 client_max_body_size（1M）以内：
-  # 实测 100 文件 × 30 行（约 3000 条记录 ≈ 1.15MB）会被 413 拒绝，
-  # 作业进 requires_attention，后续槽位还会重采放大存储。默认 100×8 行
-  # 约 300KB，留了三倍余量；调大批量前先按单条记录 payload 估算。
+  # 单轮报告体要在 Agent 请求体上限（默认 900KiB）以内，同时低于 server 的
+  # client_max_body_size（1M）：100 文件 × 30 行（约 3000 条记录 ≈ 1.15MB）会被
+  # Agent 本地拒绝（payload_too_large 转人工，不发请求）。030-01 起超限作业
+  # 占用文件指纹，不会再被后续槽位重采放大存储。默认 100×8 行约 300KB，
+  # 留了三倍余量；调大批量前先按单条记录 payload 估算。
   step "场景 8：代表规模实测（模拟规模：$files 个文件 × $rows 行，明确标注非真实现场）"
 
   step '生成规模数据集并一次性交付'

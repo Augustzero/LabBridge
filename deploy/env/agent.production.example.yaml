@@ -27,9 +27,14 @@ storage:
 delivery:
   retry_initial_seconds: 2
   retry_max_seconds: 300
+  # 单个上报请求体上限（字节）：manifest/report 超限时作业转 requires_attention，
+  # 不发送请求。保持不高于 Web/Server 链路里最小的请求体上限（当前默认 1 MiB）。
+  max_request_body_bytes: 921600
 
 tasks:
   poll_interval_seconds: 10
+  # 单次运行最多采集的文件数：超出部分等下一个调度槽位，控制单轮请求体规模。
+  max_files_per_run: 10
   # 允许采集的本地目录（绝对路径）。数据源配置里的路径必须落在这些根之内。
   allowed_local_roots:
     - /srv/labbridge/inbox

@@ -22,6 +22,7 @@ public:
                  IReliableExecutionStore& queue_store,
                  labbridge::core::fs::path work_dir,
                  std::vector<labbridge::core::fs::path> allowed_local_roots,
+                 std::size_t max_files_per_run,
                  NowFunction now);
 
     void recover_pending_jobs() override;
@@ -43,6 +44,7 @@ private:
     IReliableExecutionStore& queue_store_;
     LocalArchiveStore archive_store_;
     std::vector<labbridge::core::fs::path> allowed_local_roots_;
+    std::size_t max_files_per_run_;
     NowFunction now_;
     std::atomic<bool> stop_requested_{false};
 };

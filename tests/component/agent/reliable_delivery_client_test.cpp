@@ -1,3 +1,4 @@
+#include "labbridge/agent/bootstrap/agent_config.h"
 #include "labbridge/agent/bootstrap/control_plane_client.h"
 #include "labbridge/agent/execution/execution_request_codec.h"
 #include "labbridge/agent/execution/reliable_delivery_client.h"
@@ -6,6 +7,7 @@
 #include <gtest/gtest.h>
 
 #include <boost/beast/http.hpp>
+#include <sqlite3.h>
 
 #include <atomic>
 #include <chrono>
@@ -54,7 +56,8 @@ public:
     }
     labbridge::agent::RawFileManifestResult report_raw_file_manifest(
         const labbridge::agent::RawFileManifestRequest&) const override {
-        return {};
+        ++calls;
+        throw error_;
     }
     labbridge::agent::TaskRunReportResult report_task_run(
         const labbridge::agent::TaskRunReportRequest&) const override {
@@ -65,6 +68,56 @@ private:
     labbridge::agent::TaskExecutionClientError error_;
 };
 
+// 队列里铺一条推进到 manifest_pending 的作业，返回已持久化的 manifest 请求。
+labbridge::agent::RawFileManifestRequest seed_manifest_job(
+    labbridge::agent::AgentQueueStore& store) {
+    store.begin_job(task(), request());
+    store.accept_start(request().execution_key, "run-1");
+    labbridge::agent::RawFileManifestRequest manifest{
+        "run-1",
+        "node-024",
+        "manifest-key-030",
+        {{"sample.csv", std::string(64, 'a'), "/archive/sample.csv", 42,
+          "2026-08-12T00:00:00Z", "archived_local"}},
+    };
+    store.save_manifest(request().execution_key, manifest);
+    return manifest;
+}
+
+// 直连 SQLite 读作业的阶段与错误种类，验证 attention 转换在库里保存了什么。
+struct JobStageRow {
+    std::string stage;
+    std::string retry_stage;
+    std::string last_error_kind;
+};
+
+JobStageRow read_job_row(const std::filesystem::path& database,
+                         const std::string& execution_key) {
+    sqlite3* handle = nullptr;
+    EXPECT_EQ(sqlite3_open_v2(database.string().c_str(), &handle,
+                              SQLITE_OPEN_READONLY, nullptr),
+              SQLITE_OK);
+    sqlite3_stmt* statement = nullptr;
+    EXPECT_EQ(sqlite3_prepare_v2(
+                  handle,
+                  "SELECT stage, COALESCE(retry_stage, ''), "
+                  "COALESCE(last_error_kind, '') FROM pending_jobs "
+                  "WHERE execution_key = ?",
+                  -1, &statement, nullptr),
+              SQLITE_OK);
+    sqlite3_bind_text(statement, 1, execution_key.c_str(), -1,
+                      SQLITE_TRANSIENT);
+    EXPECT_EQ(sqlite3_step(statement), SQLITE_ROW);
+    JobStageRow row{
+        reinterpret_cast<const char*>(sqlite3_column_text(statement, 0)),
+        reinterpret_cast<const char*>(sqlite3_column_text(statement, 1)),
+        reinterpret_cast<const char*>(sqlite3_column_text(statement, 2)),
+    };
+    sqlite3_finalize(statement);
+    sqlite3_close_v2(handle);
+    return row;
+}
+
 TEST(ReliableDeliveryClientTest, PermanentConflictMovesJobToAttention) {
     const auto path = std::filesystem::temp_directory_path() /
                       "labbridge-phase024-03-attention.db";
@@ -73,7 +126,8 @@ TEST(ReliableDeliveryClientTest, PermanentConflictMovesJobToAttention) {
     store.begin_job(task(), request());
     FailingClient client{{labbridge::agent::TaskExecutionErrorKind::HttpStatus,
                           "idempotency conflict", 409}};
-    labbridge::agent::ReliableDeliveryClient reliable{client, store, 1s, 2s};
+    labbridge::agent::ReliableDeliveryClient reliable{
+        client, store, 1s, 2s, labbridge::agent::kDefaultMaxRequestBodyBytes};
 
     EXPECT_THROW(reliable.start_task_run(request()),
                  labbridge::agent::DeliveryAbandoned);
@@ -93,7 +147,8 @@ TEST(ReliableDeliveryClientTest, StopInterruptsRetryAndKeepsPendingJob) {
     store.begin_job(task(), request());
     FailingClient client{{labbridge::agent::TaskExecutionErrorKind::Network,
                           "server offline"}};
-    labbridge::agent::ReliableDeliveryClient reliable{client, store, 30s, 30s};
+    labbridge::agent::ReliableDeliveryClient reliable{
+        client, store, 30s, 30s, labbridge::agent::kDefaultMaxRequestBodyBytes};
     std::thread worker{[&] {
         EXPECT_THROW(reliable.start_task_run(request()),
                      labbridge::agent::DeliveryAbandoned);
@@ -130,7 +185,8 @@ TEST_P(PermanentEnvelopeDeliveryTest,
         "node-024", std::string(64, 'a')};
     labbridge::agent::AgentQueueStore store{path.string(), "node-024", 10};
     store.begin_job(task(), request());
-    labbridge::agent::ReliableDeliveryClient reliable{client, store, 1s, 2s};
+    labbridge::agent::ReliableDeliveryClient reliable{
+        client, store, 1s, 2s, labbridge::agent::kDefaultMaxRequestBodyBytes};
 
     EXPECT_THROW(reliable.start_task_run(request()),
                  labbridge::agent::DeliveryAbandoned);
@@ -163,7 +219,8 @@ TEST(ReliableDeliveryClientTest, RetryableEnvelopeStatusKeepsJobPending) {
         "node-024", std::string(64, 'a')};
     labbridge::agent::AgentQueueStore store{path.string(), "node-024", 10};
     store.begin_job(task(), request());
-    labbridge::agent::ReliableDeliveryClient reliable{client, store, 30s, 30s};
+    labbridge::agent::ReliableDeliveryClient reliable{
+        client, store, 30s, 30s, labbridge::agent::kDefaultMaxRequestBodyBytes};
     std::thread worker{[&] {
         EXPECT_THROW(reliable.start_task_run(request()),
                      labbridge::agent::DeliveryAbandoned);
@@ -196,7 +253,8 @@ TEST(ReliableDeliveryClientTest, StopInterruptsStartupRecoveryBackoff) {
         labbridge::agent::AgentQueueStore store{path.string(), "node-024", 10};
         store.begin_job(task(), request());
         labbridge::agent::ReliableDeliveryClient reliable{
-            client, store, 30s, 30s};
+            client, store, 30s, 30s,
+            labbridge::agent::kDefaultMaxRequestBodyBytes};
         std::thread worker{[&] {
             EXPECT_THROW(reliable.start_task_run(request()),
                          labbridge::agent::DeliveryAbandoned);
@@ -214,7 +272,8 @@ TEST(ReliableDeliveryClientTest, StopInterruptsStartupRecoveryBackoff) {
     {
         labbridge::agent::AgentQueueStore store{path.string(), "node-024", 10};
         labbridge::agent::ReliableDeliveryClient reliable{
-            client, store, 30s, 30s};
+            client, store, 30s, 30s,
+            labbridge::agent::kDefaultMaxRequestBodyBytes};
         const auto started = std::chrono::steady_clock::now();
         std::thread worker{[&] {
             EXPECT_THROW(reliable.start_task_run(request()),
@@ -231,6 +290,122 @@ TEST(ReliableDeliveryClientTest, StopInterruptsStartupRecoveryBackoff) {
         EXPECT_EQ(store.pending_job_count(), 1U);
         std::cout << "startup_backoff interrupted=true waited_ms<5000 "
                      "pending_jobs=1" << std::endl;
+    }
+    std::filesystem::remove(path);
+}
+
+TEST(ReliableDeliveryClientTest, PayloadLimitAllowsExactSizeAndRejectsOneByteMore) {
+    // 等于上限：正好放行，服务端收到的 body 与大小检查用的是同一份编码。
+    {
+        const auto path = std::filesystem::temp_directory_path() /
+                          "labbridge-payload-limit-exact.db";
+        std::filesystem::remove(path);
+        MockHttpServer server{{
+            {http::status::ok,
+             R"({"ok":true,"data":{"raw_file_ids":["raw-1"],"replayed":false}})"},
+        }};
+        labbridge::agent::ControlPlaneClient client{
+            local_server_url(server.port()), std::chrono::milliseconds{2000},
+            "node-024", std::string(64, 'a')};
+        labbridge::agent::AgentQueueStore store{path.string(), "node-024", 10};
+        const auto manifest = seed_manifest_job(store);
+        const auto body =
+            labbridge::agent::encode_raw_file_manifest_http_body(manifest);
+        labbridge::agent::ReliableDeliveryClient exact{
+            client, store, 1s, 2s, body.size()};
+
+        const auto result = exact.report_raw_file_manifest(manifest);
+        ASSERT_NO_THROW(server.join());
+
+        EXPECT_EQ(result.raw_file_ids, (std::vector<std::string>{"raw-1"}));
+        ASSERT_EQ(server.requests().size(), 1U);
+        EXPECT_EQ(server.requests().front().body, body);
+        std::filesystem::remove(path);
+    }
+
+    // 超过一个字节：不发请求，作业转 attention 并保存原执行阶段。
+    {
+        const auto path = std::filesystem::temp_directory_path() /
+                          "labbridge-payload-limit-over.db";
+        std::filesystem::remove(path);
+        MockHttpServer server{{
+            {http::status::ok,
+             R"({"ok":true,"data":{"raw_file_ids":["raw-1"],"replayed":false}})"},
+        }};
+        labbridge::agent::ControlPlaneClient client{
+            local_server_url(server.port()), std::chrono::milliseconds{2000},
+            "node-024", std::string(64, 'a')};
+        labbridge::agent::AgentQueueStore store{path.string(), "node-024", 10};
+        const auto manifest = seed_manifest_job(store);
+        const auto body =
+            labbridge::agent::encode_raw_file_manifest_http_body(manifest);
+        labbridge::agent::ReliableDeliveryClient over{
+            client, store, 1s, 2s, body.size() - 1};
+
+        EXPECT_THROW(over.report_raw_file_manifest(manifest),
+                     labbridge::agent::DeliveryAbandoned);
+        // 超限请求从未发出：mock server 没收到连接，不显式 join，
+        // 交给析构唤醒 accept 线程。
+        ASSERT_EQ(server.requests().size(), 0U);
+
+        const auto row = read_job_row(path, request().execution_key);
+        EXPECT_EQ(row.stage, "requires_attention");
+        EXPECT_EQ(row.retry_stage, "manifest_pending");
+        EXPECT_EQ(row.last_error_kind, "payload_too_large");
+        // 大小检查在投递尝试计数之前，一次尝试都没发生。
+        EXPECT_EQ(store.delivery_attempt_count("manifest", "manifest-key-030"), 0);
+        std::filesystem::remove(path);
+    }
+}
+
+TEST(ReliableDeliveryClientTest,
+     RetryWaitRecoveryOversizedKeepsOriginalRetryStage) {
+    const auto path = std::filesystem::temp_directory_path() /
+                      "labbridge-payload-retrywait.db";
+    std::filesystem::remove(path);
+    FailingClient network_client{
+        {labbridge::agent::TaskExecutionErrorKind::Network, "server offline"}};
+    labbridge::agent::RawFileManifestRequest manifest;
+    {
+        labbridge::agent::AgentQueueStore store{path.string(), "node-024", 10};
+        manifest = seed_manifest_job(store);
+
+        // 第一次投递网络失败 -> retry_wait，退避 30 秒，用停止请求打断等待。
+        labbridge::agent::ReliableDeliveryClient healthy{
+            network_client, store, 30s, 30s,
+            labbridge::agent::kDefaultMaxRequestBodyBytes};
+        std::thread worker{[&] {
+            EXPECT_THROW(healthy.report_raw_file_manifest(manifest),
+                         labbridge::agent::DeliveryAbandoned);
+        }};
+        while (store.delivery_attempt_count("manifest", "manifest-key-030") == 0) {
+            std::this_thread::yield();
+        }
+        healthy.request_stop();
+        worker.join();
+
+        const auto row = read_job_row(path, request().execution_key);
+        ASSERT_EQ(row.stage, "retry_wait");
+        ASSERT_EQ(row.retry_stage, "manifest_pending");
+    }
+
+    // 重启恢复时限额已小于请求体：检查必须先于退避等待触发，
+    // 否则要白等 30 秒才知道超限。
+    {
+        labbridge::agent::AgentQueueStore store{path.string(), "node-024", 10};
+        labbridge::agent::ReliableDeliveryClient tiny{
+            network_client, store, 30s, 30s,
+            labbridge::agent::encode_raw_file_manifest_http_body(manifest).size() - 1};
+        const auto started = std::chrono::steady_clock::now();
+        EXPECT_THROW(tiny.report_raw_file_manifest(manifest),
+                     labbridge::agent::DeliveryAbandoned);
+        EXPECT_LT(std::chrono::steady_clock::now() - started, 5s);
+
+        const auto row = read_job_row(path, request().execution_key);
+        EXPECT_EQ(row.stage, "requires_attention");
+        // 原执行阶段原样保留，人工恢复后从 manifest_pending 继续。
+        EXPECT_EQ(row.retry_stage, "manifest_pending");
+        EXPECT_EQ(row.last_error_kind, "payload_too_large");
     }
     std::filesystem::remove(path);
 }
