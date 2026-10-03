@@ -44,4 +44,13 @@ public:
 AgentStartupConfig parse_agent_config(std::string_view yaml_content);
 AgentStartupConfig load_agent_config(const std::string& path);
 
+// queue 维护命令（list/show/retry）的精简配置：只需要节点身份和
+// 队列库路径。缺 token、缺运行参数的配置文件同样可用这些命令。
+struct AgentQueueCommandConfig {
+    std::string node_code;
+    std::string queue_db;
+};
+
+AgentQueueCommandConfig load_agent_queue_config(const std::string& path);
+
 }  // namespace labbridge::agent

@@ -136,6 +136,8 @@ run_agent() {
       done < <("${query_queue[@]}" "SELECT execution_key || '|' || COALESCE(last_error, '') \
         FROM pending_jobs WHERE stage = 'requires_attention' \
         ORDER BY updated_at DESC LIMIT 5")
+      info "处置入口: /opt/labbridge/current/labbridge_agent queue show/retry <execution_key> --config $config"
+      info "顺序: 看原因 -> 停 Agent -> 修正外部原因 -> queue retry -> 启动 Agent（retry 本身不联网）"
     fi
 
     local fail_count fail_line

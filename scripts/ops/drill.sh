@@ -51,6 +51,10 @@
 #   scenario-scale [--files N]
 #                            代表规模（明确标注的模拟规模）实测停机/备份/恢复
 #                            耗时与空间占用
+#   scenario-attention       requires_attention 人工恢复（Phase 030 收尾）：
+#                            本地请求体超限转人工 → 跨槽位无重复采集 →
+#                            queue 命令在线行为与运行期锁 → 修正上限后
+#                            retry 恢复 → 原执行键作业完成且中心无重复证据
 #
 # 面向 Ubuntu 24.04，依赖 GNU date/df/stat、docker、sqlite3、curl、python3、python3-yaml。
 # 掉电、systemd 主机重启不在本脚本范围，按方案用隔离 Linux 环境另行验证。
@@ -155,7 +159,7 @@ psql_rows() {
 # 端口发布会失灵，但容器网络本身是好的，这时退回 web 容器的直连地址。
 web_entry() {
   local url="http://127.0.0.1:${WEB_PORT}" ip
-  if ! curl -s --max-time 2 -o /dev/null "$url/"; then
+  if ! curl --noproxy '*' -s --max-time 2 -o /dev/null "$url/"; then
     ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' \
       "${PROJECT}-web-1" 2>/dev/null || true)
     [[ -n $ip ]] && url="http://$ip:8080"
@@ -165,7 +169,7 @@ web_entry() {
 
 api() {
   local method=$1 path=$2 body=${3:-} out
-  local -a args=(--silent --show-error --max-time 15 -X "$method"
+  local -a args=(--noproxy '*' --silent --show-error --max-time 15 -X "$method"
     --header "Authorization: Bearer $(cat "$WORKDIR/auth/management.token")"
     -w '\n%{http_code}'
     "$(web_entry)${path}")
@@ -379,7 +383,13 @@ verify_evidence() {
   local code path entry
   entry=$(web_entry)
   for path in / /nodes /tasks; do
-    code=$(curl -s -o /dev/null -w '%{http_code}' "$entry$path")
+    # 宿主机端口发布偶发失效（WSL 已知问题）：探活刚过、真请求被拒时会
+    # 连接失败；重算一次入口（会回退到容器直连）再试，仍失败就如实报 000
+    code=$(curl --noproxy '*' -s -o /dev/null -w '%{http_code}' "$entry$path" || true)
+    if [[ $code != 200 ]]; then
+      entry=$(web_entry)
+      code=$(curl --noproxy '*' -s -o /dev/null -w '%{http_code}' "$entry$path" || true)
+    fi
     check_eq "SPA 深链接 $path 返回 200" 200 "$code"
   done
   api GET /api/v1/nodes?limit=5
@@ -1450,6 +1460,159 @@ cmd_scenario_scale() {
 }
 
 # ---------------------------------------------------------------------------
+# 场景 8：requires_attention 人工恢复（Phase 030 收尾验收）
+# ---------------------------------------------------------------------------
+
+cmd_scenario_attention() {
+  require_workdir
+  step '场景 8：本地超限转人工 → 无重复采集 → queue retry 恢复 → 原作业完成'
+
+  # 本场景验证 030-01/030-02 的 Agent 能力，旧二进制没有 queue 命令
+  "$(agent_binary)" queue --help >/dev/null 2>&1 \
+    || die "当前 Agent 二进制不支持 queue 命令；先现场构建并切 current（参考 scenario-upgrade 的产物切换）"
+  agent_running drill-a && agent_stop drill-a
+
+  local cfg="$WORKDIR/etc/drill-a/agent.yaml"
+  local pristine="$WORKDIR/etc/drill-a/agent.yaml.pre-attention"
+  # 前缀每轮唯一：历史轮次的 attn 文件、旧 attention 作业（028-05 留下的 413
+  # 驻留作业）不参与本轮断言；它们留在队列里属设计内状态，本阶段没有清理功能
+  local prefix="attn-$(date +%H%M%S)-$RANDOM"
+
+  step '制造外部原因：请求体上限压到 400B，重启 Agent'
+  # 环境长期放着后 web 容器 IP 可能变化（或宿主机端口发布失效），
+  # 先按 web_entry 现算的入口刷新 server_url，再取本轮的原始配置备份
+  sed -i "s|^  server_url:.*|  server_url: $(web_entry)|" "$cfg"
+  [[ -e $pristine ]] || cp -- "$cfg" "$pristine"
+  sed -i '/max_request_body_bytes:/d' "$cfg"
+  sed -i '/^delivery:/a\  # attention 场景临时压小，场景结束从 pre-attention 备份还原\n  max_request_body_bytes: 400' "$cfg"
+  agent_start drill-a
+  wait_sql "SELECT count(*) FROM nodes WHERE node_code='drill-a' AND last_heartbeat_at > now() - interval '30 seconds'" 1 90 \
+    || fail 'drill-a 心跳没有恢复'
+
+  step '交付 1 个观测文件，等该文件的作业因 payload_too_large 转人工'
+  make_observation_csv "$WORKDIR/staging/attn.csv" 5 $((20000 + RANDOM))
+  deliver drill-a "$WORKDIR/staging/attn.csv" --prefix "$prefix"
+  local waited=0 key=''
+  while ((waited < 180)); do
+    key=$(queue_q drill-a "SELECT j.execution_key FROM pending_jobs j JOIN pending_files f ON f.execution_key = j.execution_key WHERE j.stage='requires_attention' AND f.source_path LIKE '%/$prefix-%' ORDER BY j.created_at DESC LIMIT 1")
+    [[ -n $key ]] && break
+    sleep 5; waited=$((waited + 5))
+  done
+  [[ -n $key ]] || die "180s 内没有等到 $prefix 文件的 requires_attention 作业，看日志: $WORKDIR/run/drill-a.log"
+  check_eq '错误种类为 payload_too_large（Agent 本地拦截，不是中心 413）' \
+    payload_too_large \
+    "$(queue_q drill-a "SELECT COALESCE(last_error_kind,'') FROM pending_jobs WHERE execution_key='$key'")"
+  local resume_stage
+  resume_stage=$(queue_q drill-a "SELECT COALESCE(retry_stage,'') FROM pending_jobs WHERE execution_key='$key'")
+  if [[ $resume_stage =~ ^(start_pending|collecting|manifest_pending|report_building|report_pending)$ ]]; then
+    pass "恢复阶段保留可执行位置（$resume_stage）"
+  else
+    fail "恢复阶段不可执行: ${resume_stage:-<空>}"
+  fi
+
+  # 卡住的是哪条投递由恢复阶段决定：start 的幂等键就是执行键本身
+  local stuck_key=''
+  case $resume_stage in
+    start_pending) stuck_key=$key ;;
+    collecting|manifest_pending)
+      stuck_key=$(queue_q drill-a "SELECT idempotency_key FROM pending_deliveries WHERE execution_key='$key' AND request_type='manifest'") ;;
+    *) stuck_key=$(queue_q drill-a "SELECT idempotency_key FROM pending_deliveries WHERE execution_key='$key' AND request_type='report'") ;;
+  esac
+  [[ -n $stuck_key ]] || fail '没有找到卡住投递的幂等键'
+  check_eq '超限请求从未发到中心（该幂等键尚无回执）' 0 \
+    "$(psql_q "SELECT count(*) FROM agent_report_receipts WHERE idempotency_key='$stuck_key'")"
+
+  step '无重复采集：跨调度槽位指纹保持占用（028-05 的重采放大不再发生）'
+  # 任务每分钟一轮，等 130s 覆盖至少两个完整槽位
+  sleep 130
+  check_eq '本轮文件始终没有入证据链' 0 \
+    "$(psql_q "SELECT count(*) FROM raw_files rf JOIN nodes n ON n.id=rf.node_id WHERE n.node_code='drill-a' AND rf.original_name LIKE '$prefix-%'")"
+  check_eq '本轮文件只被一个作业计划（指纹占用，没有新作业带走）' 1 \
+    "$(queue_q drill-a "SELECT count(DISTINCT execution_key) FROM pending_files WHERE source_path LIKE '%/$prefix-%'")"
+  check_eq '文件计划只有一行（不被反复带入新计划）' 1 \
+    "$(queue_q drill-a "SELECT count(*) FROM pending_files WHERE source_path LIKE '%/$prefix-%'")"
+  check_eq '归档只有一份（不再被后续运行放大）' 1 \
+    "$(find "$WORKDIR/state/drill-a/work/archive" -type f -name "*$prefix*" | wc -l)"
+
+  step 'queue 命令在线行为：list/show 可查，运行中 retry 被独占锁拒绝'
+  local qout
+  qout=$("$(agent_binary)" queue list --config "$cfg" 2>&1)
+  if grep -q 'waiting for attention' <<<"$qout" && grep -q "$key" <<<"$qout"; then
+    pass 'queue list 在线列出本轮 attention 作业'
+  else
+    fail 'queue list 输出缺少本轮执行键'
+    sed 's/^/        /' <<<"$qout"
+  fi
+  qout=$("$(agent_binary)" queue show "$key" --config "$cfg" 2>&1)
+  if grep -q 'resume_stage' <<<"$qout" && grep -q 'body_bytes' <<<"$qout"; then
+    pass "queue show 展示恢复阶段与请求体字节数（resume_stage=$resume_stage）"
+  else
+    fail 'queue show 输出缺少恢复阶段或容量信息'
+    sed 's/^/        /' <<<"$qout"
+  fi
+  if "$(agent_binary)" queue retry "$key" --config "$cfg" >/dev/null 2>&1; then
+    fail 'Agent 运行中 retry 不应成功（flock 应挡住）'
+  else
+    pass 'Agent 运行中 retry 被拒（提示先停服务）'
+  fi
+  local check_out
+  check_out=$(bash scripts/ops/check.sh agent --config "$cfg" 2>&1 || true)
+  if grep -q 'requires_attention' <<<"$check_out" && grep -q 'queue show/retry' <<<"$check_out"; then
+    pass '巡检点名 attention 作业并给出处置入口'
+  else
+    fail '巡检没有给出 attention 处置提示'
+    sed 's/^/        /' <<<"$check_out"
+  fi
+
+  step '修正外部原因：停 Agent、还原上限 → queue retry 允许原作业恢复'
+  agent_stop drill-a
+  mv -- "$pristine" "$cfg"
+  qout=$("$(agent_binary)" queue retry "$key" --config "$cfg" 2>&1)
+  if grep -q "allowed to resume at stage '$resume_stage'" <<<"$qout"; then
+    pass "queue retry 恢复到原执行阶段（$resume_stage）"
+  else
+    fail 'queue retry 输出与恢复阶段不符'
+    sed 's/^/        /' <<<"$qout"
+  fi
+  check_eq '本轮作业已不在 attention' 0 \
+    "$(queue_q drill-a "SELECT count(*) FROM pending_jobs WHERE execution_key='$key' AND stage='requires_attention'")"
+  check_eq '执行键保留（队列里还是原来那个作业，不是重建）' 1 \
+    "$(queue_q drill-a "SELECT count(*) FROM pending_jobs WHERE execution_key='$key'")"
+  if "$(agent_binary)" queue retry "$key" --config "$cfg" >/dev/null 2>&1; then
+    fail '重复 retry 不应再次成功'
+  else
+    pass '重复 retry 明确返回"状态已不满足"，未重复修改'
+  fi
+
+  step '重启 Agent：原作业按原执行键继续并完成，中心证据无重复'
+  agent_start drill-a
+  if wait_sql "SELECT count(*) FROM raw_files rf JOIN nodes n ON n.id=rf.node_id WHERE n.node_code='drill-a' AND rf.original_name LIKE '$prefix-%'" 1 240; then
+    pass '本轮文件由恢复后的原作业完成入链'
+  else
+    fail '240s 内恢复作业没有完成'
+  fi
+  local drained=0
+  while ((drained < 120)); do
+    (( $(queue_q drill-a "SELECT count(*) FROM pending_jobs WHERE execution_key='$key'") == 0 )) && break
+    sleep 5; drained=$((drained + 5))
+  done
+  (( $(queue_q drill-a "SELECT count(*) FROM pending_jobs WHERE execution_key='$key'") == 0 )) \
+    && pass '原作业完成并离开队列（旧 attention 驻留作业不受影响）' \
+    || fail '原作业 120s 内没有完成'
+  check_eq '本轮文件同名恰好一份证据（恢复重放不产生重复）' 1 \
+    "$(psql_q "SELECT count(*) FROM raw_files rf JOIN nodes n ON n.id=rf.node_id WHERE n.node_code='drill-a' AND rf.original_name LIKE '$prefix-%'")"
+  local run_id
+  run_id=$(psql_q "SELECT rf.task_run_id FROM raw_files rf JOIN nodes n ON n.id=rf.node_id WHERE n.node_code='drill-a' AND rf.original_name LIKE '$prefix-%' LIMIT 1")
+  check_eq '该运行最终 succeeded' succeeded \
+    "$(psql_q "SELECT status FROM task_runs WHERE id=$run_id")"
+  check_eq '卡住的幂等键恢复后恰好 1 条 completed 回执' 1 \
+    "$(psql_q "SELECT count(*) FROM agent_report_receipts WHERE idempotency_key='$stuck_key' AND completed_at IS NOT NULL")"
+  verify_evidence
+  log_line "attention prefix=$prefix key=$key resume_stage=$resume_stage"
+  finish_scenario scenario-attention
+}
+
+# ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
 
@@ -1487,6 +1650,7 @@ main() {
     scenario-stops) cmd_scenario_stops ;;
     scenario-backup-restore) cmd_scenario_backup_restore ;;
     scenario-scale) cmd_scenario_scale "${args[@]}" ;;
+    scenario-attention) cmd_scenario_attention ;;
     *) printf '未知命令: %s\n' "$cmd" >&2; usage >&2; exit 2 ;;
   esac
 }

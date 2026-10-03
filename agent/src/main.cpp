@@ -1,6 +1,7 @@
 #include "labbridge/agent/bootstrap/agent_config.h"
 #include "labbridge/agent/bootstrap/control_plane_client.h"
 #include "labbridge/agent/bootstrap/process_signal_monitor.h"
+#include "labbridge/agent/bootstrap/queue_command.h"
 #include "labbridge/agent/bootstrap/startup_handshake.h"
 #include "labbridge/agent/execution/reliable_delivery_client.h"
 #include "labbridge/agent/execution/task_executor.h"
@@ -14,6 +15,7 @@
 #include <exception>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -22,6 +24,12 @@ constexpr std::string_view kComponent = "agent";
 }  // namespace
 
 int main(int argc, char* argv[]) {
+    // queue 子命令是本地维护入口（list/show/retry），不进入运行时装配。
+    // 子命令参数从 argv[2] 开始，argv[1] 的 "queue" 本身不参与解析。
+    if (argc > 1 && std::string_view{argv[1]} == "queue") {
+        return labbridge::agent::run_queue_command(argc - 2, argv + 2);
+    }
+
     const std::string config_path =
         argc > 1 ? argv[1] : "deploy/env/agent.example.yaml";
     try {
@@ -30,6 +38,10 @@ int main(int argc, char* argv[]) {
         labbridge::agent::AgentQueueStore queue_store{
             config.queue_db, config.node.node_code, config.max_pending_jobs,
             config.processed_fingerprint_capacity_per_task};
+        // 队列就绪后立刻拿路径旁的 flock 并持有到进程退出：queue retry
+        // 靠它发现 Agent 还在运行，误起第二个实例也会在这里被挡下。
+        // 放在建库之后，首次部署时锁文件的目录还不存在。
+        const labbridge::agent::AgentQueueLock queue_lock{config.queue_db};
         labbridge::core::log_info(
             kComponent, "queue ready; pending_jobs=" +
                             std::to_string(queue_store.pending_job_count()));

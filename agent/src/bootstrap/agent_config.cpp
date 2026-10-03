@@ -298,4 +298,39 @@ AgentStartupConfig load_agent_config(const std::string& path) {
         "failed to load agent configuration '" + path + "': ");
 }
 
+// 精简入口：与完整加载共用标量读取和相对配置目录解析，但只取
+// agent.node_code 和 storage.queue_db 两个必填项，其余字段一概不读，
+// 所以不复制解析器，也不需要跳过校验的开关参数。
+AgentQueueCommandConfig load_agent_queue_config(const std::string& path) {
+    const auto absolute_path = labbridge::core::fs::absolute(path);
+    try {
+        const auto root = YAML::LoadFile(path);
+        const auto agent = root["agent"];
+        if (!agent || !agent.IsMap()) {
+            throw AgentConfigError("agent configuration section is required");
+        }
+        const auto storage = root["storage"];
+        if (!storage || !storage.IsMap()) {
+            throw AgentConfigError("storage configuration section is required");
+        }
+
+        AgentQueueCommandConfig config;
+        config.node_code = required_string(agent, "node_code", "agent");
+        config.queue_db = normalized_absolute_path(
+                             required_string(storage, "queue_db", "storage"),
+                             absolute_path.parent_path())
+                             .string();
+        return config;
+    } catch (const AgentConfigError&) {
+        throw;
+    } catch (const YAML::Exception& error) {
+        throw AgentConfigError(
+            "failed to load agent configuration '" + path + "': " +
+            error.what());
+    } catch (const labbridge::core::fs::filesystem_error& error) {
+        throw AgentConfigError(
+            "invalid local path configuration: " + std::string{error.what()});
+    }
+}
+
 }  // namespace labbridge::agent

@@ -5,7 +5,13 @@
 
 #include <sqlite3.h>
 
+#include <fcntl.h>
+#include <sys/file.h>
+#include <unistd.h>
+
 #include <array>
+#include <cerrno>
+#include <cstring>
 #include <memory>
 #include <mutex>
 #include <utility>
@@ -294,6 +300,14 @@ std::size_t read_pending_job_count(sqlite3* database) {
     return static_cast<std::size_t>(sqlite3_column_int64(statement.get(), 0));
 }
 
+// 可执行阶段白名单：retry_stage 只允许指向这些阶段。
+// retry_wait / requires_attention 本身不可执行，不能作为恢复位置。
+bool is_executable_stage(const std::string& stage) {
+    return stage == "start_pending" || stage == "collecting" ||
+           stage == "manifest_pending" || stage == "report_building" ||
+           stage == "report_pending";
+}
+
 void insert_pending_job(sqlite3* database,
                         const StartTaskRunRequest& request,
                         const std::string& task_json) {
@@ -471,6 +485,91 @@ constexpr const char* kRecoveredJobColumns =
     "WHERE execution_key = jobs.execution_key AND request_type = 'manifest'), ''), "
     "COALESCE((SELECT request_json FROM pending_deliveries "
     "WHERE execution_key = jobs.execution_key AND request_type = 'report'), '') ";
+
+std::vector<AttentionFileDetail> read_attention_files(
+    sqlite3* database,
+    const std::string& execution_key) {
+    auto statement = prepare(
+        database,
+        "SELECT ordinal, source_path, size_bytes, archive_path, archive_state "
+        "FROM pending_files WHERE execution_key = ? ORDER BY ordinal",
+        "load attention files");
+    bind_text(database,
+              statement.get(),
+              1,
+              execution_key,
+              "load attention files");
+
+    std::vector<AttentionFileDetail> files;
+    while (sqlite3_step(statement.get()) == SQLITE_ROW) {
+        files.push_back({
+            sqlite3_column_int(statement.get(), 0),
+            read_text(statement.get(), 1),
+            sqlite3_column_int64(statement.get(), 2),
+            read_text(statement.get(), 3),
+            read_text(statement.get(), 4),
+        });
+    }
+    return files;
+}
+
+// 持久化请求还原成实际发送的 HTTP body 大小：解码后走与投递层
+// 相同的 encode_*_http_body，容量排查看到的字节数和发送检查一致。
+// request_type 受表上 CHECK 约束限制，只可能是三种。
+long long http_body_bytes(const std::string& request_type,
+                          const std::string& request_json) {
+    if (request_type == "start") {
+        return static_cast<long long>(
+            encode_start_task_run_http_body(
+                decode_start_task_run_request(request_json))
+                .size());
+    }
+    if (request_type == "manifest") {
+        return static_cast<long long>(
+            encode_raw_file_manifest_http_body(
+                decode_raw_file_manifest_request(request_json))
+                .size());
+    }
+    return static_cast<long long>(
+        encode_task_run_report_http_body(
+            decode_task_run_report_request(request_json))
+            .size());
+}
+
+std::vector<AttentionDeliveryDetail> read_attention_deliveries(
+    sqlite3* database,
+    const std::string& execution_key) {
+    auto statement = prepare(
+        database,
+        "SELECT request_type, attempt_count, COALESCE(next_attempt_at, ''), "
+        "COALESCE(last_http_status, 0), COALESCE(last_error_kind, ''), "
+        "COALESCE(last_error, ''), request_json "
+        "FROM pending_deliveries WHERE execution_key = ? "
+        "ORDER BY CASE request_type "
+        "WHEN 'start' THEN 1 WHEN 'manifest' THEN 2 ELSE 3 END",
+        "load attention deliveries");
+    bind_text(database,
+              statement.get(),
+              1,
+              execution_key,
+              "load attention deliveries");
+
+    std::vector<AttentionDeliveryDetail> deliveries;
+    while (sqlite3_step(statement.get()) == SQLITE_ROW) {
+        AttentionDeliveryDetail delivery;
+        delivery.request_type = read_text(statement.get(), 0);
+        delivery.attempt_count = sqlite3_column_int(statement.get(), 1);
+        delivery.next_attempt_at = read_text(statement.get(), 2);
+        delivery.last_http_status = sqlite3_column_int(statement.get(), 3);
+        delivery.last_error_kind = read_text(statement.get(), 4);
+        delivery.last_error = read_text(statement.get(), 5);
+        delivery.body_bytes =
+            http_body_bytes(delivery.request_type,
+                            read_text(statement.get(), 6));
+        deliveries.push_back(std::move(delivery));
+    }
+    return deliveries;
+}
 
 }  // namespace
 
@@ -910,8 +1009,7 @@ void AgentQueueStore::mark_requires_attention(
     if (stage == "retry_wait") {
         // retry_wait 保存的 retry_stage 必须指向可执行阶段，
         // 缺失或不可执行说明内部状态已经坏了，直接报错不猜。
-        if (resume_stage.empty() || resume_stage == "retry_wait" ||
-            resume_stage == "requires_attention") {
+        if (!is_executable_stage(resume_stage)) {
             throw AgentQueueError(
                 "retry_wait job has no executable retry_stage: " +
                 execution_key);
@@ -1166,6 +1264,238 @@ bool AgentQueueStore::is_file_occupied(
     bind_text(impl_->database, statement.get(), 4, fingerprint,
               "find occupied fingerprint");
     return sqlite3_step(statement.get()) == SQLITE_ROW;
+}
+
+struct AgentQueueMaintenance::Impl {
+    sqlite3* database{nullptr};
+
+    ~Impl() {
+        if (database != nullptr) {
+            sqlite3_close_v2(database);
+        }
+    }
+};
+
+AgentQueueMaintenance::AgentQueueMaintenance(const std::string& database_path,
+                                             const std::string& node_code,
+                                             bool read_only)
+    : impl_(std::make_unique<Impl>()) {
+    if (database_path.empty() || node_code.empty()) {
+        throw AgentQueueError(
+            "database path and node identity are required");
+    }
+    if (!labbridge::core::fs::exists(labbridge::core::fs::path{
+            database_path})) {
+        throw AgentQueueError("queue database not found: " + database_path);
+    }
+
+    // 维护入口绝不带 CREATE：库必须已经存在，里面缺什么就报什么错。
+    const int flags =
+        read_only ? SQLITE_OPEN_READONLY : SQLITE_OPEN_READWRITE;
+    const int open_result = sqlite3_open_v2(
+        database_path.c_str(), &impl_->database, flags, nullptr);
+    if (open_result != SQLITE_OK) {
+        const std::string detail = impl_->database == nullptr
+            ? "unknown SQLite open error"
+            : sqlite3_errmsg(impl_->database);
+        throw AgentQueueError("open queue database failed: " + detail);
+    }
+    sqlite3_busy_timeout(impl_->database, kBusyTimeoutMilliseconds);
+
+    const int schema_version = read_schema_version(impl_->database);
+    if (schema_version == 0) {
+        throw AgentQueueError(
+            "queue database is empty or not initialized: " + database_path);
+    }
+    if (schema_version > kSchemaVersion) {
+        throw AgentQueueError(
+            "unsupported queue schema version " +
+            std::to_string(schema_version));
+    }
+    validate_required_tables(impl_->database);
+    validate_node_identity(impl_->database, node_code);
+}
+
+AgentQueueMaintenance::~AgentQueueMaintenance() = default;
+
+std::vector<AttentionJobSummary>
+AgentQueueMaintenance::list_attention_jobs() const {
+    auto statement = prepare(
+        impl_->database,
+        "SELECT execution_key, task_id, COALESCE(last_error_kind, ''), "
+        "COALESCE(last_error, ''), updated_at "
+        "FROM pending_jobs WHERE stage = 'requires_attention' "
+        "ORDER BY updated_at DESC, execution_key",
+        "list attention jobs");
+
+    std::vector<AttentionJobSummary> jobs;
+    while (sqlite3_step(statement.get()) == SQLITE_ROW) {
+        jobs.push_back({
+            read_text(statement.get(), 0),
+            read_text(statement.get(), 1),
+            read_text(statement.get(), 2),
+            read_text(statement.get(), 3),
+            read_text(statement.get(), 4),
+        });
+    }
+    return jobs;
+}
+
+AttentionJobDetail AgentQueueMaintenance::load_attention_job(
+    const std::string& execution_key) const {
+    auto statement = prepare(
+        impl_->database,
+        "SELECT task_id, stage, COALESCE(retry_stage, ''), "
+        "COALESCE(last_error_kind, ''), COALESCE(last_error, ''), "
+        "attempt_count, started_at, updated_at "
+        "FROM pending_jobs WHERE execution_key = ?",
+        "load attention job");
+    bind_text(impl_->database,
+              statement.get(),
+              1,
+              execution_key,
+              "load attention job");
+    if (sqlite3_step(statement.get()) != SQLITE_ROW) {
+        throw AgentQueueError("pending job does not exist: " + execution_key);
+    }
+    const auto stage = read_text(statement.get(), 1);
+    if (stage != "requires_attention") {
+        throw AgentQueueError(
+            "job is not waiting for attention (current stage: " + stage +
+            "): " + execution_key);
+    }
+
+    AttentionJobDetail detail;
+    detail.execution_key = execution_key;
+    detail.task_id = read_text(statement.get(), 0);
+    detail.resume_stage = read_text(statement.get(), 2);
+    detail.error_kind = read_text(statement.get(), 3);
+    detail.reason = read_text(statement.get(), 4);
+    detail.attempt_count = sqlite3_column_int(statement.get(), 5);
+    detail.started_at = read_text(statement.get(), 6);
+    detail.updated_at = read_text(statement.get(), 7);
+    detail.files = read_attention_files(impl_->database, execution_key);
+    detail.deliveries =
+        read_attention_deliveries(impl_->database, execution_key);
+    return detail;
+}
+
+QueueRetryResult AgentQueueMaintenance::retry_attention_job(
+    const std::string& execution_key) {
+    Transaction transaction{impl_->database, "retry attention job"};
+
+    auto reader = prepare(
+        impl_->database,
+        "SELECT stage, COALESCE(retry_stage, ''), "
+        "COALESCE(last_error_kind, '') FROM pending_jobs "
+        "WHERE execution_key = ?",
+        "read attention job");
+    bind_text(impl_->database,
+              reader.get(),
+              1,
+              execution_key,
+              "read attention job");
+    if (sqlite3_step(reader.get()) != SQLITE_ROW) {
+        throw AgentQueueError("pending job does not exist: " + execution_key);
+    }
+    const auto stage = read_text(reader.get(), 0);
+    if (stage != "requires_attention") {
+        // 状态已经不满足（可能刚被恢复过或已完成），明确告诉调用方，
+        // 不重复修改；事务没写过任何行，回滚等于空操作。
+        return {QueueRetryStatus::NotAttention, stage};
+    }
+
+    // 恢复位置：正常路径用转人工时保存的 retry_stage；030-01 之前的
+    // archive_conflict 旧数据没存这个字段，归档校验发生在 collecting，
+    // 固定回 collecting 重做；其余说不出恢复位置的报错，禁止猜阶段。
+    auto resume_stage = read_text(reader.get(), 1);
+    const auto error_kind = read_text(reader.get(), 2);
+    if (resume_stage.empty()) {
+        if (error_kind == "archive_conflict") {
+            resume_stage = "collecting";
+        } else {
+            throw AgentQueueError(
+                "cannot determine resume stage for job " + execution_key +
+                " (retry_stage empty, error_kind=" + error_kind +
+                "); inspect the job manually");
+        }
+    } else if (!is_executable_stage(resume_stage)) {
+        throw AgentQueueError(
+            "saved retry_stage '" + resume_stage + "' of job " +
+            execution_key + " is not an executable stage");
+    }
+
+    auto job = prepare(
+        impl_->database,
+        "UPDATE pending_jobs SET stage = ?, retry_stage = NULL, "
+        "next_attempt_at = NULL, "
+        "updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') "
+        "WHERE execution_key = ? AND stage = 'requires_attention'",
+        "resume attention job");
+    bind_text(impl_->database,
+              job.get(),
+              1,
+              resume_stage,
+              "resume attention job");
+    bind_text(impl_->database,
+              job.get(),
+              2,
+              execution_key,
+              "resume attention job");
+    check_result(
+        sqlite3_step(job.get()), impl_->database, "resume attention job");
+    if (sqlite3_changes(impl_->database) != 1) {
+        return {QueueRetryStatus::NotAttention, stage};
+    }
+
+    // 对应投递的退避时间一并清掉：Agent 启动后立刻接着投，不再等旧退避。
+    // 执行键、请求、任务快照、归档、指纹和失败记录都不动，尝试次数不清零。
+    auto deliveries = prepare(
+        impl_->database,
+        "UPDATE pending_deliveries SET next_attempt_at = NULL, "
+        "updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') "
+        "WHERE execution_key = ?",
+        "resume attention deliveries");
+    bind_text(impl_->database,
+              deliveries.get(),
+              1,
+              execution_key,
+              "resume attention deliveries");
+    check_result(sqlite3_step(deliveries.get()),
+                 impl_->database,
+                 "resume attention deliveries");
+    transaction.commit();
+    return {QueueRetryStatus::Resumed, resume_stage};
+}
+
+AgentQueueLock::AgentQueueLock(const std::string& database_path) {
+    if (database_path.empty()) {
+        throw AgentQueueError("database path is required");
+    }
+    const std::string lock_path = database_path + ".lock";
+    file_descriptor_ =
+        ::open(lock_path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0644);
+    if (file_descriptor_ < 0) {
+        throw AgentQueueError("cannot open queue lock file " + lock_path +
+                              ": " + std::strerror(errno));
+    }
+    // 非阻塞抢锁：抢不到说明有个 Agent（或另一个 retry）正拿着。
+    // 锁随进程退出由内核释放，这里等下去没有意义，直接报错让运维先停服务。
+    if (::flock(file_descriptor_, LOCK_EX | LOCK_NB) != 0) {
+        const int reason = errno;
+        ::close(file_descriptor_);
+        file_descriptor_ = -1;
+        throw AgentQueueError(
+            "queue is locked by a running process; stop the agent first (" +
+            lock_path + ": " + std::strerror(reason) + ")");
+    }
+}
+
+AgentQueueLock::~AgentQueueLock() {
+    if (file_descriptor_ >= 0) {
+        // 关闭描述符即释放 flock，内核保证，不需要显式 unlock。
+        ::close(file_descriptor_);
+    }
 }
 
 }  // namespace labbridge::agent

@@ -59,6 +59,7 @@ add_library(labbridge_agent_bootstrap
     src/bootstrap/agent_config.cpp
     src/bootstrap/control_plane_client.cpp
     src/bootstrap/process_signal_monitor.cpp
+    src/bootstrap/queue_command.cpp
     src/bootstrap/startup_handshake.cpp
 )
 
@@ -68,6 +69,7 @@ target_link_libraries(labbridge_agent_bootstrap
         labbridge_agent_execution
     PRIVATE
         Boost::system
+        labbridge_agent_storage
         nlohmann_json::nlohmann_json
         Threads::Threads
         yaml-cpp
