@@ -6,6 +6,7 @@
 #include "labbridge/server/repositories/result_repository.h"
 #include "labbridge/server/repositories/task_run_repository.h"
 
+#include <optional>
 #include <string>
 
 namespace labbridge::server {
@@ -17,6 +18,11 @@ struct CreateAlertFromQcResultRequest {
 struct AlertCreateResult {
     labbridge::core::Status status;
     std::string id;
+};
+
+struct AlertDispositionResult {
+    labbridge::core::Status status;
+    std::optional<AlertRecord> alert;
 };
 
 class AlertService {
@@ -35,6 +41,11 @@ public:
     AlertCreateResult create_alert(const QcResultRecord& qc_result,
                                    const std::string& task_run_id,
                                    const std::string& node_code);
+
+    // 告警处置：确认表示已接手，关闭表示处置结束。
+    // 两个方法都要在数据库事务内调用，靠 lock_by_id 的行锁串行化并发处置。
+    AlertDispositionResult acknowledge_alert(const std::string& alert_id);
+    AlertDispositionResult close_alert(const std::string& alert_id);
 
 private:
     // 共享实现：按 qc_result_id 回读并判断是否产生告警，only_fail 决定

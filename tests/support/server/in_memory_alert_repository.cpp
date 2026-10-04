@@ -39,4 +39,40 @@ std::vector<AlertRecord> InMemoryAlertRepository::find_by_task_run(
     return alerts;
 }
 
+// 测试替身没有行锁语义，锁读退化为普通读取。
+std::optional<AlertRecord> InMemoryAlertRepository::lock_by_id(
+    const std::string& alert_id) {
+    const auto found = alerts_.find(alert_id);
+    if (found == alerts_.end()) {
+        return std::nullopt;
+    }
+    return found->second;
+}
+
+std::optional<AlertRecord> InMemoryAlertRepository::save_acknowledged(
+    const std::string& alert_id) {
+    const auto found = alerts_.find(alert_id);
+    if (found == alerts_.end()) {
+        return std::nullopt;
+    }
+    found->second.status = "acknowledged";
+    if (found->second.acknowledged_at.empty()) {
+        found->second.acknowledged_at = "in-memory-acknowledged-at";
+    }
+    return found->second;
+}
+
+std::optional<AlertRecord> InMemoryAlertRepository::save_closed(
+    const std::string& alert_id) {
+    const auto found = alerts_.find(alert_id);
+    if (found == alerts_.end()) {
+        return std::nullopt;
+    }
+    found->second.status = "closed";
+    if (found->second.closed_at.empty()) {
+        found->second.closed_at = "in-memory-closed-at";
+    }
+    return found->second;
+}
+
 }  // namespace labbridge::server

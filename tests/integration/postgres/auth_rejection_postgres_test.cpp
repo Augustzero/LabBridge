@@ -187,6 +187,14 @@ protected:
             [command_executor](const std::string& task_id, bool enabled) {
                 return command_executor->set_task_enabled(task_id, enabled);
             };
+        command_handlers.acknowledge_alert =
+            [command_executor](const std::string& alert_id) {
+                return command_executor->acknowledge_alert(alert_id);
+            };
+        command_handlers.close_alert =
+            [command_executor](const std::string& alert_id) {
+                return command_executor->close_alert(alert_id);
+            };
         management_controller_ = std::make_shared<ManagementHttpController>(
             authenticator, std::move(query_handlers),
             std::move(command_handlers));

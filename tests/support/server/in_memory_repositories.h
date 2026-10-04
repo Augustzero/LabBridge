@@ -109,6 +109,12 @@ public:
         const std::string& node_code) const override;
     std::vector<AlertRecord> find_by_task_run(
         const std::string& task_run_id) const override;
+    std::optional<AlertRecord> lock_by_id(
+        const std::string& alert_id) override;
+    std::optional<AlertRecord> save_acknowledged(
+        const std::string& alert_id) override;
+    std::optional<AlertRecord> save_closed(
+        const std::string& alert_id) override;
 
 private:
     int next_alert_id_{1};

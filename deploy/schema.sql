@@ -119,6 +119,8 @@ CREATE TABLE IF NOT EXISTS alerts (
     severity VARCHAR(32) NOT NULL,
     message TEXT NOT NULL,
     status VARCHAR(32) NOT NULL DEFAULT 'open',
+    acknowledged_at TIMESTAMPTZ,
+    closed_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 

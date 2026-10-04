@@ -1,5 +1,9 @@
 #include "labbridge/server/application/alert_service.h"
 
+#include "labbridge/server/application/id_validation.h"
+
+#include <optional>
+#include <stdexcept>
 #include <utility>
 
 namespace labbridge::server {
@@ -22,6 +26,53 @@ std::string alert_message(const QcResultRecord& result) {
         return result.message;
     }
     return "qc result " + result.id + " is " + result.result;
+}
+
+AlertDispositionResult disposition_failure(labbridge::core::Status status) {
+    return {std::move(status), std::nullopt};
+}
+
+// 锁定告警并按当前状态决定处置动作；调用方保证处于同一事务内。
+AlertDispositionResult dispose_alert(
+    const std::string& alert_id,
+    IAlertRepository& alert_repository,
+    bool acknowledge) {
+    if (!is_positive_id(alert_id)) {
+        return disposition_failure(labbridge::core::Status::failure(
+            labbridge::core::StatusCode::InvalidArgument,
+            "alert_id must be a positive integer"));
+    }
+    const auto alert = alert_repository.lock_by_id(alert_id);
+    if (!alert.has_value()) {
+        return disposition_failure(labbridge::core::Status::failure(
+            labbridge::core::StatusCode::NotFound, "alert is not found"));
+    }
+
+    if (acknowledge) {
+        if (alert->status == "closed") {
+            return disposition_failure(labbridge::core::Status::failure(
+                labbridge::core::StatusCode::Conflict,
+                "alert is already closed"));
+        }
+        // 已确认的重复提交原样返回，不刷新首次确认时间。
+        if (alert->status == "acknowledged") {
+            return {labbridge::core::Status::success(), alert};
+        }
+    } else {
+        // 已关闭的重复提交原样返回；open / acknowledged 都允许直接关闭。
+        if (alert->status == "closed") {
+            return {labbridge::core::Status::success(), alert};
+        }
+    }
+
+    const auto updated = acknowledge
+        ? alert_repository.save_acknowledged(alert_id)
+        : alert_repository.save_closed(alert_id);
+    if (!updated.has_value()) {
+        // 锁定后行必然存在，写完却读不到说明 repository 契约被破坏。
+        throw std::runtime_error("alert disposition update is not readable");
+    }
+    return {labbridge::core::Status::success(), *updated};
 }
 
 }  // namespace
@@ -109,6 +160,16 @@ AlertCreateResult AlertService::write_alert(
 
     const auto id = alert_repository_.create(std::move(alert));
     return {labbridge::core::Status::success(), id};
+}
+
+AlertDispositionResult AlertService::acknowledge_alert(
+    const std::string& alert_id) {
+    return dispose_alert(alert_id, alert_repository_, true);
+}
+
+AlertDispositionResult AlertService::close_alert(
+    const std::string& alert_id) {
+    return dispose_alert(alert_id, alert_repository_, false);
 }
 
 }  // namespace labbridge::server

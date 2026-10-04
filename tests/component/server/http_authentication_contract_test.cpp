@@ -326,6 +326,16 @@ TEST(HttpAuthenticationContractTest, ManagementRoutesRequireManagementToken) {
             return count_call(ManagementCommandResult{
                 labbridge::core::Status::success(), "301", TaskRecord{}});
         };
+    command_handlers.acknowledge_alert =
+        [&count_call](const std::string&) {
+            return count_call(AlertDispositionResult{
+                labbridge::core::Status::success(), AlertRecord{}});
+        };
+    command_handlers.close_alert =
+        [&count_call](const std::string&) {
+            return count_call(AlertDispositionResult{
+                labbridge::core::Status::success(), AlertRecord{}});
+        };
 
     const ManagementHttpController controller{
         test_authenticator(), std::move(query_handlers),

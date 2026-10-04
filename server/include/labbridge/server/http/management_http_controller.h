@@ -1,5 +1,6 @@
 #pragma once
 
+#include "labbridge/server/application/alert_service.h"
 #include "labbridge/server/application/management_command_service.h"
 #include "labbridge/server/application/management_query_service.h"
 #include "labbridge/server/http/http_authenticator.h"
@@ -48,6 +49,9 @@ struct ManagementCommandHandlers {
         const ManagementTaskCreateRequest&)> create_task;
     std::function<ManagementCommandResult(const std::string&, bool)>
         set_task_enabled;
+    std::function<AlertDispositionResult(const std::string&)>
+        acknowledge_alert;
+    std::function<AlertDispositionResult(const std::string&)> close_alert;
 };
 
 class ManagementHttpController
@@ -95,6 +99,12 @@ public:
     void patch_task(const drogon::HttpRequestPtr& request,
                     const std::string& task_id,
                     ResponseCallback&& callback) const;
+    void post_alert_acknowledge(const drogon::HttpRequestPtr& request,
+                                const std::string& alert_id,
+                                ResponseCallback&& callback) const;
+    void post_alert_close(const drogon::HttpRequestPtr& request,
+                          const std::string& alert_id,
+                          ResponseCallback&& callback) const;
 
 private:
     std::shared_ptr<const HttpAuthenticator> authenticator_;

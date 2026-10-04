@@ -125,6 +125,20 @@ ManagementCommandHandlers empty_command_handlers() {
     handlers.set_task_enabled = [](const std::string&, bool) {
         return unused_command_result();
     };
+    handlers.acknowledge_alert = [](const std::string&) {
+        return AlertDispositionResult{
+            labbridge::core::Status::failure(
+                labbridge::core::StatusCode::InvalidArgument,
+                "command handler was not configured for this test"),
+            std::nullopt};
+    };
+    handlers.close_alert = [](const std::string&) {
+        return AlertDispositionResult{
+            labbridge::core::Status::failure(
+                labbridge::core::StatusCode::InvalidArgument,
+                "command handler was not configured for this test"),
+            std::nullopt};
+    };
     return handlers;
 }
 

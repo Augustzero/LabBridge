@@ -255,6 +255,15 @@ int main(int argc, char* argv[]) {
                 return management_command_executor->set_task_enabled(
                     task_id, enabled);
             };
+        command_handlers.acknowledge_alert =
+            [management_command_executor](const std::string& alert_id) {
+                return management_command_executor->acknowledge_alert(
+                    alert_id);
+            };
+        command_handlers.close_alert =
+            [management_command_executor](const std::string& alert_id) {
+                return management_command_executor->close_alert(alert_id);
+            };
         auto management_controller =
             std::make_shared<labbridge::server::ManagementHttpController>(
                 authenticator,

@@ -139,6 +139,14 @@ ManagementCommandHandlers command_handlers(
         [executor](const std::string& task_id, bool enabled) {
             return executor->set_task_enabled(task_id, enabled);
         };
+    value.acknowledge_alert =
+        [executor](const std::string& alert_id) {
+            return executor->acknowledge_alert(alert_id);
+        };
+    value.close_alert =
+        [executor](const std::string& alert_id) {
+            return executor->close_alert(alert_id);
+        };
     return value;
 }
 

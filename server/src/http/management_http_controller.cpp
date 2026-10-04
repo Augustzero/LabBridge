@@ -399,6 +399,8 @@ Json::Value alert_json(const AlertRecord& record) {
     value["message"] = record.message;
     value["status"] = record.status;
     value["created_at"] = nullable_string(record.created_at);
+    value["acknowledged_at"] = nullable_string(record.acknowledged_at);
+    value["closed_at"] = nullable_string(record.closed_at);
     return value;
 }
 
@@ -417,6 +419,19 @@ void respond_command(const ManagementCommandResult& result,
             "management command result is missing its response item");
     }
     callback(http::success_response(status, mapper(*item)));
+}
+
+void respond_alert_disposition(const AlertDispositionResult& result,
+                               http::ResponseCallback& callback) {
+    if (!result.status.ok) {
+        callback(http::status_error_response(result.status));
+        return;
+    }
+    if (!result.alert.has_value()) {
+        throw std::runtime_error(
+            "alert disposition result is missing its response item");
+    }
+    callback(http::success_response(drogon::k200OK, alert_json(*result.alert)));
 }
 
 template <typename T, typename Mapper>
@@ -482,7 +497,9 @@ ManagementHttpController::ManagementHttpController(
     }
     if (!command_handlers_.create_data_source ||
         !command_handlers_.create_qc_rule || !command_handlers_.create_task ||
-        !command_handlers_.set_task_enabled) {
+        !command_handlers_.set_task_enabled ||
+        !command_handlers_.acknowledge_alert ||
+        !command_handlers_.close_alert) {
         throw std::invalid_argument(
             "management command HTTP handlers are required");
     }
@@ -598,6 +615,22 @@ void ManagementHttpController::register_routes(drogon::HttpAppFramework& app) {
             self->patch_task(request, task_id, std::move(callback));
         },
         {drogon::Patch});
+    app.registerHandler(
+        "/api/v1/alerts/{1}/acknowledge",
+        [self](const drogon::HttpRequestPtr& request,
+               ResponseCallback&& callback,
+               const std::string& alert_id) {
+            self->post_alert_acknowledge(request, alert_id, std::move(callback));
+        },
+        {drogon::Post});
+    app.registerHandler(
+        "/api/v1/alerts/{1}/close",
+        [self](const drogon::HttpRequestPtr& request,
+               ResponseCallback&& callback,
+               const std::string& alert_id) {
+            self->post_alert_close(request, alert_id, std::move(callback));
+        },
+        {drogon::Post});
 }
 
 void ManagementHttpController::get_nodes(const drogon::HttpRequestPtr& request,
@@ -844,6 +877,45 @@ void ManagementHttpController::patch_task(
             task_json,
             callback);
     }, callback);
+}
+
+void ManagementHttpController::post_alert_acknowledge(
+    const drogon::HttpRequestPtr& request,
+    const std::string& alert_id,
+    ResponseCallback&& callback) const {
+    http::handle_request(
+        kComponent, "POST /api/v1/alerts/{alertId}/acknowledge", [&] {
+            if (!authenticator_->require_management(request, callback)) {
+                return;
+            }
+            require_allowed_parameters(request->getParameters(), {});
+            if (!http::require_json_content_type(request, callback)) {
+                return;
+            }
+            // 处置接口不收任何字段，请求体必须是空 JSON 对象。
+            require_allowed_members(parse_json_body(request), {});
+            respond_alert_disposition(
+                command_handlers_.acknowledge_alert(alert_id), callback);
+        }, callback);
+}
+
+void ManagementHttpController::post_alert_close(
+    const drogon::HttpRequestPtr& request,
+    const std::string& alert_id,
+    ResponseCallback&& callback) const {
+    http::handle_request(
+        kComponent, "POST /api/v1/alerts/{alertId}/close", [&] {
+            if (!authenticator_->require_management(request, callback)) {
+                return;
+            }
+            require_allowed_parameters(request->getParameters(), {});
+            if (!http::require_json_content_type(request, callback)) {
+                return;
+            }
+            require_allowed_members(parse_json_body(request), {});
+            respond_alert_disposition(
+                command_handlers_.close_alert(alert_id), callback);
+        }, callback);
 }
 
 }  // namespace labbridge::server

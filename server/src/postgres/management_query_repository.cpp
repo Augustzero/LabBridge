@@ -205,6 +205,9 @@ AlertRecord to_alert(const SqlRow& row) {
     record.message = storage::value_or_empty(row, "message");
     record.status = storage::value_or_empty(row, "status");
     record.created_at = storage::value_or_empty(row, "created_at");
+    record.acknowledged_at =
+        storage::value_or_empty(row, "acknowledged_at");
+    record.closed_at = storage::value_or_empty(row, "closed_at");
     return record;
 }
 
@@ -590,7 +593,9 @@ PostgresManagementQueryRepository::list_alerts_by_node(
         "SELECT a.id::text AS id, n.node_code, "
         "COALESCE(a.task_run_id::text, '') AS task_run_id, "
         "a.alert_type, a.severity, a.message, a.status, " +
-        storage::utc_column("a.created_at", "created_at") +
+        storage::utc_column("a.created_at", "created_at") + ", " +
+        storage::utc_column("a.acknowledged_at", "acknowledged_at") + ", " +
+        storage::utc_column("a.closed_at", "closed_at") +
         " FROM alerts a "
         "JOIN nodes n ON n.id = a.node_id "
         "WHERE n.node_code = $1";

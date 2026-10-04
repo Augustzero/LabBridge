@@ -1,10 +1,14 @@
 #include "labbridge/server/postgres/management_command_executor.h"
 
+#include "labbridge/server/application/alert_service.h"
+#include "labbridge/server/postgres/alert_repository.h"
 #include "labbridge/server/postgres/config_repository.h"
 #include "labbridge/server/postgres/libpq_sql_session.h"
 #include "labbridge/server/postgres/node_repository.h"
 #include "labbridge/server/postgres/qc_repository.h"
+#include "labbridge/server/postgres/result_repository.h"
 #include "labbridge/server/postgres/sql_transaction.h"
+#include "labbridge/server/postgres/task_run_repository.h"
 
 #include <utility>
 
@@ -19,15 +23,25 @@ public:
           node_repository_(session_),
           config_repository_(session_),
           qc_repository_(session_),
-          service_(node_repository_, config_repository_, qc_repository_) {}
+          task_run_repository_(session_),
+          result_repository_(session_),
+          alert_repository_(session_),
+          service_(node_repository_, config_repository_, qc_repository_),
+          alert_service_(
+              task_run_repository_, result_repository_, qc_repository_,
+              alert_repository_) {}
 
     ManagementCommandService& service() {
         return service_;
     }
 
-    void commit_if_successful(const ManagementCommandResult& result) {
+    AlertService& alert_service() {
+        return alert_service_;
+    }
+
+    void commit_if_successful(const labbridge::core::Status& status) {
         // 业务拒绝和数据库异常都必须离开作用域触发回滚。
-        if (result.status.ok) {
+        if (status.ok) {
             transaction_.commit();
         }
     }
@@ -38,16 +52,19 @@ private:
     PostgresNodeRepository node_repository_;
     PostgresConfigRepository config_repository_;
     PostgresQcRepository qc_repository_;
+    PostgresTaskRunRepository task_run_repository_;
+    PostgresResultRepository result_repository_;
+    PostgresAlertRepository alert_repository_;
     ManagementCommandService service_;
+    AlertService alert_service_;
 };
 
-template <typename Operation>
-ManagementCommandResult execute_command(
-    const std::string& connection_info,
-    Operation operation) {
+template <typename Result, typename Operation>
+Result execute_command(const std::string& connection_info,
+                       Operation operation) {
     ManagementCommandRequestScope scope{connection_info};
-    const auto result = operation(scope.service());
-    scope.commit_if_successful(result);
+    auto result = operation(scope);
+    scope.commit_if_successful(result.status);
     return result;
 }
 
@@ -59,38 +76,56 @@ PostgresManagementCommandExecutor::PostgresManagementCommandExecutor(
 
 ManagementCommandResult PostgresManagementCommandExecutor::create_data_source(
     const ManagementDataSourceCreateRequest& request) const {
-    return execute_command(
+    return execute_command<ManagementCommandResult>(
         connection_info_,
-        [&request](ManagementCommandService& service) {
-            return service.create_data_source(request);
+        [&request](ManagementCommandRequestScope& scope) {
+            return scope.service().create_data_source(request);
         });
 }
 
 ManagementCommandResult PostgresManagementCommandExecutor::create_qc_rule(
     const ManagementQcRuleCreateRequest& request) const {
-    return execute_command(
+    return execute_command<ManagementCommandResult>(
         connection_info_,
-        [&request](ManagementCommandService& service) {
-            return service.create_qc_rule(request);
+        [&request](ManagementCommandRequestScope& scope) {
+            return scope.service().create_qc_rule(request);
         });
 }
 
 ManagementCommandResult PostgresManagementCommandExecutor::create_task(
     const ManagementTaskCreateRequest& request) const {
-    return execute_command(
+    return execute_command<ManagementCommandResult>(
         connection_info_,
-        [&request](ManagementCommandService& service) {
-            return service.create_task(request);
+        [&request](ManagementCommandRequestScope& scope) {
+            return scope.service().create_task(request);
         });
 }
 
 ManagementCommandResult PostgresManagementCommandExecutor::set_task_enabled(
     const std::string& task_id,
     bool enabled) const {
-    return execute_command(
+    return execute_command<ManagementCommandResult>(
         connection_info_,
-        [&task_id, enabled](ManagementCommandService& service) {
-            return service.set_task_enabled(task_id, enabled);
+        [&task_id, enabled](ManagementCommandRequestScope& scope) {
+            return scope.service().set_task_enabled(task_id, enabled);
+        });
+}
+
+AlertDispositionResult PostgresManagementCommandExecutor::acknowledge_alert(
+    const std::string& alert_id) const {
+    return execute_command<AlertDispositionResult>(
+        connection_info_,
+        [&alert_id](ManagementCommandRequestScope& scope) {
+            return scope.alert_service().acknowledge_alert(alert_id);
+        });
+}
+
+AlertDispositionResult PostgresManagementCommandExecutor::close_alert(
+    const std::string& alert_id) const {
+    return execute_command<AlertDispositionResult>(
+        connection_info_,
+        [&alert_id](ManagementCommandRequestScope& scope) {
+            return scope.alert_service().close_alert(alert_id);
         });
 }
 
