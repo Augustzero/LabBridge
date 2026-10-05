@@ -68,7 +68,7 @@ int main() {
         node_code,
         task,
         "2026-05-26T02:01:00Z",
-        "manual",
+        "scheduled",
     });
     assert(started.status.ok);
     assert(!started.id.empty());

@@ -12,7 +12,7 @@ import RunEvidenceDrawer from '@/components/RunEvidenceDrawer.vue'
 import StatusBadge from '@/components/StatusBadge.vue'
 import UtcTime from '@/components/UtcTime.vue'
 import { usePagedList } from '@/composables/usePagedList'
-import { formatDuration, truncate } from '@/utils/format'
+import { formatDuration, formatTriggerType, truncate } from '@/utils/format'
 
 type StatusFilter = '' | 'pending' | 'running' | 'succeeded' | 'failed'
 
@@ -198,6 +198,11 @@ function openDrawer(row: TaskRunWithStale): void {
 function closeDrawer(): void {
   drawerRunId.value = null
 }
+
+// 抽屉里发起了失败重试并已受理：刷新列表让新运行（ID 最大，排在最前）出现
+function onRetrySubmitted(): void {
+  void refresh()
+}
 </script>
 
 <template>
@@ -260,6 +265,19 @@ function closeDrawer(): void {
           />
         </template>
       </el-table-column>
+      <el-table-column label="触发方式" width="90">
+        <template #default="{ row }">
+          {{ formatTriggerType(row.trigger_type) }}
+        </template>
+      </el-table-column>
+      <el-table-column label="父运行" width="80">
+        <template #default="{ row }">
+          <span v-if="row.retry_of_run_id !== null" class="task-runs-view__run-id">
+            #{{ row.retry_of_run_id }}
+          </span>
+          <span v-else>—</span>
+        </template>
+      </el-table-column>
       <el-table-column label="开始时间" min-width="150">
         <template #default="{ row }">
           <UtcTime :value="row.started_at" />
@@ -278,6 +296,21 @@ function closeDrawer(): void {
       <el-table-column label="条目（成功/失败）" width="150">
         <template #default="{ row }">
           {{ row.items_success }}/{{ row.items_failed }}（共 {{ row.items_total }}）
+        </template>
+      </el-table-column>
+      <el-table-column label="失败文件" width="90">
+        <template #default="{ row }">
+          <span v-if="row.failed_file_count !== null">{{ row.failed_file_count }}</span>
+          <span v-else>—</span>
+          <el-tag
+            v-if="row.retryable"
+            class="task-runs-view__retryable"
+            size="small"
+            type="info"
+            effect="plain"
+          >
+            可重试
+          </el-tag>
         </template>
       </el-table-column>
       <el-table-column label="错误摘要" min-width="200">
@@ -305,6 +338,7 @@ function closeDrawer(): void {
       :run-id="drawerRunId"
       :node-code="nodeCode"
       @close="closeDrawer"
+      @submitted="onRetrySubmitted"
     />
   </div>
 </template>
@@ -331,5 +365,9 @@ function closeDrawer(): void {
 
 .task-runs-view__stale {
   margin-left: 6px;
+}
+
+.task-runs-view__retryable {
+  margin-left: 4px;
 }
 </style>

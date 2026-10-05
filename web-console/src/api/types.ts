@@ -71,6 +71,14 @@ export interface TaskRun {
   scheduled_for: string | null
   trigger_type: string
   execution_key: string | null
+  // 人工请求（manual/retry）受理时写入，定时运行和历史数据为 null
+  requested_at: string | null
+  // 重试运行的直接父运行；普通运行为 null
+  retry_of_run_id: string | null
+  // 失败文件数：null 表示旧报告没有清单（与空数组区分），空数组时为 0
+  failed_file_count: number | null
+  // 仅表示终态与清单满足重试条件，不承诺文件现在存在或任务当前可执行
+  retryable: boolean
   items_total: number
   items_success: number
   items_failed: number
@@ -83,12 +91,43 @@ export interface TaskRunWithStale extends TaskRun {
   stale_after_seconds: number
 }
 
-/** 运行详情：额外携带四类证据计数 */
+/** 终态报告里的文件级失败条目 */
+export interface TaskRunFailedFile {
+  source_path: string
+  original_name: string
+  stage: string
+  message: string
+  // 非空表示该输入已有有效归档，重试按原归档重放；空值表示定点补采
+  archive_raw_file_id: string | null
+}
+
+/** 重试运行创建时固定的输入快照（之后不再变化） */
+export interface TaskRunRetryFile {
+  input_type: 'archive' | 'source'
+  source_path: string
+  original_name: string
+  archive_raw_file_id: string | null
+  storage_path: string
+  size_bytes: number
+  file_hash: string
+  source_mtime: string
+}
+
+/** 运行详情：额外携带四类证据计数与完整文件清单（null = 未提供） */
 export interface TaskRunDetail extends TaskRunWithStale {
   raw_file_count: number
   parsed_record_count: number
   qc_result_count: number
   alert_count: number
+  failed_files: TaskRunFailedFile[] | null
+  retry_files: TaskRunRetryFile[] | null
+}
+
+/** trigger / retry 受理结果：202 只表示请求已保存，不代表执行成功 */
+export interface ManualTaskRunAcceptance {
+  task_run_id: string
+  status: string
+  replayed: boolean
 }
 
 export interface RawFile {
@@ -136,6 +175,9 @@ export interface Alert {
   message: string
   status: string
   created_at: string | null
+  // 处置时间由服务端写首次转换时间，未发生过的转换为 null
+  acknowledged_at: string | null
+  closed_at: string | null
 }
 
 /** keyset 分页包装：next_cursor 为 null 表示没有更多页 */

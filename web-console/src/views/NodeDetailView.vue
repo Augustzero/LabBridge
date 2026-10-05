@@ -130,7 +130,7 @@ function goBack(): void {
         </el-card>
         <el-card shadow="never" class="node-detail__stat">
           <div class="node-detail__stat-value">{{ node.open_alert_count }}</div>
-          <div class="node-detail__stat-label">未处理告警</div>
+          <div class="node-detail__stat-label">未确认告警</div>
         </el-card>
       </div>
 

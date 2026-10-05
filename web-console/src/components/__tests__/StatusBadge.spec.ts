@@ -21,7 +21,14 @@ describe('StatusBadge', () => {
     { group: 'run', value: 'failed', colorClass: 'el-tag--danger', text: '失败' },
     { group: 'qc', value: 'passed', colorClass: 'el-tag--success', text: '通过' },
     { group: 'qc', value: 'failed', colorClass: 'el-tag--danger', text: '不通过' },
-    { group: 'alert', value: 'open', colorClass: 'el-tag--danger', text: '未处理' },
+    { group: 'alert', value: 'open', colorClass: 'el-tag--danger', text: '未确认' },
+    {
+      group: 'alert',
+      value: 'acknowledged',
+      colorClass: 'el-tag--warning',
+      text: '已确认',
+    },
+    { group: 'alert', value: 'closed', colorClass: 'el-tag--info', text: '已关闭' },
   ])(
     '$group=$value 渲染 $text 与对应颜色',
     ({ group, value, colorClass, text }) => {
@@ -53,10 +60,10 @@ describe('StatusBadge', () => {
   })
 
   it('未知字符串枚举值以灰色原始文字兜底', () => {
-    const wrapper = mountBadge('alert', 'acknowledged')
+    const wrapper = mountBadge('alert', 'snoozed')
 
     const tag = wrapper.find('.el-tag')
     expect(tag.classes()).toContain('el-tag--info')
-    expect(tag.text()).toContain('acknowledged')
+    expect(tag.text()).toContain('snoozed')
   })
 })

@@ -2,6 +2,7 @@ import { request } from './http'
 import type {
   Alert,
   DataSource,
+  ManualTaskRunAcceptance,
   Node,
   NodeSummary,
   Page,
@@ -272,7 +273,9 @@ export function listAlerts(
   )
 }
 
-// 本 Phase 唯一写操作：任务启停。服务端仅接受 {"enabled": bool} 单字段 body。
+// 写操作区：请求期间由调用方禁用入口，失败统一抛 ApiError 由 ErrorBanner 呈现。
+
+// 任务启停：服务端仅接受 {"enabled": bool} 单字段 body。
 export function setTaskEnabled(
   taskId: string,
   enabled: boolean,
@@ -283,6 +286,73 @@ export function setTaskEnabled(
       method: 'patch',
       url: `/api/v1/tasks/${encodeURIComponent(taskId)}`,
       data: { enabled },
+    },
+    signal,
+  )
+}
+
+// 人工提交类请求带独立超时：响应丢失时按超时处理，前端保留幂等键等确认，
+// 不会因为列表页共用 httpClient 无超时的配置而无限挂起。
+const MANUAL_SUBMIT_TIMEOUT_MS = 15000
+
+// 对已启用任务提交一次目录扫描（不等 Cron 槽位），202 只表示请求已保存。
+export function triggerTask(
+  taskId: string,
+  idempotencyKey: string,
+  signal?: AbortSignal,
+): Promise<ManualTaskRunAcceptance> {
+  return request(
+    {
+      method: 'post',
+      url: `/api/v1/tasks/${encodeURIComponent(taskId)}/trigger`,
+      data: { idempotency_key: idempotencyKey },
+      timeout: MANUAL_SUBMIT_TIMEOUT_MS,
+    },
+    signal,
+  )
+}
+
+// 对终态 failed 且有失败清单的运行创建重试运行，输入范围由服务端固定。
+export function retryTaskRun(
+  taskRunId: string,
+  idempotencyKey: string,
+  signal?: AbortSignal,
+): Promise<ManualTaskRunAcceptance> {
+  return request(
+    {
+      method: 'post',
+      url: `/api/v1/task-runs/${encodeURIComponent(taskRunId)}/retry`,
+      data: { idempotency_key: idempotencyKey },
+      timeout: MANUAL_SUBMIT_TIMEOUT_MS,
+    },
+    signal,
+  )
+}
+
+// 告警处置：服务端只接受空 JSON 对象，成功 200 返回最新告警。
+export function acknowledgeAlert(
+  alertId: string,
+  signal?: AbortSignal,
+): Promise<Alert> {
+  return request(
+    {
+      method: 'post',
+      url: `/api/v1/alerts/${encodeURIComponent(alertId)}/acknowledge`,
+      data: {},
+    },
+    signal,
+  )
+}
+
+export function closeAlert(
+  alertId: string,
+  signal?: AbortSignal,
+): Promise<Alert> {
+  return request(
+    {
+      method: 'post',
+      url: `/api/v1/alerts/${encodeURIComponent(alertId)}/close`,
+      data: {},
     },
     signal,
   )

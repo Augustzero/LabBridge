@@ -187,6 +187,18 @@ protected:
             [command_executor](const std::string& task_id, bool enabled) {
                 return command_executor->set_task_enabled(task_id, enabled);
             };
+        command_handlers.trigger_task_run =
+            [command_executor](const std::string& task_id,
+                               const std::string& idempotency_key) {
+                return command_executor->trigger_task_run(task_id,
+                                                          idempotency_key);
+            };
+        command_handlers.retry_task_run =
+            [command_executor](const std::string& task_run_id,
+                               const std::string& idempotency_key) {
+                return command_executor->retry_task_run(task_run_id,
+                                                        idempotency_key);
+            };
         command_handlers.acknowledge_alert =
             [command_executor](const std::string& alert_id) {
                 return command_executor->acknowledge_alert(alert_id);

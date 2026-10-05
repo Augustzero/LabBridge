@@ -1,6 +1,7 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import ElementPlus from 'element-plus'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { createMemoryHistory, createRouter } from 'vue-router'
 
 import { ApiError } from '@/api/http'
 import {
@@ -46,6 +47,10 @@ function detailOf(overrides: Partial<TaskRunDetail> = {}): TaskRunDetail {
     scheduled_for: null,
     trigger_type: 'schedule',
     execution_key: null,
+    requested_at: null,
+    retry_of_run_id: null,
+    failed_file_count: null,
+    retryable: false,
     items_total: 2,
     items_success: 2,
     items_failed: 0,
@@ -56,6 +61,8 @@ function detailOf(overrides: Partial<TaskRunDetail> = {}): TaskRunDetail {
     parsed_record_count: 2,
     qc_result_count: 4,
     alert_count: 1,
+    failed_files: null,
+    retry_files: null,
     ...overrides,
   }
 }
@@ -112,6 +119,8 @@ function alertOf(id: string): Alert {
     message: '1 条记录解析失败',
     status: 'open',
     created_at: null,
+    acknowledged_at: null,
+    closed_at: null,
   }
 }
 
@@ -125,9 +134,13 @@ async function mountDrawer(
     nodeCode: null,
   },
 ) {
+  // 抽屉里“在运行历史中查看”要跳路由，测试也挂一个内存 router
+  const router = createRouter({ history: createMemoryHistory(), routes: [] })
+  await router.push('/')
+  await router.isReady()
   const wrapper = mount(RunEvidenceDrawer, {
     props,
-    global: { plugins: [ElementPlus] },
+    global: { plugins: [router, ElementPlus] },
   })
   await flushPromises()
   return wrapper

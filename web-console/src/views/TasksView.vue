@@ -3,12 +3,13 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter, type LocationQuery } from 'vue-router'
 
 import { ApiError } from '@/api/http'
-import { listTasks, setTaskEnabled } from '@/api/management'
+import { listTasks, setTaskEnabled, triggerTask } from '@/api/management'
 import type { Task } from '@/api/types'
 import ErrorBanner from '@/components/ErrorBanner.vue'
 import LoadMoreButton from '@/components/LoadMoreButton.vue'
 import NodeSelect from '@/components/NodeSelect.vue'
 import StatusBadge from '@/components/StatusBadge.vue'
+import { useManualRunSubmit } from '@/composables/useManualRunSubmit'
 import { usePagedList } from '@/composables/usePagedList'
 import { ElMessageBox } from 'element-plus'
 
@@ -142,6 +143,104 @@ async function onToggleEnabled(row: Task): Promise<void> {
     togglingId.value = null
   }
 }
+
+// 执行一次：202 只表示请求已保存。受理信息留在页面上直到用户关闭，
+// 等待中的运行以 Agent 实际开始时间为准，页面不做自动轮询。
+const acceptedRun = ref<{
+  taskName: string
+  nodeCode: string
+  taskId: string
+  runId: string
+  replayed: boolean
+} | null>(null)
+
+// 重试提交时目标任务不变；开始新一轮提交前更新这个引用
+let triggerTarget: Task | null = null
+
+const {
+  submitting: triggerSubmitting,
+  awaitingRetry: triggerAwaiting,
+  error: triggerError,
+  start: startTriggerSubmit,
+  abandon: abandonTriggerSubmit,
+} = useManualRunSubmit((idempotencyKey) =>
+  triggerTask((triggerTarget as Task).id, idempotencyKey),
+)
+
+async function onTriggerRun(row: Task): Promise<void> {
+  try {
+    await ElMessageBox.confirm(
+      `确认对任务「${row.name}」执行一次？将提交一次目录扫描，Agent 空闲时执行，不影响定时调度。`,
+      '执行一次确认',
+      { confirmButtonText: '执行一次', cancelButtonText: '取消', type: 'warning' },
+    )
+  } catch {
+    return
+  }
+
+  triggerTarget = row
+  const acceptance = await startTriggerSubmit()
+  if (acceptance === null) {
+    // 超时等待用户确认重试；其他错误已进入 triggerError
+    return
+  }
+  acceptedRun.value = {
+    taskName: row.name,
+    nodeCode: row.node_code,
+    taskId: row.id,
+    runId: acceptance.task_run_id,
+    replayed: acceptance.replayed,
+  }
+}
+
+async function onRetryTriggerSubmit(): Promise<void> {
+  try {
+    await ElMessageBox.confirm(
+      '上次执行请求未收到响应，服务端可能已受理。是否按原请求重新提交？已受理时会返回同一运行。',
+      '重试提交确认',
+      { confirmButtonText: '重试提交', cancelButtonText: '取消', type: 'warning' },
+    )
+  } catch {
+    return
+  }
+  const acceptance = await startTriggerSubmit()
+  if (acceptance === null || triggerTarget === null) {
+    return
+  }
+  acceptedRun.value = {
+    taskName: triggerTarget.name,
+    nodeCode: triggerTarget.node_code,
+    taskId: triggerTarget.id,
+    runId: acceptance.task_run_id,
+    replayed: acceptance.replayed,
+  }
+}
+
+function viewAcceptedRun(): void {
+  const accepted = acceptedRun.value
+  if (accepted === null) {
+    return
+  }
+  void router.push({
+    path: '/runs',
+    query: { node: accepted.nodeCode, task: accepted.taskId },
+  })
+}
+
+// 提交失败后的横幅重试：操作在确认框里已确认过，直接换新键重新提交
+async function retryTriggerAfterError(): Promise<void> {
+  const acceptance = await startTriggerSubmit()
+  if (acceptance === null || triggerTarget === null) {
+    return
+  }
+  acceptedRun.value = {
+    taskName: triggerTarget.name,
+    nodeCode: triggerTarget.node_code,
+    taskId: triggerTarget.id,
+    runId: acceptance.task_run_id,
+    replayed: acceptance.replayed,
+  }
+}
 </script>
 
 <template>
@@ -162,6 +261,45 @@ async function onToggleEnabled(row: Task): Promise<void> {
 
     <ErrorBanner :error="toggleError" />
     <ErrorBanner :error="error" @retry="refresh" />
+    <ErrorBanner :error="triggerError" @retry="retryTriggerAfterError" />
+
+    <el-alert
+      v-if="triggerAwaiting"
+      class="tasks-view__notice"
+      type="warning"
+      :closable="false"
+      title="上次执行请求未收到响应，服务端可能已受理。"
+    >
+      <div class="tasks-view__notice-actions">
+        <el-button size="small" type="primary" @click="onRetryTriggerSubmit">
+          重试提交
+        </el-button>
+        <el-button size="small" @click="abandonTriggerSubmit">放弃</el-button>
+        <span class="tasks-view__notice-hint">
+          放弃后请到运行历史确认结果，本页不会自动补发
+        </span>
+      </div>
+    </el-alert>
+
+    <el-alert
+      v-if="acceptedRun"
+      class="tasks-view__notice"
+      type="success"
+      :closable="true"
+      @close="acceptedRun = null"
+    >
+      <template #title>
+        任务「{{ acceptedRun.taskName }}」执行请求已受理：运行
+        #{{ acceptedRun.runId
+        }}{{ acceptedRun.replayed ? '（重复请求返回同一运行）' : '' }}，等待
+        Agent 开始执行。
+      </template>
+      <div class="tasks-view__notice-actions">
+        <el-button size="small" type="primary" @click="viewAcceptedRun">
+          查看运行
+        </el-button>
+      </div>
+    </el-alert>
 
     <el-table
       v-loading="loading"
@@ -188,6 +326,19 @@ async function onToggleEnabled(row: Task): Promise<void> {
           />
         </template>
       </el-table-column>
+      <el-table-column label="操作" width="100">
+        <template #default="{ row }">
+          <el-button
+            link
+            type="primary"
+            size="small"
+            :disabled="!row.enabled || triggerSubmitting"
+            @click="onTriggerRun(row)"
+          >
+            执行一次
+          </el-button>
+        </template>
+      </el-table-column>
     </el-table>
 
     <LoadMoreButton
@@ -205,6 +356,22 @@ async function onToggleEnabled(row: Task): Promise<void> {
   align-items: center;
   gap: 16px;
   margin-bottom: 12px;
+}
+
+.tasks-view__notice {
+  margin-bottom: 12px;
+}
+
+.tasks-view__notice-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.tasks-view__notice-hint {
+  color: #909399;
+  font-size: 12px;
 }
 
 .tasks-view__table {

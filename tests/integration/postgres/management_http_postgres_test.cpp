@@ -139,6 +139,16 @@ ManagementCommandHandlers command_handlers(
         [executor](const std::string& task_id, bool enabled) {
             return executor->set_task_enabled(task_id, enabled);
         };
+    value.trigger_task_run =
+        [executor](const std::string& task_id,
+                   const std::string& idempotency_key) {
+            return executor->trigger_task_run(task_id, idempotency_key);
+        };
+    value.retry_task_run =
+        [executor](const std::string& task_run_id,
+                   const std::string& idempotency_key) {
+            return executor->retry_task_run(task_run_id, idempotency_key);
+        };
     value.acknowledge_alert =
         [executor](const std::string& alert_id) {
             return executor->acknowledge_alert(alert_id);

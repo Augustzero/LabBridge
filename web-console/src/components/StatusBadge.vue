@@ -26,7 +26,9 @@ const PRESETS: Record<BadgeGroup, Record<string, BadgePreset | undefined>> = {
     failed: { type: 'danger', text: '不通过' },
   },
   alert: {
-    open: { type: 'danger', text: '未处理' },
+    open: { type: 'danger', text: '未确认' },
+    acknowledged: { type: 'warning', text: '已确认' },
+    closed: { type: 'info', text: '已关闭' },
   },
   task: {
     true: { type: 'success', text: '已启用' },

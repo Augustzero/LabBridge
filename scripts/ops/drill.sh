@@ -55,6 +55,11 @@
 #                            本地请求体超限转人工 → 跨槽位无重复采集 →
 #                            queue 命令在线行为与运行期锁 → 修正上限后
 #                            retry 恢复 → 原执行键作业完成且中心无重复证据
+#   scenario-operator-actions 告警处置 + 任务手动执行 + 失败文件重试
+#                            （Phase 031 收尾）：专用每任务一个不触发的
+#                            Cron，验证确认/关闭状态机、202 受理与幂等重放、
+#                            原归档重放固定范围、定点补采、离线 pending 与
+#                            禁用收尾，全程 SQL 回验
 #
 # 面向 Ubuntu 24.04，依赖 GNU date/df/stat、docker、sqlite3、curl、python3、python3-yaml。
 # 掉电、systemd 主机重启不在本脚本范围，按方案用隔离 Linux 环境另行验证。
@@ -1613,6 +1618,362 @@ cmd_scenario_attention() {
 }
 
 # ---------------------------------------------------------------------------
+# 场景 9：告警处置 + 手动执行 + 失败文件重试（Phase 031 收尾）
+# ---------------------------------------------------------------------------
+
+# 人工操作幂等键：32 位十六进制，一次按钮操作一个
+manual_key() { openssl rand -hex 16; }
+
+# 从统一响应包络里取 data 字段（api 调用后使用）
+api_data_field() {
+  python3 -c 'import json,sys; print(json.loads(sys.argv[1])["data"].get(sys.argv[2], ""))' \
+    "$API_BODY" "$1"
+}
+
+run_status() { psql_q "SELECT status FROM task_runs WHERE id = $1"; }
+
+wait_run_terminal() {
+  local run_id=$1 timeout=${2:-240}
+  wait_sql "SELECT count(*) FROM task_runs WHERE id = $run_id AND status IN ('succeeded','failed')" 1 "$timeout"
+}
+
+# 列数对不上的坏行：解析器报 "fields but the header has"，整文件进失败清单
+make_broken_csv() {
+  local path=$1
+  python3 - "$path" <<'PY'
+import sys
+with open(sys.argv[1], 'w') as f:
+    f.write('station_code,device_code,record_time,temperature,humidity\n')
+    f.write('OPS,DV001,2026-09-18 10:00:00,22.5,57\n')
+    f.write('OPS,DV001,2026-09-18 10:00:05,22.6\n')
+PY
+}
+
+# ops 专用投递：落到独立目录，和每分钟任务的 inbox 互不干扰。
+# 提示走 stderr，stdout 只输出文件名供调用方捕获。
+ops_deliver() {
+  local fixture=$1 prefix=$2
+  [[ -r $fixture ]] || die "交付源文件不可读: $fixture"
+  mkdir -p -- "$WORKDIR/inbox/ops"
+  local name="${prefix}-$(date +%Y%m%dT%H%M%S)-$RANDOM.csv"
+  cp -- "$fixture" "$WORKDIR/inbox/ops/$name"
+  note "已向 ops 目录交付 $name" >&2
+  printf '%s' "$name"
+}
+
+# 建独立的 ops 数据源 + 不触发的 Cron 任务（0 3 * * *），重跑时复用
+ensure_ops_task() {
+  local node=$1 source_id task_id
+  if [[ -z $(psql_q "SELECT ds.id FROM data_sources ds JOIN nodes n ON n.id = ds.node_id WHERE n.node_code = '$node' AND ds.name = 'ops inbox'") ]]; then
+    api POST /api/v1/data-sources "$(python3 - "$node" "$WORKDIR/inbox/ops" <<'PY'
+import json, sys
+node, root = sys.argv[1:3]
+print(json.dumps({
+    "node_code": node, "source_type": "local_directory",
+    "name": "ops inbox",
+    "config": {"root_path": root, "extension": ".csv"},
+    "enabled": True}))
+PY
+)"
+    [[ $API_CODE == 20* ]] || die "建 ops 数据源失败: HTTP $API_CODE $API_BODY"
+  fi
+  source_id=$(psql_q "SELECT ds.id FROM data_sources ds JOIN nodes n ON n.id = ds.node_id WHERE n.node_code = '$node' AND ds.name = 'ops inbox'")
+  task_id=$(psql_q "SELECT t.id FROM tasks t JOIN nodes n ON n.id = t.node_id WHERE n.node_code = '$node' AND t.name = 'ops operator actions'")
+  if [[ -z $task_id ]]; then
+    local rule_required rule_timestamp
+    rule_required=$(psql_q "SELECT id FROM qc_rules WHERE name = 'drill-required-fields'")
+    rule_timestamp=$(psql_q "SELECT id FROM qc_rules WHERE name = 'drill-timestamp'")
+    api POST /api/v1/tasks "$(python3 - "$node" "$source_id" "$rule_required" "$rule_timestamp" <<'PY'
+import json, sys
+node, source_id, r1, r2 = sys.argv[1:5]
+print(json.dumps({
+    "node_code": node, "data_source_id": source_id,
+    "name": "ops operator actions", "task_type": "local_file_import",
+    "schedule_expr": "0 3 * * *", "parser_type": "csv_observation",
+    "qc_profile": "default", "qc_rule_ids": [r1, r2], "enabled": True}))
+PY
+)"
+    [[ $API_CODE == 20* ]] || die "建 ops 任务失败: HTTP $API_CODE $API_BODY"
+    task_id=$(psql_q "SELECT t.id FROM tasks t JOIN nodes n ON n.id = t.node_id WHERE n.node_code = '$node' AND t.name = 'ops operator actions'")
+  else
+    # 上一轮收尾时停用过；本轮要用，先启用
+    api PATCH "/api/v1/tasks/$task_id" '{"enabled":true}'
+    [[ $API_CODE == 200 ]] || die "启用 ops 任务失败: HTTP $API_CODE $API_BODY"
+  fi
+  printf '%s' "$task_id"
+}
+
+cmd_scenario_operator_actions() {
+  require_workdir
+  step '场景 9：告警处置 + 手动执行 + 失败文件重试（Phase 031 收尾）'
+
+  "$(agent_binary)" queue --help >/dev/null 2>&1 \
+    || die "当前 Agent 二进制不支持 queue 命令，说明还没升级到 031 版本"
+
+  local node=drill-a cfg="$WORKDIR/etc/drill-a/agent.yaml" pristine="$WORKDIR/etc/drill-a/agent.yaml.pre-ops"
+  agent_running "$node" && agent_stop "$node"
+  # ops 任务用独立扫描目录：先把目录加进 allowed_local_roots 再建数据源
+  [[ -e $pristine ]] || cp -- "$cfg" "$pristine"
+  if ! grep -q 'inbox/ops' "$cfg"; then
+    sed -i "\|^  allowed_local_roots:|a\    - $WORKDIR/inbox/ops" "$cfg"
+  fi
+  mkdir -p -- "$WORKDIR/inbox/ops"
+  agent_start "$node"
+  # 只等 drill-a 心跳：drill-b 可能被其他场景停着，与本场景无关
+  wait_sql "SELECT count(*) FROM nodes WHERE node_code = 'drill-a' AND last_heartbeat_at > now() - interval '30 seconds'" 1 90 \
+    || die 'drill-a 心跳没有恢复'
+
+  local ops_task_id
+  ops_task_id=$(ensure_ops_task "$node")
+  note "ops 任务 #$ops_task_id（Cron 0 3 * * *，演练窗口内不触发）"
+
+  # 本轮所有断言只用本轮前缀，历史轮次留在库里的记录不参与。
+  # 解析失败的文件不会写处理指纹，上轮中止残留的 broken 文件会被重新
+  # 扫进本轮运行，先把它们挪出扫描范围（只挪本场景自己命名规则的文件）。
+  if compgen -G "$WORKDIR/inbox/ops/*-broken-*.csv" > /dev/null; then
+    mkdir -p -- "$WORKDIR/removed/ops-leftovers"
+    find "$WORKDIR/inbox/ops" -maxdepth 1 -name '*-broken-*.csv' \
+      -exec mv -t "$WORKDIR/removed/ops-leftovers/" {} +
+    note '已把历史轮次残留的 broken 文件挪出扫描范围'
+  fi
+
+  local prefix="ops-$(date +%H%M%S)-$RANDOM"
+
+  step 'B. 离线受理与幂等重放：Agent 停机时提交，冲突与重放由服务端裁决'
+  agent_stop "$node"
+  local key1 key2 run_id replay_id
+  key1=$(manual_key)
+  api POST "/api/v1/tasks/$ops_task_id/trigger" "{\"idempotency_key\":\"$key1\"}"
+  check_eq '离线提交人工执行返回 202' 202 "$API_CODE"
+  run_id=$(api_data_field task_run_id)
+  check_eq '受理状态为 pending' pending "$(api_data_field status)"
+  check_eq '落库状态 pending（等待 Agent）' pending "$(run_status "$run_id")"
+  check_eq 'trigger_type 为 manual' manual \
+    "$(psql_q "SELECT trigger_type FROM task_runs WHERE id = $run_id")"
+  check_eq 'requested_at 已写、started_at 为空' 'true|true' \
+    "$(psql_q "SELECT (requested_at IS NOT NULL)::text || '|' || (started_at IS NULL)::text FROM task_runs WHERE id = $run_id")"
+  check_eq '执行键为 operator: 前缀' "operator:$key1" \
+    "$(psql_q "SELECT execution_key FROM task_runs WHERE id = $run_id")"
+
+  key2=$(manual_key)
+  api POST "/api/v1/tasks/$ops_task_id/trigger" "{\"idempotency_key\":\"$key2\"}"
+  check_eq '同任务另一 pending 人工请求返回 409' 409 "$API_CODE"
+  # 消息形如 "task already has a pending manual run: <id>"，ID 不带引号
+  if grep -q "pending manual run: $run_id" <<<"$API_BODY"; then
+    pass "409 消息携带已有运行 ID（#$run_id）"
+  else
+    fail "409 消息没有携带已有运行 ID"
+  fi
+
+  api POST "/api/v1/tasks/$ops_task_id/trigger" "{\"idempotency_key\":\"$key1\"}"
+  check_eq '原键重放返回 202' 202 "$API_CODE"
+  replay_id=$(api_data_field task_run_id)
+  check_eq '原键重放返回同一运行 ID' "$run_id" "$replay_id"
+  check_eq '重放响应标记 replayed' True "$(api_data_field replayed)"
+
+  step 'B2. 恢复 Agent 后同一请求照常执行；无新文件允许零条成功'
+  agent_start "$node"
+  if wait_run_terminal "$run_id"; then
+    pass '离线提交的请求在 Agent 恢复后完成（中心运行 ID 未替换）'
+  else
+    fail '240s 内运行没有到终态'
+  fi
+  check_eq '运行最终 succeeded（空收件箱零文件也成功）' succeeded "$(run_status "$run_id")"
+  if [[ -z $(find "$WORKDIR/inbox/ops" -maxdepth 1 -name '*.csv' -print -quit) ]]; then
+    check_eq '零文件运行 items_total 为 0' 0 \
+      "$(psql_q "SELECT items_total FROM task_runs WHERE id = $run_id")"
+  else
+    note 'ops 目录有历史轮次残留文件，零文件断言跳过（去重指纹会跳过已处理项）'
+  fi
+
+  step 'C. 告警处置：确认 → 关闭 → 重复提交不倒退，直接关闭不写确认时间'
+  local good bad
+  good=$(ops_deliver tests/fixtures/ops/observation-normal.csv "$prefix-good")
+  bad=$(ops_deliver tests/fixtures/ops/observation-qc-flag.csv "$prefix-qc")
+  key1=$(manual_key)
+  api POST "/api/v1/tasks/$ops_task_id/trigger" "{\"idempotency_key\":\"$key1\"}"
+  [[ $API_CODE == 202 ]] || die "告警数据采集提交失败: HTTP $API_CODE $API_BODY"
+  local alert_run_id
+  alert_run_id=$(api_data_field task_run_id)
+  wait_run_terminal "$alert_run_id" || die '告警数据运行没有到终态'
+  check_eq 'QC 坏行文件所在运行 succeeded（QC 不通过不是执行失败）' succeeded "$(run_status "$alert_run_id")"
+  if wait_sql "SELECT count(*) FROM alerts WHERE task_run_id = $alert_run_id" 2 60; then
+    pass 'QC 失败行生成告警'
+  else
+    die '60s 内没有等到告警'
+  fi
+
+  local alert1 alert2 ack_at
+  alert1=$(psql_q "SELECT id FROM alerts WHERE task_run_id = $alert_run_id ORDER BY id LIMIT 1")
+  alert2=$(psql_q "SELECT id FROM alerts WHERE task_run_id = $alert_run_id ORDER BY id DESC LIMIT 1")
+  api POST "/api/v1/alerts/$alert1/acknowledge" '{}'
+  check_eq '确认告警返回 200' 200 "$API_CODE"
+  check_eq '确认后状态 acknowledged' acknowledged \
+    "$(psql_q "SELECT status FROM alerts WHERE id = $alert1")"
+  ack_at=$(psql_q "SELECT acknowledged_at FROM alerts WHERE id = $alert1")
+  api POST "/api/v1/alerts/$alert1/acknowledge" '{}'
+  check_eq '重复确认仍 200' 200 "$API_CODE"
+  check_eq '重复确认不刷新首次时间' "$ack_at" \
+    "$(psql_q "SELECT acknowledged_at FROM alerts WHERE id = $alert1")"
+  api POST "/api/v1/alerts/$alert1/close" '{}'
+  check_eq '关闭已确认告警 200' 200 "$API_CODE"
+  check_eq '关闭后状态 closed' closed "$(psql_q "SELECT status FROM alerts WHERE id = $alert1")"
+  check_eq '关闭保留确认时间' "$ack_at" \
+    "$(psql_q "SELECT acknowledged_at FROM alerts WHERE id = $alert1")"
+  api POST "/api/v1/alerts/$alert1/close" '{}'
+  check_eq '重复关闭仍 200' 200 "$API_CODE"
+  api POST "/api/v1/alerts/$alert1/acknowledge" '{}'
+  check_eq '关闭后再确认返回 409' 409 "$API_CODE"
+
+  api POST "/api/v1/alerts/$alert2/close" '{}'
+  check_eq '直接关闭 open 告警 200' 200 "$API_CODE"
+  check_eq '直接关闭不写确认时间（acknowledged_at 保持 NULL）' 'true' \
+    "$(psql_q "SELECT (acknowledged_at IS NULL)::text FROM alerts WHERE id = $alert2")"
+  check_eq '节点 open_alert_count 只统计 open（处置后本轮归零）' 0 \
+    "$(psql_q "SELECT count(*) FROM alerts a JOIN nodes n ON n.id = a.node_id WHERE n.node_code = '$node' AND a.status = 'open' AND a.task_run_id = $alert_run_id")"
+
+  step 'D. 固定范围重试：只重放原归档，新增文件与成功文件不进入新运行'
+  local broken broken_name
+  broken="$WORKDIR/staging/$prefix-broken.csv"
+  make_broken_csv "$broken"
+  broken_name=$(ops_deliver "$broken" "$prefix-broken")
+  key1=$(manual_key)
+  api POST "/api/v1/tasks/$ops_task_id/trigger" "{\"idempotency_key\":\"$key1\"}"
+  [[ $API_CODE == 202 ]] || die "坏文件采集提交失败: HTTP $API_CODE $API_BODY"
+  local failed_run_id
+  failed_run_id=$(api_data_field task_run_id)
+  wait_run_terminal "$failed_run_id" || die '坏文件运行没有到终态'
+  check_eq '解析错误使运行 failed' failed "$(run_status "$failed_run_id")"
+  check_eq '失败清单记录坏文件' 1 \
+    "$(psql_q "SELECT count(*) FROM task_runs, jsonb_array_elements(failed_files) e WHERE task_runs.id = $failed_run_id AND e->>'original_name' = '$broken_name'")"
+  check_eq '失败阶段为 parse' parse \
+    "$(psql_q "SELECT e->>'stage' FROM task_runs, jsonb_array_elements(failed_files) e WHERE task_runs.id = $failed_run_id AND e->>'original_name' = '$broken_name'")"
+  local archive_ref archive_hash
+  archive_ref=$(psql_q "SELECT e->>'archive_raw_file_id' FROM task_runs, jsonb_array_elements(failed_files) e WHERE task_runs.id = $failed_run_id AND e->>'original_name' = '$broken_name'")
+  [[ -n $archive_ref ]] && pass '失败条目携带本次归档引用（重试按归档重放）' \
+    || fail '失败条目缺少归档引用'
+  archive_hash=$(psql_q "SELECT file_hash FROM raw_files WHERE id = $archive_ref")
+
+  # 移走坏文件源文件 + 新增 gamma：重试输入不能被它们影响
+  mv -- "$WORKDIR/inbox/ops/$broken_name" "$WORKDIR/staging/$broken_name.moved"
+  local gamma_name
+  make_observation_csv "$WORKDIR/staging/$prefix-gamma.csv" 5 $((31000 + RANDOM))
+  gamma_name=$(ops_deliver "$WORKDIR/staging/$prefix-gamma.csv" "$prefix-gamma")
+
+  key1=$(manual_key)
+  api POST "/api/v1/task-runs/$failed_run_id/retry" "{\"idempotency_key\":\"$key1\"}"
+  check_eq '失败文件重试受理 202' 202 "$API_CODE"
+  local child_run_id
+  child_run_id=$(api_data_field task_run_id)
+  check_eq '子运行记录父运行' "$failed_run_id" \
+    "$(psql_q "SELECT retry_of_run_id::text FROM task_runs WHERE id = $child_run_id")"
+  check_eq 'retry_files 固定为 1 个归档输入' 1 \
+    "$(psql_q "SELECT jsonb_array_length(retry_files) FROM task_runs WHERE id = $child_run_id")"
+  check_eq '重试输入类型为 archive' archive \
+    "$(psql_q "SELECT retry_files->0->>'input_type' FROM task_runs WHERE id = $child_run_id")"
+  check_eq '子运行 trigger_type 为 retry' retry \
+    "$(psql_q "SELECT trigger_type FROM task_runs WHERE id = $child_run_id")"
+  wait_run_terminal "$child_run_id" || die '重试运行没有到终态'
+  check_eq '坏内容未修，子运行仍 failed' failed "$(run_status "$child_run_id")"
+  check_eq '子运行只处理坏文件（恰好 1 个归档副本）' 1 \
+    "$(psql_q "SELECT count(*) FROM raw_files WHERE task_run_id = $child_run_id")"
+  check_eq '归档副本内容与原归档一致（哈希相同）' "$archive_hash" \
+    "$(psql_q "SELECT file_hash FROM raw_files WHERE task_run_id = $child_run_id LIMIT 1")"
+  check_eq '新增 gamma 文件不进入重试运行' 0 \
+    "$(psql_q "SELECT count(*) FROM raw_files WHERE original_name = '$gamma_name'")"
+  check_eq '子运行失败清单仍指向该文件' 1 \
+    "$(psql_q "SELECT count(*) FROM task_runs, jsonb_array_elements(failed_files) e WHERE task_runs.id = $child_run_id AND e->>'original_name' = '$broken_name'")"
+
+  step 'D2. 从子运行继续重试：范围不扩大，仍只有这一个目标'
+  key1=$(manual_key)
+  api POST "/api/v1/task-runs/$child_run_id/retry" "{\"idempotency_key\":\"$key1\"}"
+  [[ $API_CODE == 202 ]] || die "孙运行重试受理失败: HTTP $API_CODE $API_BODY"
+  local grandchild_run_id
+  grandchild_run_id=$(api_data_field task_run_id)
+  wait_run_terminal "$grandchild_run_id" || die '孙运行没有到终态'
+  check_eq '孙运行仍只处理 1 个目标' 1 \
+    "$(psql_q "SELECT count(*) FROM raw_files WHERE task_run_id = $grandchild_run_id")"
+
+  step 'E. 定点补采：采集读取失败无归档引用，修正后按原路径补采'
+  local rescue rescue_name
+  make_observation_csv "$WORKDIR/staging/$prefix-rescue.csv" 5 $((41000 + RANDOM))
+  rescue_name=$(ops_deliver "$WORKDIR/staging/$prefix-rescue.csv" "$prefix-rescue")
+  chmod 000 "$WORKDIR/inbox/ops/$rescue_name"
+  key1=$(manual_key)
+  api POST "/api/v1/tasks/$ops_task_id/trigger" "{\"idempotency_key\":\"$key1\"}"
+  [[ $API_CODE == 202 ]] || die "补采基线提交失败: HTTP $API_CODE $API_BODY"
+  local unreadable_run_id
+  unreadable_run_id=$(api_data_field task_run_id)
+  wait_run_terminal "$unreadable_run_id" || die '读取失败运行没有到终态'
+  check_eq '读取失败使运行 failed' failed "$(run_status "$unreadable_run_id")"
+  check_eq '失败清单记录读取失败文件' 1 \
+    "$(psql_q "SELECT count(*) FROM task_runs, jsonb_array_elements(failed_files) e WHERE task_runs.id = $unreadable_run_id AND e->>'original_name' = '$rescue_name'")"
+  check_eq '失败阶段为 read' read \
+    "$(psql_q "SELECT e->>'stage' FROM task_runs, jsonb_array_elements(failed_files) e WHERE task_runs.id = $unreadable_run_id AND e->>'original_name' = '$rescue_name'")"
+  check_eq '读取失败没有归档引用（空字符串表示未取得归档）' '' \
+    "$(psql_q "SELECT COALESCE(e->>'archive_raw_file_id','') FROM task_runs, jsonb_array_elements(failed_files) e WHERE task_runs.id = $unreadable_run_id AND e->>'original_name' = '$rescue_name'")"
+
+  chmod 644 "$WORKDIR/inbox/ops/$rescue_name"
+  key1=$(manual_key)
+  api POST "/api/v1/task-runs/$unreadable_run_id/retry" "{\"idempotency_key\":\"$key1\"}"
+  check_eq '定点补采受理 202' 202 "$API_CODE"
+  local rescue_run_id
+  rescue_run_id=$(api_data_field task_run_id)
+  check_eq '补采输入类型为 source' source \
+    "$(psql_q "SELECT retry_files->0->>'input_type' FROM task_runs WHERE id = $rescue_run_id")"
+  wait_run_terminal "$rescue_run_id" || die '补采运行没有到终态'
+  check_eq '修正原因后补采成功' succeeded "$(run_status "$rescue_run_id")"
+  check_eq '补采后失败清单为空数组' '[]' \
+    "$(psql_q "SELECT failed_files::text FROM task_runs WHERE id = $rescue_run_id")"
+  check_eq '补采文件恰好一份新证据' 1 \
+    "$(psql_q "SELECT count(*) FROM raw_files WHERE original_name = '$rescue_name'")"
+
+  step 'F. 开始前停用：未执行的人工请求收尾为 failed，重新启用不自动恢复'
+  agent_stop "$node"
+  key1=$(manual_key)
+  api POST "/api/v1/tasks/$ops_task_id/trigger" "{\"idempotency_key\":\"$key1\"}"
+  [[ $API_CODE == 202 ]] || die "停用前提交失败: HTTP $API_CODE $API_BODY"
+  local pending_run_id
+  pending_run_id=$(api_data_field task_run_id)
+  check_eq '停机状态受理为 pending' pending "$(run_status "$pending_run_id")"
+  api PATCH "/api/v1/tasks/$ops_task_id" '{"enabled":false}'
+  [[ $API_CODE == 200 ]] || die "停用任务失败: HTTP $API_CODE $API_BODY"
+  check_eq '未开始的请求被收尾为 failed' failed "$(run_status "$pending_run_id")"
+  check_eq '收尾清单为空数组' '[]' \
+    "$(psql_q "SELECT failed_files::text FROM task_runs WHERE id = $pending_run_id")"
+  if psql_q "SELECT COALESCE(error_summary,'') FROM task_runs WHERE id = $pending_run_id" | grep -q '停用'; then
+    pass '收尾摘要注明任务被停用'
+  else
+    fail '收尾摘要没有注明停用原因'
+  fi
+  agent_start "$node"
+  sleep 25
+  check_eq 'Agent 恢复后不执行已收尾的请求（仍 failed）' failed "$(run_status "$pending_run_id")"
+  api POST "/api/v1/tasks/$ops_task_id/trigger" "{\"idempotency_key\":\"$(manual_key)\"}"
+  check_eq '停用任务的执行请求返回 409' 409 "$API_CODE"
+
+  step 'G. 旧运行无失败清单不可按文件重试'
+  local legacy_run
+  legacy_run=$(psql_q "SELECT id FROM task_runs WHERE status = 'failed' AND failed_files IS NULL ORDER BY id LIMIT 1")
+  if [[ -n $legacy_run ]]; then
+    api POST "/api/v1/task-runs/$legacy_run/retry" "{\"idempotency_key\":\"$(manual_key)\"}"
+    check_eq '无清单旧运行重试返回 409' 409 "$API_CODE"
+  else
+    note '库里没有 failed_files 为 NULL 的旧运行，本项跳过（031-02 专项已验证）'
+  fi
+
+  step 'H. 收尾：还原 Agent 配置，证据链回验'
+  agent_stop "$node"
+  mv -- "$pristine" "$cfg"
+  agent_start "$node"
+  wait_sql "SELECT count(*) FROM nodes WHERE node_code = 'drill-a' AND last_heartbeat_at > now() - interval '30 seconds'" 1 90 \
+    || fail '收尾重启后心跳没有恢复'
+  verify_evidence
+  log_line "operator-actions prefix=$prefix ops_task=$ops_task_id"
+  finish_scenario scenario-operator-actions
+}
+
+# ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
 
@@ -1651,6 +2012,7 @@ main() {
     scenario-backup-restore) cmd_scenario_backup_restore ;;
     scenario-scale) cmd_scenario_scale "${args[@]}" ;;
     scenario-attention) cmd_scenario_attention ;;
+    scenario-operator-actions) cmd_scenario_operator_actions ;;
     *) printf '未知命令: %s\n' "$cmd" >&2; usage >&2; exit 2 ;;
   esac
 }

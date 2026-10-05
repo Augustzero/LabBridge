@@ -83,6 +83,10 @@ function runOf(id: string, overrides: Partial<TaskRunWithStale> = {}): TaskRunWi
     scheduled_for: null,
     trigger_type: 'schedule',
     execution_key: null,
+    requested_at: null,
+    retry_of_run_id: null,
+    failed_file_count: null,
+    retryable: false,
     items_total: 2,
     items_success: 2,
     items_failed: 0,
@@ -125,6 +129,8 @@ beforeEach(() => {
     parsed_record_count: 2,
     qc_result_count: 4,
     alert_count: 1,
+    failed_files: null,
+    retry_files: null,
   })
   listRawFilesMock.mockResolvedValue(pageOf([]))
   listParsedRecordsMock.mockResolvedValue(pageOf([]))

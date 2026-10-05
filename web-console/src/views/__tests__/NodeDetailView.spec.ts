@@ -61,6 +61,10 @@ function runOf(): TaskRun {
     scheduled_for: null,
     trigger_type: 'schedule',
     execution_key: null,
+    requested_at: null,
+    retry_of_run_id: null,
+    failed_file_count: null,
+    retryable: false,
     items_total: 1,
     items_success: 1,
     items_failed: 0,
@@ -103,7 +107,7 @@ describe('NodeDetailView', () => {
     expect(findNodeMock).toHaveBeenCalledWith('LAB-01')
     expect(wrapper.text()).toContain('实验室 1 号节点')
     expect(wrapper.text()).toContain('启用任务')
-    expect(wrapper.text()).toContain('未处理告警')
+    expect(wrapper.text()).toContain('未确认告警')
     expect(wrapper.text()).toContain('run-9')
     expect(wrapper.text()).toContain('成功')
     expect(wrapper.text()).toContain('2026-01-02 03:04:05 UTC')
