@@ -561,7 +561,11 @@ TEST(TaskExecutorTest, ArchiveFailureProducesFailedTerminalReport) {
     EXPECT_EQ(
         client.reports.front().status,
         labbridge::core::TaskRunStatus::Failed);
-    EXPECT_EQ(client.reports.front().items_failed, 1);
+    // 归档失败按文件级失败计入清单，不与解析行数混作同一指标。
+    EXPECT_EQ(client.reports.front().items_failed, 0);
+    ASSERT_TRUE(client.reports.front().has_failed_files);
+    ASSERT_EQ(client.reports.front().failed_files.size(), 1U);
+    EXPECT_EQ(client.reports.front().failed_files.front().stage, "archive");
     EXPECT_FALSE(client.reports.front().error_summary.empty());
 }
 
@@ -621,19 +625,9 @@ TEST(TaskExecutorTest, ArchiveConflictMovesJobToRequiresAttention) {
         "2026-08-08T08:00:01Z",
         "scheduled",
     };
-    store.begin_job(task, request);
+    store.begin_job(task, request, {});
     store.accept_start(request.execution_key, "run-1");
-    store.save_file_plan(request.execution_key,
-                         {
-                             {0,
-                              (tree.inbox() / "conflict.csv").string(),
-                              "conflict.csv",
-                              "2026-08-08T08:00:00Z",
-                              0,
-                              std::string(64, '0'),
-                              task.id + "\nfp",
-                              archive_path.string()},
-                         });
+    store.save_file_plan(request.execution_key, { {0, (tree.inbox() / "conflict.csv").string(), "conflict.csv", "2026-08-08T08:00:00Z", 0, std::string(64, '0'), task.id + "\nfp", archive_path.string()}, }, {});
 
     executor.execute(scheduled(task));
 
@@ -825,8 +819,8 @@ TEST(TaskExecutorTest, PermanentFailureOfOneJobDoesNotBlockOtherRecovery) {
     labbridge::agent::StartTaskRunRequest healthy_request{
         task.node_code, task.id, "execution-b-healthy",
         "2026-09-20T08:05:00Z", "2026-09-20T08:05:01Z", "scheduled"};
-    store.begin_job(task, rejected_request);
-    store.begin_job(task, healthy_request);
+    store.begin_job(task, rejected_request, {});
+    store.begin_job(task, healthy_request, {});
     client.permanently_rejected_keys = {rejected_request.execution_key};
 
     // 同一轮恢复：第一条转人工，第二条照常跑完，互不影响。
@@ -972,8 +966,8 @@ TEST(TaskExecutorTest, StopRequestPreventsRecoveryOfRemainingJobs) {
     labbridge::agent::StartTaskRunRequest second{
         task.node_code, task.id, "execution-stop-second",
         "2026-09-20T08:05:00Z", "2026-09-20T08:05:01Z", "scheduled"};
-    store.begin_job(task, first);
-    store.begin_job(task, second);
+    store.begin_job(task, first, {});
+    store.begin_job(task, second, {});
 
     // 停止请求先到：恢复循环一条作业都不启动，两条原样留在队列里。
     executor.request_stop();

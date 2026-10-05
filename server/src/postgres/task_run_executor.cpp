@@ -2,6 +2,9 @@
 
 #include "labbridge/server/postgres/config_repository.h"
 #include "labbridge/server/postgres/libpq_sql_session.h"
+#include "labbridge/server/postgres/node_repository.h"
+#include "labbridge/server/postgres/qc_repository.h"
+#include "labbridge/server/postgres/result_repository.h"
 #include "labbridge/server/postgres/sql_transaction.h"
 #include "labbridge/server/postgres/task_run_repository.h"
 
@@ -18,7 +21,12 @@ TaskRunCreateResult PostgresTaskRunExecutor::start(
     SqlTransaction transaction{session};
     PostgresConfigRepository config_repository{session};
     PostgresTaskRunRepository task_run_repository{session};
-    TaskRunService service{config_repository, task_run_repository};
+    PostgresNodeRepository node_repository{session};
+    PostgresQcRepository qc_repository{session};
+    PostgresResultRepository result_repository{session};
+    TaskRunService service{config_repository, task_run_repository,
+                           node_repository, qc_repository,
+                           result_repository};
 
     auto result = service.start(request);
     if (result.status.ok) {

@@ -156,6 +156,16 @@ ArchivedLocalFile LocalArchiveStore::archive(
     const std::string& task_run_id,
     std::size_t ordinal,
     const LocalFileMetadata& source) const {
+    return archive(task_id, task_run_id, ordinal, source,
+                   source.source_path);
+}
+
+ArchivedLocalFile LocalArchiveStore::archive(
+    const std::string& task_id,
+    const std::string& task_run_id,
+    std::size_t ordinal,
+    const LocalFileMetadata& source,
+    const labbridge::core::fs::path& input_path) const {
     if (!is_safe_segment(task_id) || !is_safe_segment(task_run_id)) {
         throw std::invalid_argument("task and task run IDs must be safe path segments");
     }
@@ -177,7 +187,7 @@ ArchivedLocalFile LocalArchiveStore::archive(
     // manifest 永远不会指向半写入的归档证据。
     try {
         labbridge::core::fs::copy_file(
-            source.source_path, temporary,
+            input_path, temporary,
             labbridge::core::fs::copy_options::none);
         const auto archive_size = labbridge::core::fs::file_size(temporary);
         const auto archive_hash = sha256_file_hex(temporary);
@@ -200,7 +210,8 @@ ArchivedLocalFile LocalArchiveStore::archive(
 }
 ArchivedLocalFile LocalArchiveStore::recover_archive(
     const LocalFileMetadata& source,
-    const labbridge::core::fs::path& archive_path) const {
+    const labbridge::core::fs::path& archive_path,
+    const labbridge::core::fs::path& input_path) const {
     if (labbridge::core::fs::exists(archive_path)) {
         if (!labbridge::core::fs::is_regular_file(archive_path) ||
             labbridge::core::fs::file_size(archive_path) !=
@@ -226,7 +237,8 @@ ArchivedLocalFile LocalArchiveStore::recover_archive(
         parent.parent_path().filename().string(),
         parent.filename().string(),
         static_cast<std::size_t>(std::stoull(filename.substr(0, separator))),
-        source);
+        source,
+        input_path);
 }
 labbridge::core::fs::path LocalArchiveStore::plan_archive_path(
     const std::string& task_id,

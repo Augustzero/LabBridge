@@ -66,6 +66,11 @@ public:
         }
     }
 
+    labbridge::agent::PendingDispatchResult execute_pending(
+        labbridge::agent::ManualTaskExecution) override {
+        return labbridge::agent::PendingDispatchResult::Dispatched;
+    }
+
     void request_stop() noexcept override {}
 
     std::vector<labbridge::agent::ScheduledTaskExecution> executions;
@@ -79,7 +84,7 @@ TEST(TaskSchedulerTest, StartsAfterConfigTimeAndSortsNumericTaskIds) {
     labbridge::agent::TaskScheduler scheduler{executor, time};
     auto invalid = task("bad", "1,2 * * * *");
     scheduler.replace_config(
-        {task("10"), task("a"), std::move(invalid), task("2")});
+        {task("10"), task("a"), std::move(invalid), task("2")}, {});
     time.on_wait = [&](std::size_t wait) {
         ASSERT_EQ(wait, 1U);
         EXPECT_TRUE(executor.executions.empty());
@@ -112,15 +117,16 @@ TEST(TaskSchedulerTest, PreservesUnchangedProgressAndResetsChangedTasks) {
     ScriptedTimeSource time;
     RecordingExecutor executor;
     labbridge::agent::TaskScheduler scheduler{executor, time};
-    scheduler.replace_config({task("1"), task("2"), task("removed")});
+    scheduler.replace_config(
+        {task("1"), task("2"), task("removed")}, {});
     time.on_wait = [&](std::size_t wait) {
         if (wait == 1U) {
             time.system = SystemTimePoint{40s};
             auto unchanged = task("1");
             unchanged.name = "display name changed";
             scheduler.replace_config(
-                {std::move(unchanged), task("2", "2 * * * *"),
-                 task("bad", "* * * *")});
+        {std::move(unchanged), task("2", "2 * * * *"),
+                 task("bad", "* * * *")}, {});
         } else {
             ASSERT_EQ(wait, 2U);
             time.system = SystemTimePoint{60s};
@@ -139,7 +145,8 @@ TEST(TaskSchedulerTest, ConfigRefreshCancelsDueTaskNotYetStarted) {
     ScriptedTimeSource time;
     RecordingExecutor executor;
     labbridge::agent::TaskScheduler scheduler{executor, time};
-    scheduler.replace_config({task("1"), task("2")});
+    scheduler.replace_config(
+        {task("1"), task("2")}, {});
     time.on_wait = [&](std::size_t wait) {
         if (wait == 1U) {
             time.system = SystemTimePoint{60s};
@@ -149,7 +156,8 @@ TEST(TaskSchedulerTest, ConfigRefreshCancelsDueTaskNotYetStarted) {
     };
     executor.on_execute = [&](const auto&) {
         ASSERT_EQ(executor.executions.size(), 1U);
-        scheduler.replace_config({task("1")});
+        scheduler.replace_config(
+        {task("1")}, {});
     };
 
     scheduler.run();
@@ -162,7 +170,8 @@ TEST(TaskSchedulerTest, SkipsSlotsMissedDuringLongExecution) {
     ScriptedTimeSource time;
     RecordingExecutor executor;
     labbridge::agent::TaskScheduler scheduler{executor, time};
-    scheduler.replace_config({task("1")});
+    scheduler.replace_config(
+        {task("1")}, {});
     time.on_wait = [&](std::size_t wait) {
         time.system = wait == 1U ? SystemTimePoint{60s}
                                  : SystemTimePoint{4min};
@@ -188,7 +197,8 @@ TEST(TaskSchedulerTest, SkipsForwardJumpAndDoesNotRepeatAfterBackwardJump) {
     ScriptedTimeSource time;
     RecordingExecutor executor;
     labbridge::agent::TaskScheduler scheduler{executor, time};
-    scheduler.replace_config({task("1")});
+    scheduler.replace_config(
+        {task("1")}, {});
     time.on_wait = [&](std::size_t wait) {
         if (wait == 1U) {
             time.system = SystemTimePoint{3min + 10s};
@@ -203,7 +213,8 @@ TEST(TaskSchedulerTest, SkipsForwardJumpAndDoesNotRepeatAfterBackwardJump) {
             time.system = SystemTimePoint{2min};
             auto changed = task("1");
             changed.data_source.config_json = R"({"root_path":"/changed"})";
-            scheduler.replace_config({std::move(changed)});
+            scheduler.replace_config(
+        {std::move(changed)}, {});
         } else {
             scheduler.request_stop();
         }
@@ -220,7 +231,8 @@ TEST(TaskSchedulerTest, StopBeforeRunIsIdempotentAndDispatchesNothing) {
     ScriptedTimeSource time;
     RecordingExecutor executor;
     labbridge::agent::TaskScheduler scheduler{executor, time};
-    scheduler.replace_config({task("1")});
+    scheduler.replace_config(
+        {task("1")}, {});
 
     scheduler.request_stop();
     scheduler.request_stop();
@@ -234,7 +246,8 @@ TEST(TaskSchedulerTest, UnexpectedExecutorExceptionPropagates) {
     ScriptedTimeSource time;
     RecordingExecutor executor;
     labbridge::agent::TaskScheduler scheduler{executor, time};
-    scheduler.replace_config({task("1")});
+    scheduler.replace_config(
+        {task("1")}, {});
     time.on_wait = [&](std::size_t) { time.system = SystemTimePoint{60s}; };
     executor.on_execute = [](const auto&) {
         throw std::logic_error{"executor invariant failed"};

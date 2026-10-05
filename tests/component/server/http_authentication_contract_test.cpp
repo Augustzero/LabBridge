@@ -321,6 +321,16 @@ TEST(HttpAuthenticationContractTest, ManagementRoutesRequireManagementToken) {
             return count_call(ManagementCommandResult{
                 labbridge::core::Status::success(), "301", TaskRecord{}});
         };
+    command_handlers.trigger_task_run =
+        [](const std::string&, const std::string&) {
+            return labbridge::server::ManualTaskRunResult{
+                labbridge::core::Status::success(), {}, "pending", false};
+        };
+    command_handlers.retry_task_run =
+        [](const std::string&, const std::string&) {
+            return labbridge::server::ManualTaskRunResult{
+                labbridge::core::Status::success(), {}, "pending", false};
+        };
     command_handlers.set_task_enabled =
         [&count_call](const std::string&, bool) {
             return count_call(ManagementCommandResult{

@@ -71,7 +71,7 @@ private:
 // 队列里铺一条推进到 manifest_pending 的作业，返回已持久化的 manifest 请求。
 labbridge::agent::RawFileManifestRequest seed_manifest_job(
     labbridge::agent::AgentQueueStore& store) {
-    store.begin_job(task(), request());
+    store.begin_job(task(), request(), {});
     store.accept_start(request().execution_key, "run-1");
     labbridge::agent::RawFileManifestRequest manifest{
         "run-1",
@@ -123,7 +123,7 @@ TEST(ReliableDeliveryClientTest, PermanentConflictMovesJobToAttention) {
                       "labbridge-phase024-03-attention.db";
     std::filesystem::remove(path);
     labbridge::agent::AgentQueueStore store{path.string(), "node-024", 10};
-    store.begin_job(task(), request());
+    store.begin_job(task(), request(), {});
     FailingClient client{{labbridge::agent::TaskExecutionErrorKind::HttpStatus,
                           "idempotency conflict", 409}};
     labbridge::agent::ReliableDeliveryClient reliable{
@@ -144,7 +144,7 @@ TEST(ReliableDeliveryClientTest, StopInterruptsRetryAndKeepsPendingJob) {
                       "labbridge-phase024-03-stop.db";
     std::filesystem::remove(path);
     labbridge::agent::AgentQueueStore store{path.string(), "node-024", 10};
-    store.begin_job(task(), request());
+    store.begin_job(task(), request(), {});
     FailingClient client{{labbridge::agent::TaskExecutionErrorKind::Network,
                           "server offline"}};
     labbridge::agent::ReliableDeliveryClient reliable{
@@ -184,7 +184,7 @@ TEST_P(PermanentEnvelopeDeliveryTest,
         local_server_url(server.port()), std::chrono::milliseconds{2000},
         "node-024", std::string(64, 'a')};
     labbridge::agent::AgentQueueStore store{path.string(), "node-024", 10};
-    store.begin_job(task(), request());
+    store.begin_job(task(), request(), {});
     labbridge::agent::ReliableDeliveryClient reliable{
         client, store, 1s, 2s, labbridge::agent::kDefaultMaxRequestBodyBytes};
 
@@ -218,7 +218,7 @@ TEST(ReliableDeliveryClientTest, RetryableEnvelopeStatusKeepsJobPending) {
         local_server_url(server.port()), std::chrono::milliseconds{2000},
         "node-024", std::string(64, 'a')};
     labbridge::agent::AgentQueueStore store{path.string(), "node-024", 10};
-    store.begin_job(task(), request());
+    store.begin_job(task(), request(), {});
     labbridge::agent::ReliableDeliveryClient reliable{
         client, store, 30s, 30s, labbridge::agent::kDefaultMaxRequestBodyBytes};
     std::thread worker{[&] {
@@ -251,7 +251,7 @@ TEST(ReliableDeliveryClientTest, StopInterruptsStartupRecoveryBackoff) {
     // 第一轮：网络失败把作业打入 retry_wait，退避 30 秒。
     {
         labbridge::agent::AgentQueueStore store{path.string(), "node-024", 10};
-        store.begin_job(task(), request());
+        store.begin_job(task(), request(), {});
         labbridge::agent::ReliableDeliveryClient reliable{
             client, store, 30s, 30s,
             labbridge::agent::kDefaultMaxRequestBodyBytes};

@@ -3,6 +3,7 @@
 #include "labbridge/server/postgres/libpq_sql_session.h"
 #include "labbridge/server/postgres/config_repository.h"
 #include "labbridge/server/postgres/node_repository.h"
+#include "labbridge/server/postgres/task_run_repository.h"
 
 #include <utility>
 
@@ -15,9 +16,11 @@ public:
         : session_(connection_info),
           node_repository_(session_),
           config_repository_(session_),
+          task_run_repository_(session_),
           node_service_(node_repository_),
           config_service_(config_repository_),
-          agent_control_service_(node_service_, config_service_) {}
+          agent_control_service_(node_service_, config_service_,
+                                 task_run_repository_) {}
 
     AgentControlService& agent_control_service() {
         return agent_control_service_;
@@ -27,6 +30,7 @@ private:
     LibpqSqlSession session_;
     PostgresNodeRepository node_repository_;
     PostgresConfigRepository config_repository_;
+    PostgresTaskRunRepository task_run_repository_;
     NodeService node_service_;
     ConfigService config_service_;
     AgentControlService agent_control_service_;

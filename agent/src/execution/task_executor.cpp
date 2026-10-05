@@ -4,6 +4,7 @@
 #include "labbridge/core/logging.h"
 #include "labbridge/core/utc_time.h"
 #include "labbridge/agent/execution/reliable_delivery_client.h"
+#include "labbridge/agent/execution/sha256.h"
 #include "labbridge/agent/parsers/csv_parser.h"
 #include "labbridge/agent/qc/basic_qc_rules.h"
 
@@ -141,6 +142,62 @@ TaskRunReportQcResult run_rule(
     };
 }
 
+// 计划行的实际读取路径：旧记录没有 input_path，按 source_path 读。
+labbridge::core::fs::path input_path_of(const PendingFilePlan& file) {
+    return file.input_path.empty()
+        ? labbridge::core::fs::path{file.source_path}
+        : labbridge::core::fs::path{file.input_path};
+}
+
+// 归档重放目标必须落在自己的归档根目录里，且不是符号链接。
+void validate_archive_input(const RetryFileInput& target,
+                            const labbridge::core::fs::path& archive_root) {
+    const labbridge::core::fs::path input{target.storage_path};
+    if (labbridge::core::fs::is_symlink(
+            labbridge::core::fs::symlink_status(input))) {
+        throw std::runtime_error(
+            "archived input is a symbolic link: " + target.storage_path);
+    }
+    const auto canonical =
+        labbridge::core::fs::weakly_canonical(input);
+    if (!labbridge::core::is_within(canonical, archive_root)) {
+        throw std::runtime_error(
+            "archived input is outside the archive root: " +
+            target.storage_path);
+    }
+    if (!labbridge::core::fs::is_regular_file(canonical)) {
+        throw std::runtime_error(
+            "archived input is not a regular file: " + target.storage_path);
+    }
+    if (labbridge::core::fs::file_size(canonical) !=
+            static_cast<std::uintmax_t>(target.size_bytes) ||
+        sha256_file_hex(canonical) != target.file_hash) {
+        throw std::runtime_error(
+            "archived input does not match the recorded evidence: " +
+            target.storage_path);
+    }
+}
+
+// 定点补采目标：非符号链接，且仍在当前任务目录内（目录本身已过
+// allowed_local_roots 校验）。路径丢失、被替换或越界都记该目标失败，
+// 不搜索替代文件。
+void validate_source_input(const RetryFileInput& target,
+                           const labbridge::core::fs::path& root_path) {
+    const labbridge::core::fs::path input{target.source_path};
+    if (labbridge::core::fs::is_symlink(
+            labbridge::core::fs::symlink_status(input))) {
+        throw std::runtime_error(
+            "retry target is a symbolic link: " + target.source_path);
+    }
+    const auto canonical =
+        labbridge::core::fs::weakly_canonical(input);
+    if (!labbridge::core::is_within(canonical, root_path)) {
+        throw std::runtime_error(
+            "retry target is outside the task directory: " +
+            target.source_path);
+    }
+}
+
 }  // namespace
 
 TaskExecutor::TaskExecutor(
@@ -197,48 +254,146 @@ void TaskExecutor::recover_pending_jobs() {
     }
 }
 
-RecoveredJob TaskExecutor::run_collecting_stage(
-    const RecoveredJob& input) const {
-    RecoveredJob job = input;
-    if (job.files.empty()) {
-        validate_execution_types(job.task);
-        const auto source = parse_source_spec(job.task, allowed_local_roots_);
-        LocalDirCollector collector{source.root_path, source.extension};
-        const auto collected = collector.collect({
-            job.task.id, job.task.node_code, job.task.data_source.config_json});
-        if (!collected.status.ok) {
-            throw std::runtime_error("collect failed: " + collected.status.message);
+void TaskExecutor::plan_from_directory(
+    const RecoveredJob& job,
+    std::vector<PendingFilePlan>& plan,
+    std::vector<TaskRunReportFailedFile>& failures) const {
+    validate_execution_types(job.task);
+    const auto source = parse_source_spec(job.task, allowed_local_roots_);
+    LocalDirCollector collector{source.root_path, source.extension};
+    const auto collected = collector.collect({
+        job.task.id, job.task.node_code, job.task.data_source.config_json});
+    if (!collected.status.ok) {
+        // 目录枚举 / 配置错误是运行级错误，不能猜测文件列表。
+        throw std::runtime_error("collect failed: " + collected.status.message);
+    }
+    for (const auto& item : collected.items) {
+        // 单轮最多带走 max_files_per_run 个文件，剩下的留给后续槽位；
+        // 已选择但读取失败的文件也占名额，防止失败项绕过限制。
+        if (plan.size() + failures.size() >= max_files_per_run_) {
+            break;
         }
-        std::vector<PendingFilePlan> plan;
-        int ordinal = 0;
-        for (const auto& item : collected.items) {
-            // 单轮最多带走 max_files_per_run 个文件，剩下的留给后续槽位；
-            // 文件数限制不保证整批请求一定在限额内，超限由投递入口兜底。
-            if (plan.size() >= max_files_per_run_) {
-                break;
-            }
-            auto metadata = archive_store_.inspect(item);
-            const auto fingerprint = job.task.id + "\n" + metadata.fingerprint;
-            // 已处理过或正被其他作业（含 requires_attention）占用的文件跳过，
-            // 避免同槽位、跨重启重复入计划。
-            if (queue_store_.is_file_occupied(job.task.id, fingerprint)) {
+        LocalFileMetadata metadata;
+        try {
+            metadata = archive_store_.inspect(item);
+        } catch (const std::exception& error) {
+            failures.push_back({
+                item.local_path, item.original_name, "read", error.what(), ""});
+            continue;
+        }
+        const auto fingerprint = job.task.id + "\n" + metadata.fingerprint;
+        // 已处理过或正被其他作业（含 requires_attention）占用的文件跳过，
+        // 避免同槽位、跨重启重复入计划；未选中的不占名额。
+        if (queue_store_.is_file_occupied(job.task.id, fingerprint)) {
+            continue;
+        }
+        const auto archive_path = archive_store_.plan_archive_path(
+            job.task.id, job.task_run_id,
+            static_cast<std::size_t>(plan.size() + 1), metadata.original_name);
+        plan.push_back({
+            static_cast<int>(plan.size()),
+            metadata.source_path.string(),
+            metadata.original_name,
+            metadata.source_mtime,
+            metadata.size_bytes,
+            metadata.file_hash,
+            fingerprint,
+            archive_path.string(),
+        });
+    }
+}
+
+void TaskExecutor::plan_from_retry_targets(
+    const RecoveredJob& job,
+    std::vector<PendingFilePlan>& plan,
+    std::vector<TaskRunReportFailedFile>& failures) const {
+    validate_execution_types(job.task);
+    // source 目标按当前任务目录校验，配置仍要解析；archive 目标不用目录，
+    // 但目录配置坏了属于任务不可执行，统一在开始就暴露。
+    const auto source = parse_source_spec(job.task, allowed_local_roots_);
+    const auto archive_root = archive_store_.work_dir() / "archive";
+
+    for (const auto& target : job.retry_files) {
+        PendingFilePlan entry;
+        entry.ordinal = static_cast<int>(plan.size());
+        entry.source_path = target.source_path;
+        entry.original_name = target.original_name;
+        entry.archive_path = archive_store_
+                                 .plan_archive_path(
+                                     job.task.id, job.task_run_id,
+                                     static_cast<std::size_t>(plan.size() + 1),
+                                     target.original_name)
+                                 .string();
+
+        if (target.input_type == "archive") {
+            try {
+                validate_archive_input(target, archive_root);
+            } catch (const std::exception& error) {
+                // 原归档缺失、损坏或越界：该目标失败，保留 archive 身份，
+                // 不能降级成定点补采。
+                failures.push_back({target.source_path, target.original_name,
+                                    "archive", error.what(),
+                                    target.archive_raw_file_id});
                 continue;
             }
-            const auto archive_path = archive_store_.plan_archive_path(
-                job.task.id, job.task_run_id,
-                static_cast<std::size_t>(ordinal + 1), metadata.original_name);
-            plan.push_back({
-                ordinal++,
-                metadata.source_path.string(),
-                metadata.original_name,
-                metadata.source_mtime,
-                metadata.size_bytes,
-                metadata.file_hash,
-                fingerprint,
-                archive_path.string(),
-            });
+            entry.input_path = target.storage_path;
+            entry.size_bytes = target.size_bytes;
+            entry.file_hash = target.file_hash;
+            entry.source_mtime = target.source_mtime;
+            // 指纹用原输入身份（原来源路径 + 快照大小/时间/哈希），
+            // 不能把归档路径或归档修改时间当成新采集的身份。
+            entry.fingerprint =
+                job.task.id + "\n" + target.source_path + "\n" +
+                std::to_string(target.size_bytes) + "\n" +
+                target.source_mtime + "\n" + target.file_hash;
+        } else {
+            try {
+                validate_source_input(target, source.root_path);
+                CollectedItem item;
+                item.local_path = target.source_path;
+                item.original_name = target.original_name;
+                const auto metadata = archive_store_.inspect(item);
+                entry.input_path = metadata.source_path.string();
+                entry.size_bytes = metadata.size_bytes;
+                entry.file_hash = metadata.file_hash;
+                entry.source_mtime = metadata.source_mtime;
+                entry.fingerprint =
+                    job.task.id + "\n" + metadata.fingerprint;
+            } catch (const std::exception& error) {
+                failures.push_back({target.source_path, target.original_name,
+                                    "read", error.what(), ""});
+                continue;
+            }
         }
-        queue_store_.save_file_plan(job.execution_key, plan);
+
+        // 固定清单不按 max_files_per_run 截断；只让开其他在途作业的占用：
+        // 明确选中的历史失败输入允许再次处理（不查 processed），
+        // 被别的排队作业占着就记该目标失败并继续。
+        if (queue_store_.is_file_in_flight(job.task.id, entry.fingerprint)) {
+            failures.push_back({target.source_path, target.original_name,
+                                "read",
+                                "file is in flight by another pending job",
+                                ""});
+            continue;
+        }
+        plan.push_back(std::move(entry));
+    }
+}
+
+RecoveredJob TaskExecutor::run_collecting_stage(const RecoveredJob& input) const {
+    RecoveredJob job = input;
+    // 尚未生成计划的作业才选文件；file_failures 标记表示选文件已完成，
+    // 零文件或全部失败的作业恢复时不再扫描、不重新 inspect 已判失败的目标。
+    // 旧库作业没有标记，沿用“空计划即重扫”的老行为。
+    if (job.files.empty() && !job.has_file_failures) {
+        std::vector<PendingFilePlan> plan;
+        std::vector<TaskRunReportFailedFile> failures;
+        if (job.retry_files.empty()) {
+            plan_from_directory(job, plan, failures);
+        } else {
+            plan_from_retry_targets(job, plan, failures);
+        }
+        queue_store_.save_file_plan(job.execution_key, plan, failures);
         job = load_job(job.execution_key);
     }
 
@@ -247,23 +402,59 @@ RecoveredJob TaskExecutor::run_collecting_stage(
     manifest.node_code = job.task.node_code;
     manifest.idempotency_key =
         make_manifest_idempotency_key(manifest.node_code, manifest.task_run_id);
+    auto failures = job.file_failures;
+    bool failures_changed = false;
     for (const auto& file : job.files) {
+        // 之前已判失败的目标（error_detail 非空）跳过，同一作业不重试它们。
+        if (!file.error_detail.empty()) {
+            continue;
+        }
         LocalFileMetadata metadata{
-            file.source_path,
+            labbridge::core::fs::path{file.source_path},
             file.original_name,
             file.file_hash,
             file.size_bytes,
             file.source_mtime,
             file.fingerprint.substr(job.task.id.size() + 1),
         };
-        archive_store_.recover_archive(metadata, file.archive_path);
+        try {
+            archive_store_.recover_archive(metadata, file.archive_path,
+                                           input_path_of(file));
+        } catch (const ArchiveConflictError&) {
+            // 归档证据冲突可能覆盖现场证据，整体转人工，不在文件级吞掉。
+            throw;
+        } catch (const std::exception& error) {
+            // 单个文件归档失败：记到该文件，其他文件继续。
+            queue_store_.mark_file_failed(job.execution_key, file.ordinal,
+                                          error.what());
+            std::string archive_ref;
+            // retry 重放读原归档失败时保留原引用，否则下次重试会错转补采。
+            for (const auto& target : job.retry_files) {
+                if (target.source_path == file.source_path) {
+                    archive_ref = target.archive_raw_file_id;
+                    break;
+                }
+            }
+            failures.push_back({file.source_path, file.original_name,
+                                "archive", error.what(),
+                                std::move(archive_ref)});
+            failures_changed = true;
+            continue;
+        }
         queue_store_.mark_file_archived(job.execution_key, file.ordinal);
         manifest.files.push_back({
             file.original_name, file.file_hash, file.archive_path,
             file.size_bytes, file.source_mtime, "archived_local"});
     }
+    if (failures_changed) {
+        queue_store_.save_file_failures(job.execution_key, failures);
+    }
     if (!manifest.files.empty()) {
         queue_store_.save_manifest(job.execution_key, manifest);
+        job = load_job(job.execution_key);
+    } else if (failures_changed) {
+        // 没有 manifest 可发也要重载：报告构建要拿到刚持久化的失败清单，
+        // 否则会拿入参里的旧快照把 failed 报成 succeeded。
         job = load_job(job.execution_key);
     }
     return job;
@@ -283,7 +474,12 @@ RecoveredJob TaskExecutor::save_collection_failure_report(
     report.items_total = 1;
     report.items_failed = 1;
     report.error_summary = error;
-    // 采集阶段失败的作业没有任何成功解析的文件。
+    // 运行级错误（目录缺失、配置非法）定位不到具体文件：
+    // 显式传空清单表示“明确没有文件级失败”，与旧报告的 NULL 区分。
+    report.has_failed_files = true;
+    report.failed_files = current.has_file_failures
+        ? current.file_failures
+        : std::vector<TaskRunReportFailedFile>{};
     const std::vector<bool> parsed_without_errors(current.files.size(), false);
     queue_store_.save_report(
         current.execution_key, report, parsed_without_errors);
@@ -293,6 +489,22 @@ RecoveredJob TaskExecutor::save_collection_failure_report(
 void TaskExecutor::run_reliable_job(RecoveredJob job) {
     if (job.stage == "start_pending") {
         const auto started = client_.start_task_run(job.start_request);
+        if (started.run_status == "succeeded" ||
+            started.run_status == "failed") {
+            // 中心已把运行收尾（如开始前任务被停用）：
+            // 本地只是还没开始的空作业，直接丢弃，不再采集、不发报告。
+            queue_store_.discard_start_pending_job(job.execution_key);
+            labbridge::core::log_warn(
+                kComponent,
+                "task run already finished in control plane; local job "
+                "discarded; execution_key=" + job.execution_key +
+                    "; run_status=" + started.run_status);
+            return;
+        }
+        if (started.run_status != "running") {
+            throw std::runtime_error(
+                "unexpected run_status from start: " + started.run_status);
+        }
         queue_store_.accept_start(job.execution_key, started.task_run_id);
         job = load_job(job.execution_key);
     }
@@ -313,7 +525,7 @@ void TaskExecutor::run_reliable_job(RecoveredJob job) {
             // 队列库自身故障按 Phase 024 语义传播到进程边界。
             throw;
         } catch (const std::exception& error) {
-            // 采集目录缺失、数据源配置非法、源文件消失等外部条件
+            // 采集目录缺失、数据源配置非法等外部条件
             // 折叠为终态 failed report，Agent 继续运行。
             job = save_collection_failure_report(job, error.what());
         }
@@ -335,7 +547,18 @@ void TaskExecutor::run_reliable_job(RecoveredJob job) {
         ErrorSummary errors;
         std::vector<bool> parsed_without_errors;
         CsvObservationParser parser;
+        auto failures = job.file_failures;
+        // 持久化的读取/归档失败先并入错误摘要，报告状态据此判 failed。
+        for (const auto& failed : failures) {
+            errors.add(failed.original_name + ": " + failed.message);
+        }
         for (const auto& file : job.files) {
+            // 从未取得有效归档的目标（读取/归档失败）不参与解析，
+            // 文件结果按 false 覆盖。
+            if (!file.error_detail.empty() || file.raw_file_id.empty()) {
+                parsed_without_errors.push_back(false);
+                continue;
+            }
             const auto parsed = parser.parse({
                 report.task_run_id, file.raw_file_id, file.archive_path});
             const bool clean = parsed.status.ok && parsed.errors.empty();
@@ -344,6 +567,10 @@ void TaskExecutor::run_reliable_job(RecoveredJob job) {
                 ++report.items_total;
                 ++report.items_failed;
                 errors.add(file.original_name + ": " + parsed.status.message);
+                // 文件级解析错误：整个文件进入失败清单，归档引用指向本次 raw_file。
+                failures.push_back({file.source_path, file.original_name,
+                                    "parse", parsed.status.message,
+                                    file.raw_file_id});
                 continue;
             }
             report.items_total += static_cast<int>(
@@ -352,6 +579,12 @@ void TaskExecutor::run_reliable_job(RecoveredJob job) {
             report.items_failed += static_cast<int>(parsed.errors.size());
             for (const auto& error : parsed.errors) {
                 errors.add(file.original_name + ": " + error);
+            }
+            if (!parsed.errors.empty()) {
+                // 任一行解析错误即该文件失败；原因取第一条，保持简短。
+                failures.push_back({file.source_path, file.original_name,
+                                    "parse", parsed.errors.front(),
+                                    file.raw_file_id});
             }
             for (const auto& record : parsed.records) {
                 TaskRunReportParsedRecord result;
@@ -363,11 +596,15 @@ void TaskExecutor::run_reliable_job(RecoveredJob job) {
                 report.parsed_records.push_back(std::move(result));
             }
         }
-        report.status = errors.empty()
+        // 有文件级失败（含 QC 之外的解析失败）就终态 failed；
+        // QC 不通过不进清单，也不影响这里的判定。
+        report.status = (errors.empty() && failures.empty())
             ? labbridge::core::TaskRunStatus::Succeeded
             : labbridge::core::TaskRunStatus::Failed;
         report.finished_at = labbridge::core::format_utc_timestamp(now_());
         report.error_summary = errors.text();
+        report.has_failed_files = true;
+        report.failed_files = std::move(failures);
         queue_store_.save_report(
             job.execution_key, report, parsed_without_errors);
         job = load_job(job.execution_key);
@@ -404,8 +641,42 @@ void TaskExecutor::execute(ScheduledTaskExecution execution) {
         labbridge::core::format_utc_timestamp(now_()),
         "scheduled",
     };
-    queue_store_.begin_job(execution.task, request);
+    queue_store_.begin_job(execution.task, request, {});
     run_reliable_job(load_job(request.execution_key));
+}
+
+PendingDispatchResult TaskExecutor::execute_pending(
+    ManualTaskExecution execution) {
+    if (stop_requested_.load(std::memory_order_acquire)) {
+        // 停止后不接新候选；中心侧仍是 pending，下次启动继续。
+        return PendingDispatchResult::QueueFull;
+    }
+    // 重复候选先按执行键查本地作业（含 retry_wait / attention）：
+    // 已存在的不重新入队、不覆盖快照、不绕过已有退避或人工恢复。
+    if (queue_store_.find_job(execution.execution.execution_key).has_value()) {
+        return PendingDispatchResult::AlreadyQueued;
+    }
+    if (!queue_store_.has_capacity()) {
+        // 人工请求留在中心 pending，本轮停止尝试，等正常唤醒再试。
+        labbridge::core::log_warn(
+            kComponent,
+            "pending job capacity reached; keeping manual request pending in "
+            "control plane; task_id=" + execution.task.id +
+                "; execution_key=" + execution.execution.execution_key);
+        return PendingDispatchResult::QueueFull;
+    }
+    StartTaskRunRequest request{
+        execution.task.node_code,
+        execution.task.id,
+        execution.execution.execution_key,
+        {},
+        labbridge::core::format_utc_timestamp(now_()),
+        execution.execution.trigger_type,
+    };
+    queue_store_.begin_job(execution.task, request,
+                           execution.execution.retry_files);
+    run_reliable_job(load_job(request.execution_key));
+    return PendingDispatchResult::Dispatched;
 }
 
 void TaskExecutor::request_stop() noexcept {

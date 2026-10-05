@@ -740,6 +740,115 @@ PulledAgentConfig ControlPlaneClient::fetch_config(
                 "skipping task_id=" + task_id + "; reason=" + error.what());
         }
     }
+
+    // 人工待执行候选是可选字段：旧中心不下发时按空列表处理。
+    if (data.contains("pending_executions") &&
+        data["pending_executions"].is_array()) {
+        for (const auto& value : data["pending_executions"]) {
+            std::string task_run_id{"<unknown>"};
+            try {
+                if (!value.is_object()) {
+                    throw ControlPlaneClientError{
+                        ControlPlaneErrorKind::InvalidResponse,
+                        "pending execution must be an object",
+                        response.status};
+                }
+                PendingExecution execution;
+                execution.task_run_id =
+                    required_string(value, "task_run_id", response.status);
+                task_run_id = execution.task_run_id;
+                execution.task_id =
+                    required_string(value, "task_id", response.status);
+                execution.execution_key =
+                    required_string(value, "execution_key", response.status);
+                execution.trigger_type =
+                    required_string(value, "trigger_type", response.status);
+                execution.requested_at =
+                    required_string(value, "requested_at", response.status);
+                if (execution.trigger_type != "manual" &&
+                    execution.trigger_type != "retry") {
+                    throw ControlPlaneClientError{
+                        ControlPlaneErrorKind::InvalidResponse,
+                        "pending execution trigger_type must be manual or retry",
+                        response.status};
+                }
+
+                if (value.contains("retry_files") &&
+                    !value["retry_files"].is_array()) {
+                    throw ControlPlaneClientError{
+                        ControlPlaneErrorKind::InvalidResponse,
+                        "pending execution retry_files must be an array",
+                        response.status};
+                }
+                if (value.contains("retry_files")) {
+                    for (const auto& file : value["retry_files"]) {
+                        if (!file.is_object() ||
+                            !file.contains("input_type") ||
+                            !file["input_type"].is_string()) {
+                            throw ControlPlaneClientError{
+                                ControlPlaneErrorKind::InvalidResponse,
+                                "retry file must be an object with string input_type",
+                                response.status};
+                        }
+                        RetryFileInput input;
+                        input.input_type =
+                            file["input_type"].get<std::string>();
+                        if (input.input_type != "archive" &&
+                            input.input_type != "source") {
+                            throw ControlPlaneClientError{
+                                ControlPlaneErrorKind::InvalidResponse,
+                                "retry file input_type must be archive or source",
+                                response.status};
+                        }
+                        input.source_path =
+                            required_string(file, "source_path", response.status);
+                        input.original_name =
+                            required_string(file, "original_name", response.status);
+                        input.archive_raw_file_id = file.contains(
+                            "archive_raw_file_id") &&
+                                file["archive_raw_file_id"].is_string()
+                            ? file["archive_raw_file_id"].get<std::string>()
+                            : std::string{};
+                        input.storage_path =
+                            file.contains("storage_path") &&
+                                    file["storage_path"].is_string()
+                                ? file["storage_path"].get<std::string>()
+                                : std::string{};
+                        input.size_bytes =
+                            file.contains("size_bytes") &&
+                                    file["size_bytes"].is_number_unsigned()
+                                ? file["size_bytes"].get<long long>()
+                                : 0;
+                        input.file_hash =
+                            file.contains("file_hash") &&
+                                    file["file_hash"].is_string()
+                                ? file["file_hash"].get<std::string>()
+                                : std::string{};
+                        input.source_mtime =
+                            file.contains("source_mtime") &&
+                                    file["source_mtime"].is_string()
+                                ? file["source_mtime"].get<std::string>()
+                                : std::string{};
+                        if (input.input_type == "archive" &&
+                            (input.storage_path.empty() ||
+                             input.file_hash.empty())) {
+                            throw ControlPlaneClientError{
+                                ControlPlaneErrorKind::InvalidResponse,
+                                "archive retry file requires storage_path and file_hash",
+                                response.status};
+                        }
+                        execution.retry_files.push_back(std::move(input));
+                    }
+                }
+                result.pending_executions.push_back(std::move(execution));
+            } catch (const ControlPlaneClientError& error) {
+                labbridge::core::log_warn(
+                    "control-plane-client",
+                    "skipping pending execution task_run_id=" + task_run_id +
+                        "; reason=" + error.what());
+            }
+        }
+    }
     return result;
 }
 
@@ -752,6 +861,7 @@ StartTaskRunResult ControlPlaneClient::start_task_run(
     return {
         required_string(data, "task_run_id", response.status),
         required_boolean(data, "replayed", response.status),
+        required_string(data, "run_status", response.status),
     };
 }
 

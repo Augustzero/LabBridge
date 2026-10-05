@@ -87,7 +87,7 @@ TEST(PostgresTaskRunRepositoryTest, FinishMapsTerminalSummary) {
     EXPECT_EQ(statement.params,
               (labbridge::server::SqlParams{
                   "501", "succeeded", "2026-08-11T10:01:00Z",
-                  "2", "2", "0", ""}));
+                  "2", "2", "0", "", ""}));
 }
 
 TEST(PostgresTaskRunRepositoryTest, ScheduledInsertReturnsCreatedIdentity) {

@@ -114,11 +114,15 @@ public:
 class RecordingConfigSink final : public labbridge::agent::IRuntimeConfigSink {
 public:
     void replace_config(
-        std::vector<labbridge::core::TaskConfig> tasks) override {
+        std::vector<labbridge::core::TaskConfig> tasks,
+        std::vector<labbridge::agent::PendingExecution> pending_executions)
+        override {
         snapshots.push_back(std::move(tasks));
+        pending_counts.push_back(pending_executions.size());
     }
 
     std::vector<std::vector<labbridge::core::TaskConfig>> snapshots;
+    std::vector<std::size_t> pending_counts;
 };
 
 class RuntimeScenario {

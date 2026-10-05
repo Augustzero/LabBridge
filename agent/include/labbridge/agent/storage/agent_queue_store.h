@@ -21,13 +21,23 @@ public:
     AgentQueueStore& operator=(const AgentQueueStore&) = delete;
 
     bool begin_job(const labbridge::core::TaskConfig& task,
-                   const StartTaskRunRequest& request) override;
+                   const StartTaskRunRequest& request,
+                   const std::vector<RetryFileInput>& retry_files) override;
     void save_file_plan(const std::string& execution_key,
-                        const std::vector<PendingFilePlan>& files) override;
+                        const std::vector<PendingFilePlan>& files,
+                        const std::vector<TaskRunReportFailedFile>& failures) override;
     std::vector<RecoveredJob> recover_jobs() const override;
     RecoveredJob load_job(const std::string& execution_key) const override;
+    std::optional<RecoveredJob> find_job(
+        const std::string& execution_key) const override;
     void accept_start(const std::string& execution_key,
                       const std::string& task_run_id) override;
+    void save_file_failures(
+        const std::string& execution_key,
+        const std::vector<TaskRunReportFailedFile>& failures) override;
+    void mark_file_failed(const std::string& execution_key,
+                          int ordinal,
+                          const std::string& error_detail) override;
     void mark_file_archived(const std::string& execution_key,
                             int ordinal) override;
     void save_manifest(const std::string& execution_key,
@@ -38,6 +48,7 @@ public:
                      const TaskRunReportRequest& request,
                      const std::vector<bool>& parsed_without_errors) override;
     void complete_job(const std::string& execution_key) override;
+    void discard_start_pending_job(const std::string& execution_key) override;
     void mark_requires_attention(const std::string& execution_key,
                                  const std::string& error_kind,
                                  const std::string& reason) override;
@@ -57,6 +68,8 @@ public:
     bool has_capacity() const override;
     bool is_file_occupied(const std::string& task_id,
                           const std::string& fingerprint) const override;
+    bool is_file_in_flight(const std::string& task_id,
+                           const std::string& fingerprint) const override;
     std::size_t pending_job_count() const;
 
 private:

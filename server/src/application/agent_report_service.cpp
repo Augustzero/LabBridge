@@ -6,10 +6,12 @@
 
 #include <iomanip>
 #include <memory>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string_view>
 #include <utility>
+#include <algorithm>
 
 namespace labbridge::server {
 namespace {
@@ -114,6 +116,19 @@ std::string report_fingerprint(const TaskRunReportRequest& request) {
             builder.append(qc.level);
             builder.append(qc.result);
             builder.append(qc.message);
+        }
+    }
+    // 031-02 起报告可携带失败文件清单：字段缺席完全沿用原算法，
+    // 旧持久化请求重编码或重放仍命中原指纹；字段存在则进入指纹。
+    if (request.has_failed_files) {
+        builder.append("failed_files_v1");
+        builder.append(static_cast<long long>(request.failed_files.size()));
+        for (const auto& failed : request.failed_files) {
+            builder.append(failed.source_path);
+            builder.append(failed.original_name);
+            builder.append(failed.stage);
+            builder.append(failed.message);
+            builder.append(failed.archive_raw_file_id);
         }
     }
     return builder.finish();
@@ -308,6 +323,16 @@ TaskRunReportResult AgentReportService::accept_task_run_report(
 
     TaskRunReportResult result;
     result.status = labbridge::core::Status::success();
+
+    // 失败清单校验：succeeded 不能携带条目；条目按源路径唯一；
+    // 归档引用只能指向本运行的 raw_file，或本运行固定清单里明确携带的原归档。
+    if (request.has_failed_files) {
+        const auto list_status = validate_failed_files(request);
+        if (!list_status.ok) {
+            return {list_status, {}, {}, {}};
+        }
+    }
+
     // 同一 run 的多条记录常共享 raw file，按 raw_file_id 缓存已校验文件。
     std::unordered_map<std::string, RawFileRecord> verified_raw_files;
     for (const auto& parsed : request.parsed_records) {
@@ -379,6 +404,8 @@ TaskRunReportResult AgentReportService::accept_task_run_report(
         request.items_success,
         request.items_failed,
         request.error_summary,
+        request.has_failed_files,
+        request.failed_files,
     });
     if (!finish_status.ok) {
         result.status = finish_status;
@@ -420,6 +447,73 @@ AgentReportService::validate_task_run_node(
                 std::nullopt};
     }
     return {labbridge::core::Status::success(), std::move(task_run)};
+}
+
+// 失败清单的应用层校验。归档引用表达“要处理哪份内容”：
+// 只接受本运行的 raw_file，或本运行固定清单中相同目标携带的原归档，
+// 防止客户端借报告引用其他任务的文件；retry 的失败路径必须来自固定清单。
+labbridge::core::Status AgentReportService::validate_failed_files(
+    const TaskRunReportRequest& request) const {
+    if (request.status == labbridge::core::TaskRunStatus::Succeeded &&
+        !request.failed_files.empty()) {
+        return labbridge::core::Status::failure(
+            "succeeded task runs cannot carry failed files");
+    }
+
+    const auto retry_files =
+        task_run_service_.find_retry_files(request.task_run_id);
+    std::set<std::string> fixed_paths;
+    if (retry_files.has_value()) {
+        for (const auto& retry_file : *retry_files) {
+            fixed_paths.insert(retry_file.source_path);
+        }
+    }
+
+    std::set<std::string> seen_paths;
+    for (const auto& failed : request.failed_files) {
+        if (retry_files.has_value() &&
+            fixed_paths.count(failed.source_path) == 0U) {
+            return labbridge::core::Status::failure(
+                "failed files must come from the fixed retry list");
+        }
+        if (!seen_paths.insert(failed.source_path).second) {
+            return labbridge::core::Status::failure(
+                "failed files must be unique by source_path");
+        }
+
+        if (failed.archive_raw_file_id.empty()) {
+            continue;
+        }
+        // 情况一：本运行新产生的归档（本次解析失败指向本次 raw_file）。
+        const auto raw_file =
+            result_service_.find_raw_file(failed.archive_raw_file_id);
+        if (raw_file.has_value() &&
+            raw_file->task_run_id == request.task_run_id) {
+            continue;
+        }
+        // 情况二：retry 固定清单携带的原归档引用（属于父运行的 raw_file），
+        // 目标必须对得上；不能因文件当前不可读而清空引用，
+        // 否则下次重试会错转为补采。
+        const bool inherited =
+            retry_files.has_value() &&
+            std::any_of(
+                retry_files->begin(), retry_files->end(),
+                [&failed](const TaskRunRetryFile& retry_file) {
+                    return retry_file.input_type == "archive" &&
+                           retry_file.archive_raw_file_id ==
+                               failed.archive_raw_file_id &&
+                           retry_file.source_path == failed.source_path;
+                });
+        if (!inherited) {
+            // 情况一/二都不满足：引用了别处存在或根本不存在的文件。
+            return labbridge::core::Status::failure(
+                labbridge::core::StatusCode::Conflict,
+                raw_file.has_value()
+                    ? "failed file archive reference does not belong to the task run"
+                    : "failed file archive reference is not allowed for this report");
+        }
+    }
+    return labbridge::core::Status::success();
 }
 
 }  // namespace labbridge::server

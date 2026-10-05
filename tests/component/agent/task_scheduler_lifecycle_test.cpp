@@ -14,6 +14,10 @@ public:
     void execute(labbridge::agent::ScheduledTaskExecution) override {
         ++calls;
     }
+    labbridge::agent::PendingDispatchResult execute_pending(
+        labbridge::agent::ManualTaskExecution) override {
+        return labbridge::agent::PendingDispatchResult::Dispatched;
+    }
     void request_stop() noexcept override {}
 
     int calls{0};

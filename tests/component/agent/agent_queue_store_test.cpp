@@ -89,10 +89,9 @@ TEST(AgentQueueStoreTest, ReopensAndRecoversJobDeliveryAndFilePlan) {
     {
         labbridge::agent::AgentQueueStore store{
             database_path, "node-1", 10};
-        EXPECT_TRUE(store.begin_job(task_config(), start_request()));
-        EXPECT_FALSE(store.begin_job(task_config(), start_request()));
-        store.save_file_plan(
-            "execution-1", {file_plan(0, "fingerprint")});
+        EXPECT_TRUE(store.begin_job(task_config(), start_request(), {}));
+        EXPECT_FALSE(store.begin_job(task_config(), start_request(), {}));
+        store.save_file_plan("execution-1", {file_plan(0, "fingerprint")}, {});
         EXPECT_EQ(store.pending_job_count(), 1U);
     }
 
@@ -124,15 +123,13 @@ TEST(AgentQueueStoreTest, RollsBackWholeFilePlanAndEnforcesCapacity) {
     TempDirectory temp;
     labbridge::agent::AgentQueueStore store{
         (temp.path() / "queue.db").string(), "node-1", 1};
-    EXPECT_TRUE(store.begin_job(task_config(), start_request()));
+    EXPECT_TRUE(store.begin_job(task_config(), start_request(), {}));
 
     EXPECT_THROW(
-        store.save_file_plan(
-            "execution-1",
-            {
-                file_plan(0, "same-fingerprint"),
-                file_plan(1, "same-fingerprint"),
-            }),
+        store.save_file_plan("execution-1",
+                             {file_plan(0, "same-fingerprint"),
+                              file_plan(1, "same-fingerprint")},
+                             {}),
         labbridge::agent::AgentQueueError);
     EXPECT_TRUE(store.recover_jobs().front().files.empty());
 
@@ -140,7 +137,7 @@ TEST(AgentQueueStoreTest, RollsBackWholeFilePlanAndEnforcesCapacity) {
     second_request.execution_key = "execution-2";
     second_request.scheduled_for = "2026-08-12T00:01:00Z";
     EXPECT_THROW(
-        store.begin_job(task_config(), second_request),
+        store.begin_job(task_config(), second_request, {}),
         labbridge::agent::AgentQueueError);
 }
 
@@ -166,9 +163,9 @@ TEST(AgentQueueStoreTest, PersistsStageTransitionsAndCompletesAtomically) {
     TempDirectory temp;
     labbridge::agent::AgentQueueStore store{
         (temp.path() / "queue.db").string(), "node-1", 10, 1};
-    store.begin_job(task_config(), start_request());
+    store.begin_job(task_config(), start_request(), {});
     store.accept_start("execution-1", "run-1");
-    store.save_file_plan("execution-1", {file_plan(0, "fingerprint")});
+    store.save_file_plan("execution-1", {file_plan(0, "fingerprint")}, {});
     store.mark_file_archived("execution-1", 0);
     labbridge::agent::RawFileManifestRequest manifest{
         "run-1", "node-1", "manifest-key",

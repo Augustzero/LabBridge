@@ -82,7 +82,7 @@ TEST_F(ArchiveDurabilityTest, ExistingArchiveStillRequiresAllAncestors) {
     EXPECT_THROW(store.archive("task", "run1", 1, metadata), std::runtime_error);
     ASSERT_TRUE(std::filesystem::exists(path));
     synced_paths.clear();
-    store.recover_archive(metadata, path);
+    store.recover_archive(metadata, path, metadata.source_path);
     expect_chain_synced(path);
     EXPECT_EQ(synced_paths.front(), path.string());
 }

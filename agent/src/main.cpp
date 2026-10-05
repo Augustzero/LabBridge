@@ -9,6 +9,7 @@
 #include "labbridge/agent/runtime/agent_runtime.h"
 #include "labbridge/agent/scheduler/task_scheduler.h"
 #include "labbridge/agent/storage/agent_queue_store.h"
+#include "labbridge/core/filesystem.h"
 #include "labbridge/core/logging.h"
 #include "labbridge/core/version.h"
 
@@ -35,13 +36,18 @@ int main(int argc, char* argv[]) {
     try {
         labbridge::core::log_info(kComponent, "starting LabBridge agent");
         const auto config = labbridge::agent::load_agent_config(config_path);
+        // 先准备队列父目录再拿 flock，最后才打开可迁移的队列库：
+        // 升级 v1→v2 的迁移只发生在持锁状态下，queue retry / 第二个实例
+        // 都不会撞上正在迁移的库。首次部署时锁文件的目录还不存在，
+        // 所以目录准备放在锁之前。
+        const labbridge::core::fs::path queue_path{config.queue_db};
+        if (!queue_path.parent_path().empty()) {
+            labbridge::core::fs::create_directories(queue_path.parent_path());
+        }
+        const labbridge::agent::AgentQueueLock queue_lock{config.queue_db};
         labbridge::agent::AgentQueueStore queue_store{
             config.queue_db, config.node.node_code, config.max_pending_jobs,
             config.processed_fingerprint_capacity_per_task};
-        // 队列就绪后立刻拿路径旁的 flock 并持有到进程退出：queue retry
-        // 靠它发现 Agent 还在运行，误起第二个实例也会在这里被挡下。
-        // 放在建库之后，首次部署时锁文件的目录还不存在。
-        const labbridge::agent::AgentQueueLock queue_lock{config.queue_db};
         labbridge::core::log_info(
             kComponent, "queue ready; pending_jobs=" +
                             std::to_string(queue_store.pending_job_count()));

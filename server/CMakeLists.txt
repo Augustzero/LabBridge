@@ -8,6 +8,8 @@ add_library(labbridge_server_domain
     src/application/node_service.cpp
     src/application/qc_service.cpp
     src/application/result_service.cpp
+    src/application/task_executability.cpp
+    src/application/task_run_files_json.cpp
     src/application/task_run_service.cpp
 )
 

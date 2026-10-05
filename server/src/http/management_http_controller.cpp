@@ -264,10 +264,20 @@ Json::Value task_run_record_json(const TaskRunRecord& run) {
     value["scheduled_for"] = nullable_string(run.scheduled_for);
     value["trigger_type"] = run.trigger_type;
     value["execution_key"] = nullable_string(run.execution_key);
+    value["requested_at"] = nullable_string(run.requested_at);
+    value["retry_of_run_id"] = nullable_string(run.retry_of_run_id);
     value["items_total"] = run.items_total;
     value["items_success"] = run.items_success;
     value["items_failed"] = run.items_failed;
     value["error_summary"] = nullable_string(run.error_summary);
+    // -1 表示旧报告没写清单（NULL），与空数组区分开。
+    value["failed_file_count"] = run.failed_file_count < 0
+        ? Json::Value{}
+        : Json::Value{run.failed_file_count};
+    // retryable 只表示终态与清单满足要求，不承诺文件现在存在或任务可执行。
+    value["retryable"] =
+        run.status == labbridge::core::TaskRunStatus::Failed &&
+        run.failed_file_count > 0;
     return value;
 }
 
@@ -336,6 +346,29 @@ Json::Value task_run_json(const ManagementTaskRun& run) {
     return value;
 }
 
+Json::Value failed_file_json(const TaskRunFailedFile& file) {
+    Json::Value value;
+    value["source_path"] = file.source_path;
+    value["original_name"] = file.original_name;
+    value["stage"] = file.stage;
+    value["message"] = file.message;
+    value["archive_raw_file_id"] = nullable_string(file.archive_raw_file_id);
+    return value;
+}
+
+Json::Value retry_file_json(const TaskRunRetryFile& file) {
+    Json::Value value;
+    value["input_type"] = file.input_type;
+    value["source_path"] = file.source_path;
+    value["original_name"] = file.original_name;
+    value["archive_raw_file_id"] = nullable_string(file.archive_raw_file_id);
+    value["storage_path"] = file.storage_path;
+    value["size_bytes"] = Json::Int64{file.size_bytes};
+    value["file_hash"] = file.file_hash;
+    value["source_mtime"] = file.source_mtime;
+    return value;
+}
+
 Json::Value task_run_summary_json(const ManagementTaskRunSummary& summary) {
     auto value = task_run_json({summary.record.task_run,
                                 summary.stale,
@@ -344,6 +377,21 @@ Json::Value task_run_summary_json(const ManagementTaskRunSummary& summary) {
     value["parsed_record_count"] = summary.record.parsed_record_count;
     value["qc_result_count"] = summary.record.qc_result_count;
     value["alert_count"] = summary.record.alert_count;
+    // 详情返回完整清单；NULL（旧报告 / 普通运行）保持 null。
+    value["failed_files"] = Json::Value{};
+    if (summary.record.failed_files.has_value()) {
+        value["failed_files"] = Json::Value{Json::arrayValue};
+        for (const auto& file : *summary.record.failed_files) {
+            value["failed_files"].append(failed_file_json(file));
+        }
+    }
+    value["retry_files"] = Json::Value{};
+    if (summary.record.retry_files.has_value()) {
+        value["retry_files"] = Json::Value{Json::arrayValue};
+        for (const auto& file : *summary.record.retry_files) {
+            value["retry_files"].append(retry_file_json(file));
+        }
+    }
     return value;
 }
 
@@ -498,6 +546,8 @@ ManagementHttpController::ManagementHttpController(
     if (!command_handlers_.create_data_source ||
         !command_handlers_.create_qc_rule || !command_handlers_.create_task ||
         !command_handlers_.set_task_enabled ||
+        !command_handlers_.trigger_task_run ||
+        !command_handlers_.retry_task_run ||
         !command_handlers_.acknowledge_alert ||
         !command_handlers_.close_alert) {
         throw std::invalid_argument(
@@ -615,6 +665,22 @@ void ManagementHttpController::register_routes(drogon::HttpAppFramework& app) {
             self->patch_task(request, task_id, std::move(callback));
         },
         {drogon::Patch});
+    app.registerHandler(
+        "/api/v1/tasks/{1}/trigger",
+        [self](const drogon::HttpRequestPtr& request,
+               ResponseCallback&& callback,
+               const std::string& task_id) {
+            self->post_task_trigger(request, task_id, std::move(callback));
+        },
+        {drogon::Post});
+    app.registerHandler(
+        "/api/v1/task-runs/{1}/retry",
+        [self](const drogon::HttpRequestPtr& request,
+               ResponseCallback&& callback,
+               const std::string& task_run_id) {
+            self->post_task_run_retry(request, task_run_id, std::move(callback));
+        },
+        {drogon::Post});
     app.registerHandler(
         "/api/v1/alerts/{1}/acknowledge",
         [self](const drogon::HttpRequestPtr& request,
@@ -877,6 +943,60 @@ void ManagementHttpController::patch_task(
             task_json,
             callback);
     }, callback);
+}
+
+// 人工执行 / 失败重试共用：只收一个幂等键，成功统一 202 表示“请求已保存”。
+void ManagementHttpController::respond_manual_task_run(
+    const drogon::HttpRequestPtr& request,
+    const std::string& operation,
+    const std::function<ManualTaskRunResult(const std::string&)>& command,
+    http::ResponseCallback& callback) const {
+    http::handle_request(kComponent, operation, [&] {
+        if (!authenticator_->require_management(request, callback)) {
+            return;
+        }
+        require_allowed_parameters(request->getParameters(), {});
+        if (!http::require_json_content_type(request, callback)) {
+            return;
+        }
+        const auto idempotency_key =
+            required_string(parse_json_body(request), "idempotency_key");
+        const auto result = command(idempotency_key);
+        if (!result.status.ok) {
+            callback(http::status_error_response(result.status));
+            return;
+        }
+        Json::Value data;
+        data["task_run_id"] = result.task_run_id;
+        data["status"] = result.run_status;
+        data["replayed"] = result.replayed;
+        callback(http::success_response(drogon::k202Accepted, std::move(data)));
+    }, callback);
+}
+
+void ManagementHttpController::post_task_trigger(
+    const drogon::HttpRequestPtr& request,
+    const std::string& task_id,
+    ResponseCallback&& callback) const {
+    respond_manual_task_run(
+        request, "POST /api/v1/tasks/{taskId}/trigger",
+        [this, &task_id](const std::string& idempotency_key) {
+            return command_handlers_.trigger_task_run(task_id, idempotency_key);
+        },
+        callback);
+}
+
+void ManagementHttpController::post_task_run_retry(
+    const drogon::HttpRequestPtr& request,
+    const std::string& task_run_id,
+    ResponseCallback&& callback) const {
+    respond_manual_task_run(
+        request, "POST /api/v1/task-runs/{runId}/retry",
+        [this, &task_run_id](const std::string& idempotency_key) {
+            return command_handlers_.retry_task_run(task_run_id,
+                                                    idempotency_key);
+        },
+        callback);
 }
 
 void ManagementHttpController::post_alert_acknowledge(

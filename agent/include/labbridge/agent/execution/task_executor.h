@@ -28,6 +28,7 @@ public:
     void recover_pending_jobs() override;
 
     void execute(ScheduledTaskExecution execution) override;
+    PendingDispatchResult execute_pending(ManualTaskExecution execution) override;
     void request_stop() noexcept override;
 
 private:
@@ -38,6 +39,15 @@ private:
     // 采集类失败折叠为终态 failed report（对齐旧直连路径语义），返回重载后的作业。
     RecoveredJob save_collection_failure_report(const RecoveredJob& job,
                                                 const std::string& error) const;
+    // manual / scheduled：目录扫描选批 + 逐文件失败记录。
+    void plan_from_directory(const RecoveredJob& job,
+                             std::vector<PendingFilePlan>& plan,
+                             std::vector<TaskRunReportFailedFile>& failures) const;
+    // retry：只遍历固定目标，归档重放或定点补采，不调用目录扫描。
+    void plan_from_retry_targets(
+        const RecoveredJob& job,
+        std::vector<PendingFilePlan>& plan,
+        std::vector<TaskRunReportFailedFile>& failures) const;
     RecoveredJob load_job(const std::string& execution_key) const;
 
     ITaskExecutionClient& client_;

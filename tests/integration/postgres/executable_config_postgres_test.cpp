@@ -5,6 +5,7 @@
 #include "labbridge/server/postgres/libpq_sql_session.h"
 #include "labbridge/server/postgres/node_repository.h"
 #include "labbridge/server/postgres/qc_repository.h"
+#include "labbridge/server/postgres/task_run_repository.h"
 #include "labbridge/server/postgres/storage_mapping.h"
 #include "support/server/test_config_seed.h"
 
@@ -65,11 +66,13 @@ TEST_F(ExecutableConfigPostgresTest,
     labbridge::server::PostgresNodeRepository nodes{session()};
     labbridge::server::PostgresConfigRepository configs{session()};
     labbridge::server::PostgresQcRepository qc{session()};
+    labbridge::server::PostgresTaskRunRepository task_runs{session()};
     labbridge::server::NodeService node_service{nodes};
     labbridge::server::ConfigService config_service{configs};
     labbridge::server::AgentControlService service{
         node_service,
-        config_service};
+        config_service,
+        task_runs};
 
     ASSERT_TRUE(service.register_node({
         node_code(),

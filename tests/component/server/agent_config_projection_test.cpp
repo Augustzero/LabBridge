@@ -46,9 +46,11 @@ TEST(AgentConfigProjectionTest, ReturnsOnlyCompleteEnabledProjection) {
     labbridge::server::InMemoryConfigRepository configs;
     labbridge::server::NodeService node_service{nodes};
     labbridge::server::ConfigService config_service{configs};
+    labbridge::server::InMemoryTaskRunRepository task_runs;
     labbridge::server::AgentControlService service{
         node_service,
-        config_service};
+        config_service,
+        task_runs};
 
     ASSERT_TRUE(service.register_node({"node-22", "Node 22", "0.1.0"}).ok);
     const auto enabled_source = labbridge::server::test_support::

@@ -155,9 +155,11 @@ TEST(AgentControlHttpControllerTest, MapsRegistrationHeartbeatConfigAndErrors) {
     labbridge::server::InMemoryConfigRepository config_repository;
     labbridge::server::NodeService node_service{node_repository};
     labbridge::server::ConfigService config_service{config_repository};
+    labbridge::server::InMemoryTaskRunRepository task_run_repository;
     labbridge::server::AgentControlService agent_control_service{
         node_service,
-        config_service};
+        config_service,
+        task_run_repository};
 
     labbridge::server::AgentControlHttpController controller{
         test_authenticator(),

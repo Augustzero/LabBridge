@@ -5,6 +5,7 @@
 #include "labbridge/server/postgres/agent_report_receipt_repository.h"
 #include "labbridge/server/postgres/alert_repository.h"
 #include "labbridge/server/postgres/config_repository.h"
+#include "labbridge/server/postgres/node_repository.h"
 #include "labbridge/server/postgres/qc_repository.h"
 #include "labbridge/server/postgres/result_repository.h"
 #include "labbridge/server/postgres/task_run_repository.h"
@@ -28,7 +29,10 @@ public:
           qc_repository_(session_),
           alert_repository_(session_),
           receipt_repository_(session_),
-          task_run_service_(config_repository_, task_run_repository_),
+          node_repository_(session_),
+          task_run_service_(config_repository_, task_run_repository_,
+                            node_repository_, qc_repository_,
+                            result_repository_),
           result_service_(task_run_repository_, result_repository_),
           qc_service_(qc_repository_),
           alert_service_(
@@ -56,6 +60,7 @@ private:
     PostgresQcRepository qc_repository_;
     PostgresAlertRepository alert_repository_;
     PostgresAgentReportReceiptRepository receipt_repository_;
+    PostgresNodeRepository node_repository_;
     TaskRunService task_run_service_;
     ResultService result_service_;
     QcService qc_service_;

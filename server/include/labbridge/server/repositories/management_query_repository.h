@@ -60,6 +60,9 @@ struct TaskRunSummaryRecord {
     int parsed_record_count{0};
     int qc_result_count{0};
     int alert_count{0};
+    // 详情才返回完整清单；nullopt 表示库里是 NULL（旧报告）。
+    std::optional<std::vector<TaskRunFailedFile>> failed_files;
+    std::optional<std::vector<TaskRunRetryFile>> retry_files;
 };
 
 class IManagementQueryRepository {

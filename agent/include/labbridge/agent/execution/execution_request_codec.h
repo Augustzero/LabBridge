@@ -39,6 +39,10 @@ std::string encode_task_run_report_request(
 TaskRunReportRequest decode_task_run_report_request(
     const std::string& json);
 
+// retry 作业的固定输入快照（pending_jobs.retry_files_json）。
+std::string encode_retry_files(const std::vector<RetryFileInput>& retry_files);
+std::vector<RetryFileInput> decode_retry_files(const std::string& json);
+
 // 实际发往控制面的 HTTP body：与持久化编码同源，只去掉 codec_version。
 // 客户端发送与请求体大小检查共用，保证两边看到的是同一份字节。
 std::string encode_start_task_run_http_body(const StartTaskRunRequest& value);

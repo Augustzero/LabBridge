@@ -63,9 +63,10 @@ protected:
     labbridge::server::InMemoryNodeRepository nodes_;
     labbridge::server::InMemoryConfigRepository configs_;
     labbridge::server::InMemoryQcRepository qc_;
+    labbridge::server::InMemoryTaskRunRepository task_runs_;
     labbridge::server::NodeService node_service_{nodes_};
     labbridge::server::ManagementCommandService service_{
-        nodes_, configs_, qc_};
+        nodes_, configs_, qc_, task_runs_};
 };
 
 TEST_F(ManagementCommandServiceTest,

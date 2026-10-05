@@ -41,6 +41,8 @@ struct PulledAgentConfig {
     labbridge::core::NodeStatus status{labbridge::core::NodeStatus::Offline};
     std::string last_heartbeat_at;
     std::vector<labbridge::core::TaskConfig> tasks;
+    // 配置轮询一并下发的人工待执行候选；字段缺席按空列表处理。
+    std::vector<PendingExecution> pending_executions;
 };
 
 void validate_control_plane_url(std::string_view server_url);

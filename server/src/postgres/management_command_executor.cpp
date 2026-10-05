@@ -26,10 +26,14 @@ public:
           task_run_repository_(session_),
           result_repository_(session_),
           alert_repository_(session_),
-          service_(node_repository_, config_repository_, qc_repository_),
+          service_(node_repository_, config_repository_, qc_repository_,
+                   task_run_repository_),
           alert_service_(
               task_run_repository_, result_repository_, qc_repository_,
-              alert_repository_) {}
+              alert_repository_),
+          task_run_service_(config_repository_, task_run_repository_,
+                            node_repository_, qc_repository_,
+                            result_repository_) {}
 
     ManagementCommandService& service() {
         return service_;
@@ -37,6 +41,10 @@ public:
 
     AlertService& alert_service() {
         return alert_service_;
+    }
+
+    TaskRunService& task_run_service() {
+        return task_run_service_;
     }
 
     void commit_if_successful(const labbridge::core::Status& status) {
@@ -57,6 +65,7 @@ private:
     PostgresAlertRepository alert_repository_;
     ManagementCommandService service_;
     AlertService alert_service_;
+    TaskRunService task_run_service_;
 };
 
 template <typename Result, typename Operation>
@@ -108,6 +117,28 @@ ManagementCommandResult PostgresManagementCommandExecutor::set_task_enabled(
         connection_info_,
         [&task_id, enabled](ManagementCommandRequestScope& scope) {
             return scope.service().set_task_enabled(task_id, enabled);
+        });
+}
+
+ManualTaskRunResult PostgresManagementCommandExecutor::trigger_task_run(
+    const std::string& task_id,
+    const std::string& idempotency_key) const {
+    return execute_command<ManualTaskRunResult>(
+        connection_info_,
+        [&task_id, &idempotency_key](ManagementCommandRequestScope& scope) {
+            return scope.task_run_service().request_manual_run(
+                task_id, idempotency_key);
+        });
+}
+
+ManualTaskRunResult PostgresManagementCommandExecutor::retry_task_run(
+    const std::string& task_run_id,
+    const std::string& idempotency_key) const {
+    return execute_command<ManualTaskRunResult>(
+        connection_info_,
+        [&task_run_id, &idempotency_key](ManagementCommandRequestScope& scope) {
+            return scope.task_run_service().request_retry_run(
+                task_run_id, idempotency_key);
         });
 }
 

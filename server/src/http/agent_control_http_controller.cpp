@@ -95,6 +95,29 @@ Json::Value qc_rule_json(const TaskQcRuleBinding& binding) {
     return value;
 }
 
+// 人工待执行项；retry 携带固定输入快照，archive 项带完整归档身份。
+Json::Value pending_execution_json(const PendingExecutionRecord& execution) {
+    Json::Value value;
+    value["task_run_id"] = execution.task_run_id;
+    value["task_id"] = execution.task_id;
+    value["execution_key"] = execution.execution_key;
+    value["trigger_type"] = execution.trigger_type;
+    value["requested_at"] = execution.requested_at;
+    value["retry_files"] = Json::Value{Json::arrayValue};
+    for (const auto& retry_file : execution.retry_files) {
+        Json::Value file;
+        file["input_type"] = retry_file.input_type;
+        file["source_path"] = retry_file.source_path;
+        file["original_name"] = retry_file.original_name;
+        file["archive_raw_file_id"] = retry_file.archive_raw_file_id;
+        file["storage_path"] = retry_file.storage_path;
+        file["size_bytes"] = Json::Int64{retry_file.size_bytes};
+        file["file_hash"] = retry_file.file_hash;
+        file["source_mtime"] = retry_file.source_mtime;
+        value["retry_files"].append(std::move(file));
+    }
+    return value;
+}
 
 Json::Value config_json(const AgentConfigResult& result) {
     Json::Value data;
@@ -118,6 +141,11 @@ Json::Value config_json(const AgentConfigResult& result) {
     data["tasks"] = Json::Value{Json::arrayValue};
     for (const auto& task : result.enabled_tasks) {
         data["tasks"].append(task_json(task));
+    }
+
+    data["pending_executions"] = Json::Value{Json::arrayValue};
+    for (const auto& execution : result.pending_executions) {
+        data["pending_executions"].append(pending_execution_json(execution));
     }
     return data;
 }

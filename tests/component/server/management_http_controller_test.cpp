@@ -122,6 +122,24 @@ ManagementCommandHandlers empty_command_handlers() {
     handlers.create_task = [](const ManagementTaskCreateRequest&) {
         return unused_command_result();
     };
+    handlers.trigger_task_run = [](const std::string&, const std::string&) {
+        return ManualTaskRunResult{
+            labbridge::core::Status::failure(
+                labbridge::core::StatusCode::InvalidArgument,
+                "command handler was not configured for this test"),
+            {},
+            {},
+            false};
+    };
+    handlers.retry_task_run = [](const std::string&, const std::string&) {
+        return ManualTaskRunResult{
+            labbridge::core::Status::failure(
+                labbridge::core::StatusCode::InvalidArgument,
+                "command handler was not configured for this test"),
+            {},
+            {},
+            false};
+    };
     handlers.set_task_enabled = [](const std::string&, bool) {
         return unused_command_result();
     };
@@ -499,6 +517,16 @@ TEST(ManagementHttpControllerTest, ParsesCommandsAndReturnsWrittenObjects) {
         return ManagementCommandResult{
             labbridge::core::Status::success(), record.id, record};
     };
+    commands.trigger_task_run = [](const std::string& task_id,
+                                   const std::string&) {
+        return ManualTaskRunResult{
+            labbridge::core::Status::success(), task_id, "pending", false};
+    };
+    commands.retry_task_run = [](const std::string& run_id,
+                                 const std::string&) {
+        return ManualTaskRunResult{
+            labbridge::core::Status::success(), run_id, "pending", false};
+    };
     ManagementHttpController controller{
         test_authenticator(), empty_handlers(), std::move(commands)};
 
@@ -609,6 +637,16 @@ TEST(ManagementHttpControllerTest, RejectsInvalidCommandHttpBoundaries) {
                 labbridge::core::StatusCode::InvalidArgument,
                 "task_id must be a positive integer"),
             {}, {}};
+    };
+    commands.trigger_task_run = [](const std::string& task_id,
+                                   const std::string&) {
+        return ManualTaskRunResult{
+            labbridge::core::Status::success(), task_id, "pending", false};
+    };
+    commands.retry_task_run = [](const std::string& run_id,
+                                 const std::string&) {
+        return ManualTaskRunResult{
+            labbridge::core::Status::success(), run_id, "pending", false};
     };
     ManagementHttpController controller{
         test_authenticator(), empty_handlers(), std::move(commands)};

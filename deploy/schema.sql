@@ -50,12 +50,20 @@ CREATE TABLE IF NOT EXISTS task_runs (
     error_summary TEXT,
     trigger_type VARCHAR(32) NOT NULL DEFAULT 'scheduled',
     execution_key VARCHAR(128),
-    scheduled_for TIMESTAMPTZ
+    scheduled_for TIMESTAMPTZ,
+    requested_at TIMESTAMPTZ,
+    retry_of_run_id BIGINT REFERENCES task_runs(id),
+    failed_files JSONB,
+    retry_files JSONB
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS task_runs_node_execution_key_uidx
     ON task_runs (node_id, execution_key)
     WHERE execution_key IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS task_runs_task_manual_pending_uidx
+    ON task_runs (task_id)
+    WHERE status = 'pending' AND trigger_type IN ('manual', 'retry');
 
 CREATE TABLE IF NOT EXISTS raw_files (
     id BIGSERIAL PRIMARY KEY,

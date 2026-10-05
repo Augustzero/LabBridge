@@ -46,7 +46,8 @@ TEST(AgentReportSqlBudgetTest, ReportRequestUsesConstantReadsAndPerItemWrites) {
 
     labbridge::server::NodeService node_service{node_repository};
     labbridge::server::TaskRunService task_run_service{
-        config_repository, in_memory_runs};
+        config_repository, in_memory_runs, node_repository, qc_repository,
+        result_repository};
     labbridge::server::ResultService result_service{
         in_memory_runs, result_repository};
     labbridge::server::QcService qc_service{qc_repository};

@@ -88,7 +88,10 @@ int main() {
     labbridge::server::NodeService node_service{node_repository};
     labbridge::server::TaskRunService task_run_service{
         config_repository,
-        task_run_repository};
+        task_run_repository,
+        node_repository,
+        qc_repository,
+        result_repository};
     labbridge::server::QcService qc_service{qc_repository};
 
     const std::string node_code = "lab-node-real-http-report-017";

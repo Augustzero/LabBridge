@@ -35,6 +35,13 @@ public:
     explicit LocalArchiveStore(labbridge::core::fs::path work_dir);
 
     LocalFileMetadata inspect(const CollectedItem& item) const;
+    // input_path 是实际读取的文件；归档重放时它是旧归档，
+    // source.source_path 仍记录逻辑来源，两者可能不同。
+    ArchivedLocalFile archive(const std::string& task_id,
+                              const std::string& task_run_id,
+                              std::size_t ordinal,
+                              const LocalFileMetadata& source,
+                              const labbridge::core::fs::path& input_path) const;
     ArchivedLocalFile archive(const std::string& task_id,
                               const std::string& task_run_id,
                               std::size_t ordinal,
@@ -46,7 +53,8 @@ public:
         const std::string& original_name) const;
     ArchivedLocalFile recover_archive(
         const LocalFileMetadata& source,
-        const labbridge::core::fs::path& archive_path) const;
+        const labbridge::core::fs::path& archive_path,
+        const labbridge::core::fs::path& input_path) const;
 
     const labbridge::core::fs::path& work_dir() const noexcept;
 

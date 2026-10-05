@@ -233,6 +233,16 @@ TaskRunReportParsedRecord decode_parsed_record(const Json& payload) {
     return parsed;
 }
 
+std::string decode_trigger_type(const Json& payload) {
+    const auto trigger_type = required_string(payload, "trigger_type");
+    if (trigger_type != "scheduled" && trigger_type != "manual" &&
+        trigger_type != "retry") {
+        throw ExecutionCodecError(
+            "field 'trigger_type' must be scheduled, manual or retry");
+    }
+    return trigger_type;
+}
+
 }  // namespace
 
 std::string encode_task_config(const labbridge::core::TaskConfig& task) {
@@ -311,13 +321,17 @@ nlohmann::json encode_start_task_run_request_json(
 
 StartTaskRunRequest decode_start_task_run_request(const std::string& json) {
     const auto payload = parse_payload(json);
+    const auto trigger_type = decode_trigger_type(payload);
+    // 人工作业没有 Cron 槽位，本地 scheduled_for 保存空字符串；
+    // 只有定时执行才要求非空。
+    const bool allow_empty_scheduled_for = trigger_type != "scheduled";
     return {
         required_string(payload, "node_code"),
         required_string(payload, "task_id"),
         required_string(payload, "execution_key"),
-        required_string(payload, "scheduled_for"),
+        required_string(payload, "scheduled_for", allow_empty_scheduled_for),
         required_string(payload, "started_at"),
-        required_string(payload, "trigger_type"),
+        trigger_type,
     };
 }
 
@@ -370,7 +384,9 @@ nlohmann::json encode_task_run_report_request_json(
         parsed_records.push_back(encode_parsed_record(parsed));
     }
 
-    return Json{
+    // failed_files 缺席与空数组是两种语义（旧指纹 vs 明确无失败），
+    // 只有 has_failed_files 时才写字段。
+    Json payload{
         {"codec_version", kCodecVersion},
         {"task_run_id", request.task_run_id},
         {"node_code", request.node_code},
@@ -383,6 +399,20 @@ nlohmann::json encode_task_run_report_request_json(
         {"error_summary", request.error_summary},
         {"parsed_records", std::move(parsed_records)},
     };
+    if (request.has_failed_files) {
+        Json failed_files = Json::array();
+        for (const auto& failed : request.failed_files) {
+            failed_files.push_back(Json{
+                {"source_path", failed.source_path},
+                {"original_name", failed.original_name},
+                {"stage", failed.stage},
+                {"message", failed.message},
+                {"archive_raw_file_id", failed.archive_raw_file_id},
+            });
+        }
+        payload["failed_files"] = std::move(failed_files);
+    }
+    return payload;
 }
 
 TaskRunReportRequest decode_task_run_report_request(const std::string& json) {
@@ -401,11 +431,85 @@ TaskRunReportRequest decode_task_run_report_request(const std::string& json) {
     request.items_failed =
         required_non_negative_int(payload, "items_failed");
     request.error_summary = required_string(payload, "error_summary", true);
+    // 旧持久化请求没有 failed_files 字段，重编码不补新字段，
+    // 保证旧已完成回执的指纹仍可命中。
+    if (payload.contains("failed_files")) {
+        request.has_failed_files = true;
+        for (const auto& failed :
+             required_array(payload, "failed_files")) {
+            request.failed_files.push_back({
+                required_string(failed, "source_path"),
+                required_string(failed, "original_name"),
+                required_string(failed, "stage"),
+                required_string(failed, "message", true),
+                required_string(failed, "archive_raw_file_id", true),
+            });
+        }
+    }
 
     for (const auto& parsed : required_array(payload, "parsed_records")) {
         request.parsed_records.push_back(decode_parsed_record(parsed));
     }
     return request;
+}
+
+std::string encode_retry_files(
+    const std::vector<RetryFileInput>& retry_files) {
+    Json array = Json::array();
+    for (const auto& file : retry_files) {
+        array.push_back(Json{
+            {"codec_version", kCodecVersion},
+            {"input_type", file.input_type},
+            {"source_path", file.source_path},
+            {"original_name", file.original_name},
+            {"archive_raw_file_id", file.archive_raw_file_id},
+            {"storage_path", file.storage_path},
+            {"size_bytes", file.size_bytes},
+            {"file_hash", file.file_hash},
+            {"source_mtime", file.source_mtime},
+        });
+    }
+    return array.dump();
+}
+
+std::vector<RetryFileInput> decode_retry_files(const std::string& json) {
+    std::vector<RetryFileInput> files;
+    if (json.empty()) {
+        return files;
+    }
+    Json payload;
+    try {
+        payload = Json::parse(json);
+    } catch (const Json::exception& error) {
+        throw ExecutionCodecError(
+            "invalid persisted JSON: " + std::string{error.what()});
+    }
+    if (!payload.is_array()) {
+        throw ExecutionCodecError("retry files must be an array");
+    }
+    for (const auto& item : payload) {
+        if (!item.is_object() ||
+            item.value("codec_version", 0) != kCodecVersion) {
+            throw ExecutionCodecError(
+                "unsupported or missing codec_version in retry files");
+        }
+        RetryFileInput file;
+        file.input_type = required_string(item, "input_type");
+        if (file.input_type != "archive" && file.input_type != "source") {
+            throw ExecutionCodecError(
+                "retry file input_type must be archive or source");
+        }
+        file.source_path = required_string(item, "source_path");
+        file.original_name = required_string(item, "original_name");
+        file.archive_raw_file_id =
+            required_string(item, "archive_raw_file_id", true);
+        file.storage_path = required_string(item, "storage_path", true);
+        file.size_bytes = required_non_negative_long(item, "size_bytes");
+        file.file_hash = required_string(item, "file_hash", true);
+        file.source_mtime = required_string(item, "source_mtime", true);
+        files.push_back(std::move(file));
+    }
+    return files;
 }
 
 std::string encode_start_task_run_http_body(

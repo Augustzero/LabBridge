@@ -40,6 +40,10 @@ struct StartTaskRunRequest {
 struct StartTaskRunResult {
     std::string task_run_id;
     bool replayed{false};
+    // start 之后运行的状态：running 表示继续执行；
+    // failed / succeeded 表示中心已把运行收尾（如开始前任务被停用），
+    // Agent 只需收尾本地空作业，不能再采集。
+    std::string run_status{"running"};
 };
 
 struct RawFileManifestEntry {
@@ -77,6 +81,16 @@ struct TaskRunReportParsedRecord {
     std::vector<TaskRunReportQcResult> qc_results;
 };
 
+// 终态报告的文件级失败：read / archive / parse 阶段的具体文件与简短原因。
+// archive_raw_file_id 为空表示该输入从未取得有效归档（只能定点补采）。
+struct TaskRunReportFailedFile {
+    std::string source_path;
+    std::string original_name;
+    std::string stage;
+    std::string message;
+    std::string archive_raw_file_id;
+};
+
 struct TaskRunReportRequest {
     std::string task_run_id;
     std::string node_code;
@@ -89,6 +103,10 @@ struct TaskRunReportRequest {
     int items_failed{0};
     std::string error_summary;
     std::vector<TaskRunReportParsedRecord> parsed_records;
+    // has_failed_files 区分“没带字段”和“明确空清单”：
+    // 前者沿用旧指纹算法，后者参与指纹且中心落 []。
+    bool has_failed_files{false};
+    std::vector<TaskRunReportFailedFile> failed_files;
 };
 
 struct TaskRunReportResult {
@@ -108,6 +126,32 @@ std::string make_manifest_idempotency_key(
 std::string make_report_idempotency_key(
     const std::string& node_code,
     const std::string& task_run_id);
+
+// ===== 人工执行（manual / retry）的候选与固定输入 =====
+
+// 创建 retry 时由中心固定的重试目标。
+// archive：input 来自既有归档，字段齐全；source：定点补采，只带确切路径，
+// 文件内容在实际读取并落计划时才固定。
+struct RetryFileInput {
+    std::string input_type;
+    std::string source_path;
+    std::string original_name;
+    std::string archive_raw_file_id;
+    std::string storage_path;
+    long long size_bytes{0};
+    std::string file_hash;
+    std::string source_mtime;
+};
+
+// 配置轮询下发的人工待执行项；retry 带固定 retry_files。
+struct PendingExecution {
+    std::string task_run_id;
+    std::string task_id;
+    std::string execution_key;
+    std::string trigger_type;
+    std::string requested_at;
+    std::vector<RetryFileInput> retry_files;
+};
 
 class ITaskExecutionClient {
 public:

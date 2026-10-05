@@ -133,6 +133,16 @@ TaskRunRecord to_task_run(const SqlRow& row) {
         storage::value_or_empty(row, "execution_key");
     record.scheduled_for =
         storage::value_or_empty(row, "scheduled_for");
+    record.requested_at =
+        storage::value_or_empty(row, "requested_at");
+    record.retry_of_run_id =
+        storage::value_or_empty(row, "retry_of_run_id");
+    // NULL（旧报告没写清单）用 -1 表示，与“空数组”区分开。
+    const auto failed_file_count =
+        storage::value_or_empty(row, "failed_file_count");
+    record.failed_file_count = failed_file_count.empty()
+        ? -1
+        : storage::int_or_zero(row, "failed_file_count");
     return record;
 }
 
@@ -236,7 +246,12 @@ std::string task_run_columns() {
         "COALESCE(tr.error_summary, '') AS error_summary, "
         "tr.trigger_type, "
         "COALESCE(tr.execution_key, '') AS execution_key, " +
-        storage::utc_column("tr.scheduled_for", "scheduled_for") + " ";
+        storage::utc_column("tr.scheduled_for", "scheduled_for") + ", " +
+        storage::utc_column("tr.requested_at", "requested_at") + ", "
+        "COALESCE(tr.retry_of_run_id::text, '') AS retry_of_run_id, "
+        "CASE WHEN tr.failed_files IS NULL THEN '' "
+        "ELSE jsonb_array_length(tr.failed_files)::text END "
+        "AS failed_file_count ";
 }
 
 }  // namespace
@@ -483,7 +498,9 @@ PostgresManagementQueryRepository::find_task_run_summary(
         " JOIN parsed_records pr ON pr.id = qr.parsed_record_id "
         " WHERE pr.task_run_id = tr.id)::text AS qc_result_count, "
         "(SELECT count(*) FROM alerts a "
-        " WHERE a.task_run_id = tr.id)::text AS alert_count "
+        " WHERE a.task_run_id = tr.id)::text AS alert_count, "
+        "COALESCE(tr.failed_files::text, '') AS failed_files_json, "
+        "COALESCE(tr.retry_files::text, '') AS retry_files_json "
         "FROM task_runs tr "
         "JOIN nodes n ON n.id = tr.node_id "
         "WHERE tr.id = $1::bigint LIMIT 1";
@@ -501,6 +518,10 @@ PostgresManagementQueryRepository::find_task_run_summary(
         storage::int_or_zero(*row, "qc_result_count");
     summary.alert_count =
         storage::int_or_zero(*row, "alert_count");
+    summary.failed_files = parse_failed_files_json(
+        storage::value_or_empty(*row, "failed_files_json"));
+    summary.retry_files = parse_retry_files_json(
+        storage::value_or_empty(*row, "retry_files_json"));
     return summary;
 }
 

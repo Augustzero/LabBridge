@@ -5,8 +5,11 @@
 namespace labbridge::server {
 
 AgentControlService::AgentControlService(NodeService& node_service,
-                                         ConfigService& config_service)
-    : node_service_(node_service), config_service_(config_service) {}
+                                         ConfigService& config_service,
+                                         ITaskRunRepository& task_run_repository)
+    : node_service_(node_service),
+      config_service_(config_service),
+      task_run_repository_(task_run_repository) {}
 
 labbridge::core::Status AgentControlService::register_node(
     const labbridge::core::NodeInfo& node) {
@@ -23,6 +26,9 @@ AgentConfigResult AgentControlService::find_config(
     if (node_code.empty()) {
         return {labbridge::core::Status::failure("node_code is required"),
                 std::nullopt,
+                {},
+                {},
+                {},
                 {}};
     }
 
@@ -32,6 +38,9 @@ AgentConfigResult AgentControlService::find_config(
                     labbridge::core::StatusCode::NotFound,
                     "node is not registered"),
                 std::nullopt,
+                {},
+                {},
+                {},
                 {}};
     }
 
@@ -42,6 +51,8 @@ AgentConfigResult AgentControlService::find_config(
     result.enabled_tasks = std::move(projection.tasks);
     result.data_sources = std::move(projection.data_sources);
     result.task_qc_rules = std::move(projection.task_qc_rules);
+    result.pending_executions =
+        task_run_repository_.find_pending_executions_by_node(node_code);
     return result;
 }
 

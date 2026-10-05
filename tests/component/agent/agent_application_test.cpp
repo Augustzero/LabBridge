@@ -96,6 +96,10 @@ public:
     void execute(labbridge::agent::ScheduledTaskExecution) override {
         ++executions;
     }
+    labbridge::agent::PendingDispatchResult execute_pending(
+        labbridge::agent::ManualTaskExecution) override {
+        return labbridge::agent::PendingDispatchResult::Dispatched;
+    }
     void request_stop() noexcept override { ++stop_requests; }
 
     std::atomic<int> executions{0};
@@ -166,6 +170,10 @@ public:
     void execute(labbridge::agent::ScheduledTaskExecution execution) override {
         observed_task_id = execution.task.id;
         throw std::logic_error("unexpected worker failure");
+    }
+    labbridge::agent::PendingDispatchResult execute_pending(
+        labbridge::agent::ManualTaskExecution) override {
+        return labbridge::agent::PendingDispatchResult::Dispatched;
     }
     void request_stop() noexcept override { stop_requested = true; }
 
@@ -260,6 +268,11 @@ public:
         throw labbridge::agent::TaskExecutionClientError{
             labbridge::agent::TaskExecutionErrorKind::ServerError,
             "delivery credential rejected", status_};
+    }
+
+    labbridge::agent::PendingDispatchResult execute_pending(
+        labbridge::agent::ManualTaskExecution) override {
+        return labbridge::agent::PendingDispatchResult::Dispatched;
     }
 
     void request_stop() noexcept override { stopped = true; }

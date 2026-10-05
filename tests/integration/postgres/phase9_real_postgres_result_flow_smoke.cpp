@@ -4,6 +4,7 @@
 #include "labbridge/server/application/node_service.h"
 #include "labbridge/server/postgres/config_repository.h"
 #include "labbridge/server/postgres/node_repository.h"
+#include "labbridge/server/postgres/qc_repository.h"
 #include "labbridge/server/postgres/result_repository.h"
 #include "labbridge/server/postgres/task_run_repository.h"
 #include "labbridge/server/application/result_service.h"
@@ -28,9 +29,12 @@ int main() {
     labbridge::server::PostgresConfigRepository config_repository{session};
     labbridge::server::PostgresTaskRunRepository task_run_repository{session};
     labbridge::server::PostgresResultRepository result_repository{session};
+    labbridge::server::PostgresQcRepository qc_repository{session};
     labbridge::server::NodeService node_service{node_repository};
     labbridge::server::ConfigService config_service{config_repository};
-    labbridge::server::TaskRunService task_run_service{config_repository, task_run_repository};
+    labbridge::server::TaskRunService task_run_service{
+        config_repository, task_run_repository, node_repository,
+        qc_repository, result_repository};
     labbridge::server::ResultService result_service{task_run_repository, result_repository};
 
     const std::string node_code = "lab-node-real-result-009";

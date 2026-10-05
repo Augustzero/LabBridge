@@ -180,7 +180,7 @@ TEST_P(AuthRecoveryExecutionTest,
     MockHttpServer server{{
         {static_cast<http::status>(GetParam()), rejection_body},
         {http::status::created,
-         R"({"ok":true,"data":{"task_run_id":"901","replayed":false}})"},
+         R"({"ok":true,"data":{"task_run_id":"901","replayed":false,"run_status":"running"}})"},
         {static_cast<http::status>(GetParam()), rejection_body},
         {http::status::created,
          R"({"ok":true,"data":{"raw_file_ids":["951"],"replayed":false}})"},

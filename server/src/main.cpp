@@ -255,6 +255,18 @@ int main(int argc, char* argv[]) {
                 return management_command_executor->set_task_enabled(
                     task_id, enabled);
             };
+        command_handlers.trigger_task_run =
+            [management_command_executor](const std::string& task_id,
+                                         const std::string& idempotency_key) {
+                return management_command_executor->trigger_task_run(
+                    task_id, idempotency_key);
+            };
+        command_handlers.retry_task_run =
+            [management_command_executor](const std::string& task_run_id,
+                                         const std::string& idempotency_key) {
+                return management_command_executor->retry_task_run(
+                    task_run_id, idempotency_key);
+            };
         command_handlers.acknowledge_alert =
             [management_command_executor](const std::string& alert_id) {
                 return management_command_executor->acknowledge_alert(

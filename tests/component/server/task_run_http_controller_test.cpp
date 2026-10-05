@@ -81,9 +81,13 @@ protected:
                 });
     }
 
+    labbridge::server::InMemoryNodeRepository nodes_;
     labbridge::server::InMemoryConfigRepository configs_;
+    labbridge::server::InMemoryQcRepository qc_;
+    labbridge::server::InMemoryResultRepository results_;
     labbridge::server::InMemoryTaskRunRepository runs_;
-    labbridge::server::TaskRunService service_{configs_, runs_};
+    labbridge::server::TaskRunService service_{
+        configs_, runs_, nodes_, qc_, results_};
     std::string task_id_;
     std::unique_ptr<labbridge::server::TaskRunHttpController> controller_;
 };

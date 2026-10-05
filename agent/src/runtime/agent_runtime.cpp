@@ -106,7 +106,8 @@ AgentRuntime::AgentRuntime(labbridge::core::NodeInfo node,
 
 void AgentRuntime::publish_initial_config() {
     if (connected_ && !initial_config_published_ && config_sink_ != nullptr) {
-        config_sink_->replace_config(current_config_.tasks);
+        config_sink_->replace_config(current_config_.tasks,
+                                     current_config_.pending_executions);
     }
     initial_config_published_ = true;
 }
@@ -178,7 +179,8 @@ bool AgentRuntime::reconnect() {
     }
     current_config_ = client_.fetch_config(node_.node_code);
     if (config_sink_ != nullptr) {
-        config_sink_->replace_config(current_config_.tasks);
+        config_sink_->replace_config(current_config_.tasks,
+                                     current_config_.pending_executions);
     }
     initial_config_published_ = true;
     labbridge::core::log_info(
@@ -220,12 +222,15 @@ void AgentRuntime::refresh_config() {
         auto pulled_config = client_.fetch_config(node_.node_code);
         current_config_ = std::move(pulled_config);
         if (config_sink_ != nullptr) {
-            config_sink_->replace_config(current_config_.tasks);
+            config_sink_->replace_config(current_config_.tasks,
+                                         current_config_.pending_executions);
         }
         labbridge::core::log_info(
             kComponent,
             "config updated; enabled_tasks=" +
-                std::to_string(current_config_.tasks.size()));
+                std::to_string(current_config_.tasks.size()) +
+                "; pending_executions=" +
+                std::to_string(current_config_.pending_executions.size()));
     } catch (const ControlPlaneClientError& error) {
         if (error.is_auth_rejection()) {
             log_auth_rejection("config fetch", error, node_.node_code);

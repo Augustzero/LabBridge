@@ -63,6 +63,10 @@ struct TaskRunReportRequest {
     int items_failed{0};
     std::string error_summary;
     std::vector<TaskRunReportParsedRecord> parsed_records;
+    // has_failed_files 区分“旧请求没带字段”（写 NULL）和“明确没有文件失败”（写 []）。
+    // 条目复用 TaskRunFailedFile，与 task_runs.failed_files 的 JSON 字段一致。
+    bool has_failed_files{false};
+    std::vector<TaskRunFailedFile> failed_files;
 };
 
 struct TaskRunReportResult {
@@ -93,6 +97,9 @@ private:
     };
     TaskRunOwnership validate_task_run_node(const std::string& task_run_id,
                                             const std::string& node_code) const;
+    // 失败清单的条目与归档引用校验（见实现处注释）。
+    labbridge::core::Status validate_failed_files(
+        const TaskRunReportRequest& request) const;
 
     TaskRunService& task_run_service_;
     ResultService& result_service_;

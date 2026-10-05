@@ -149,6 +149,29 @@ TaskRunReportRequest parse_task_run_report(const Json::Value& body) {
     request.items_failed = optional_int(body, "items_failed", 0, "");
     request.error_summary = optional_string(body, "error_summary", {}, "");
 
+    // failed_files 是可选字段：字段缺席沿用旧语义（has=false），
+    // 字段存在则必须显式传数组，空数组表示“明确没有文件级失败”。
+    if (body.isMember("failed_files")) {
+        request.has_failed_files = true;
+        const auto& failed_files = optional_array(body, "failed_files", "");
+        request.failed_files.reserve(failed_files.size());
+        for (Json::ArrayIndex index = 0; index < failed_files.size(); ++index) {
+            const auto path = "failed_files[" + std::to_string(index) + "]";
+            const auto& value = failed_files[index];
+            require_object(value, path);
+
+            TaskRunFailedFile failed;
+            failed.source_path = required_string(value, "source_path", path);
+            failed.original_name =
+                required_string(value, "original_name", path);
+            failed.stage = required_string(value, "stage", path);
+            failed.message = required_string(value, "message", path);
+            failed.archive_raw_file_id =
+                optional_string(value, "archive_raw_file_id", {}, path);
+            request.failed_files.push_back(std::move(failed));
+        }
+    }
+
     const auto& parsed_records = optional_array(body, "parsed_records", "");
     request.parsed_records.reserve(parsed_records.size());
     for (Json::ArrayIndex index = 0; index < parsed_records.size(); ++index) {

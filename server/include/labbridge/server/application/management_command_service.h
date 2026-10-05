@@ -5,6 +5,7 @@
 #include "labbridge/server/repositories/config_repository.h"
 #include "labbridge/server/repositories/node_repository.h"
 #include "labbridge/server/repositories/qc_repository.h"
+#include "labbridge/server/repositories/task_run_repository.h"
 
 #include <string>
 #include <variant>
@@ -51,7 +52,8 @@ class ManagementCommandService {
 public:
     ManagementCommandService(INodeRepository& node_repository,
                              IConfigRepository& config_repository,
-                             IQcRepository& qc_repository);
+                             IQcRepository& qc_repository,
+                             ITaskRunRepository& task_run_repository);
 
     ManagementCommandResult create_data_source(
         const ManagementDataSourceCreateRequest& request);
@@ -63,13 +65,10 @@ public:
                                              bool enabled);
 
 private:
-    labbridge::core::Status validate_task_dependencies(
-        const TaskRecord& task,
-        const std::vector<std::string>& qc_rule_ids) const;
-
     INodeRepository& node_repository_;
     IConfigRepository& config_repository_;
     IQcRepository& qc_repository_;
+    ITaskRunRepository& task_run_repository_;
 };
 
 }  // namespace labbridge::server

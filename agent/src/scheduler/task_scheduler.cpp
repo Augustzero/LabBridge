@@ -118,7 +118,8 @@ public:
     Impl(ITaskExecutor& executor, ISchedulerTimeSource& time_source)
         : executor{executor}, time_source{time_source} {}
 
-    void replace_config(std::vector<labbridge::core::TaskConfig> tasks) {
+    void replace_config(std::vector<labbridge::core::TaskConfig> tasks,
+                        std::vector<PendingExecution> pending_executions) {
         const auto applied_at = time_source.system_now();
         std::map<std::string, Entry> replacement;
         std::lock_guard<std::mutex> lock{mutex};
@@ -172,6 +173,9 @@ public:
         // 可执行投影缺席既可能表示禁用，也可能表示删除；这里只停止新调度，
         // 不清除任何持久化状态，任务重新启用后指纹去重仍然有效。
         entries = std::move(replacement);
+        // 候选列表只是通知线索，不承担持久化职责：
+        // 每次刷新整体替换，中心 pending 的运行还在，下轮轮询会再下发。
+        pending_candidates = std::move(pending_executions);
         time_source.wake();
     }
 
@@ -267,6 +271,12 @@ public:
                 continue;
             }
 
+            // 到期 Cron 处理完后取一个人工候选，随后重新检查调度；
+            // 人工执行不推进 Cron 水位、不补跑错过的槽位。
+            if (dispatch_one_pending()) {
+                continue;
+            }
+
             auto delay = kClockRecheckInterval;
             if (earliest.has_value() && *earliest > now) {
                 delay = std::min(
@@ -282,6 +292,54 @@ public:
         }
     }
 
+    // 取一个人工作业交给执行器。返回 true 表示本轮做过一次派发尝试，
+    // 调度循环应立刻重新检查；队列满时把候选放回队首并不再尝试。
+    bool dispatch_one_pending() {
+        std::optional<ManualTaskExecution> dispatch;
+        {
+            std::lock_guard<std::mutex> lock{mutex};
+            while (!pending_candidates.empty() && !dispatch.has_value()) {
+                auto candidate = std::move(pending_candidates.front());
+                pending_candidates.erase(pending_candidates.begin());
+                const auto entry = entries.find(candidate.task_id);
+                if (entry == entries.end()) {
+                    // 任务不在当前可执行投影（禁用或数据源失效）：
+                    // 丢弃这条通知线索，中心侧的 pending 运行仍在，
+                    // 任务恢复后下轮轮询会重新下发。
+                    labbridge::core::log_warn(
+                        kComponent,
+                        "dropping pending execution of unavailable task_id=" +
+                            candidate.task_id +
+                            "; execution_key=" + candidate.execution_key);
+                    continue;
+                }
+                dispatch = ManualTaskExecution{std::move(candidate),
+                                               entry->second.config};
+            }
+            if (!dispatch.has_value()) {
+                return false;
+            }
+        }
+
+        try {
+            // execute_pending 按值收走作业；队列满时要把候选放回队首，
+            // 先留一份副本，不能用移动后的对象。
+            PendingExecution candidate = dispatch->execution;
+            const auto result = executor.execute_pending(std::move(*dispatch));
+            if (result == PendingDispatchResult::QueueFull) {
+                // 请求留在中心 pending：把候选放回队首，本轮到此为止，
+                // 等正常唤醒（下一个 Cron 槽或配置刷新）再试。
+                std::lock_guard<std::mutex> lock{mutex};
+                pending_candidates.insert(
+                    pending_candidates.begin(), std::move(candidate));
+                return true;
+            }
+        } catch (const DeliveryAbandoned& error) {
+            labbridge::core::log_warn(kComponent, error.what());
+        }
+        return true;
+    }
+
     void request_stop() noexcept {
         const bool was_stopped =
             stop_requested.exchange(true, std::memory_order_acq_rel);
@@ -295,6 +353,7 @@ public:
     ISchedulerTimeSource& time_source;
     std::mutex mutex;
     std::map<std::string, Entry> entries;
+    std::vector<PendingExecution> pending_candidates;
     std::atomic<bool> stop_requested{false};
     std::atomic<bool> running{false};
 };
@@ -306,8 +365,9 @@ TaskScheduler::TaskScheduler(ITaskExecutor& executor,
 TaskScheduler::~TaskScheduler() = default;
 
 void TaskScheduler::replace_config(
-    std::vector<labbridge::core::TaskConfig> tasks) {
-    impl_->replace_config(std::move(tasks));
+    std::vector<labbridge::core::TaskConfig> tasks,
+    std::vector<PendingExecution> pending_executions) {
+    impl_->replace_config(std::move(tasks), std::move(pending_executions));
 }
 
 void TaskScheduler::run() {

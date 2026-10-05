@@ -186,7 +186,10 @@ TEST(AgentReportHttpControllerTest, MapsManifestReportReplayAndErrors) {
     labbridge::server::NodeService node_service{node_repository};
     labbridge::server::TaskRunService task_run_service{
         config_repository,
-        task_run_repository};
+        task_run_repository,
+        node_repository,
+        qc_repository,
+        result_repository};
     labbridge::server::ResultService result_service{
         task_run_repository,
         result_repository};

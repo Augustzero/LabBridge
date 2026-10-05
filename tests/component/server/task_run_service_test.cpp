@@ -23,9 +23,13 @@ protected:
         return configs_.create_task(std::move(task));
     }
 
+    labbridge::server::InMemoryNodeRepository nodes_;
     labbridge::server::InMemoryConfigRepository configs_;
+    labbridge::server::InMemoryQcRepository qc_;
+    labbridge::server::InMemoryResultRepository results_;
     labbridge::server::InMemoryTaskRunRepository task_runs_;
-    labbridge::server::TaskRunService service_{configs_, task_runs_};
+    labbridge::server::TaskRunService service_{
+        configs_, task_runs_, nodes_, qc_, results_};
 };
 
 TEST_F(TaskRunServiceTest, RejectsMissingStartFields) {
@@ -176,7 +180,7 @@ TEST_F(TaskRunServiceTest, ReturnsNotFoundForMissingRun) {
 TEST_F(TaskRunServiceTest, FinishesRunWithReportedSummary) {
     const auto task_id = create_task();
     const auto started = service_.start(
-        {"node-a", task_id, "2026-07-31 10:00:00", "manual"});
+        {"node-a", task_id, "2026-07-31 10:00:00", ""});
     ASSERT_TRUE(started.status.ok) << started.status.message;
     labbridge::server::FinishTaskRunRequest request;
     request.task_run_id = started.id;

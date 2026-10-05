@@ -1,6 +1,7 @@
 #include "labbridge/server/application/management_command_service.h"
 
 #include "labbridge/server/application/id_validation.h"
+#include "labbridge/server/application/task_executability.h"
 
 #include "labbridge/core/cron_schedule.h"
 
@@ -33,10 +34,6 @@ Status not_found(std::string message) {
     return Status::failure(StatusCode::NotFound, std::move(message));
 }
 
-Status conflict(std::string message) {
-    return Status::failure(StatusCode::Conflict, std::move(message));
-}
-
 bool is_blank(const std::string& value) {
     for (const unsigned char character : value) {
         if (!std::isspace(character)) {
@@ -44,11 +41,6 @@ bool is_blank(const std::string& value) {
         }
     }
     return true;
-}
-
-bool is_supported_rule_type(const std::string& rule_type) {
-    return rule_type == "required_fields" ||
-           rule_type == "basic_timestamp_format";
 }
 
 Status validate_name(const std::string& name, const std::string& field) {
@@ -88,10 +80,12 @@ ManagementCommandResult successful_result(std::string id,
 ManagementCommandService::ManagementCommandService(
     INodeRepository& node_repository,
     IConfigRepository& config_repository,
-    IQcRepository& qc_repository)
+    IQcRepository& qc_repository,
+    ITaskRunRepository& task_run_repository)
     : node_repository_(node_repository),
       config_repository_(config_repository),
-      qc_repository_(qc_repository) {}
+      qc_repository_(qc_repository),
+      task_run_repository_(task_run_repository) {}
 
 ManagementCommandResult ManagementCommandService::create_data_source(
     const ManagementDataSourceCreateRequest& request) {
@@ -143,7 +137,8 @@ ManagementCommandResult ManagementCommandService::create_qc_rule(
     if (!name_status.ok) {
         return {name_status, {}};
     }
-    if (!is_supported_rule_type(request.rule_type)) {
+    if (request.rule_type != "required_fields" &&
+        request.rule_type != "basic_timestamp_format") {
         return {invalid("unsupported QC rule type"), {}};
     }
     const auto config = parse_json_object(request.rule_config_json);
@@ -217,8 +212,9 @@ ManagementCommandResult ManagementCommandService::create_task(
     task.qc_profile = request.qc_profile;
     task.enabled = request.enabled;
 
-    const auto dependency_status =
-        validate_task_dependencies(task, request.qc_rule_ids);
+    const auto dependency_status = validate_task_executable(
+        node_repository_, config_repository_, qc_repository_, task,
+        request.qc_rule_ids);
     if (!dependency_status.ok) {
         return {dependency_status, {}};
     }
@@ -245,6 +241,11 @@ ManagementCommandResult ManagementCommandService::set_task_enabled(
     if (!is_positive_id(task_id)) {
         return {invalid("task_id must be a positive integer"), {}};
     }
+    // 先锁任务行再改状态，与人工受理/Agent start 的加锁顺序一致，
+    // 保证并发时“新受理的 pending 请求”和“禁用收尾”只有一种结果。
+    if (!task_run_repository_.lock_task(task_id)) {
+        return {not_found("task is not found"), {}};
+    }
     const auto task = config_repository_.find_task(task_id);
     if (!task.has_value()) {
         return {not_found("task is not found"), {}};
@@ -253,14 +254,19 @@ ManagementCommandResult ManagementCommandService::set_task_enabled(
     if (enabled) {
         const auto rule_ids =
             config_repository_.find_task_qc_rule_ids(task_id);
-        const auto dependency_status =
-            validate_task_dependencies(*task, rule_ids);
+        const auto dependency_status = validate_task_executable(
+            node_repository_, config_repository_, qc_repository_, *task,
+            rule_ids);
         if (!dependency_status.ok) {
             return {dependency_status, {}};
         }
+    } else {
+        // 尚未开始的人工请求同事务收尾为 failed；已 running 的作业不打断。
+        // 重新启用不会自动恢复这些请求，需要用户再次发起。
+        task_run_repository_.fail_pending_manual_runs(
+            task_id, "开始前任务被停用，未执行采集");
     }
 
-    // 禁用仅改变后续中心端投影，不触碰 Agent 已持久化或运行中的作业。
     config_repository_.set_task_enabled(task_id, enabled);
     auto updated_task = config_repository_.find_task(task_id);
     if (updated_task.has_value()) {
@@ -268,59 +274,6 @@ ManagementCommandResult ManagementCommandService::set_task_enabled(
             config_repository_.find_task_qc_rule_ids(task_id);
     }
     return successful_result(task_id, std::move(updated_task));
-}
-
-// 校验存量依赖的可执行性（node / data source / qc rule）。
-// task_type / parser / cron / 数量在 create_task 请求级已校验，
-// enable 路径的存量任务创建时也已通过同一校验，这里不再重查。
-Status ManagementCommandService::validate_task_dependencies(
-    const TaskRecord& task,
-    const std::vector<std::string>& qc_rule_ids) const {
-    if (!node_repository_.find_by_code(task.node_code).has_value()) {
-        return not_found("node is not found");
-    }
-    const auto data_source =
-        config_repository_.find_data_source(task.data_source_id);
-    if (!data_source.has_value()) {
-        return not_found("data source is not found");
-    }
-    if (data_source->node_code != task.node_code) {
-        return conflict("data source does not belong to node");
-    }
-    if (!data_source->enabled) {
-        return conflict("data source is disabled");
-    }
-    if (data_source->source_type !=
-        labbridge::core::SourceType::LocalDirectory) {
-        return conflict("data source type is not executable");
-    }
-    const auto source_config = parse_json_object(data_source->config_json);
-    if (!source_config.has_value() ||
-        !source_config->contains("root_path") ||
-        !source_config->at("root_path").is_string() ||
-        is_blank(source_config->at("root_path").get<std::string>()) ||
-        !source_config->contains("extension") ||
-        !source_config->at("extension").is_string() ||
-        source_config->at("extension").get<std::string>() != ".csv") {
-        return conflict("data source config is not executable by CSV tasks");
-    }
-    for (const auto& qc_rule_id : qc_rule_ids) {
-        const auto rule = qc_repository_.find_rule(qc_rule_id);
-        if (!rule.has_value()) {
-            return not_found("QC rule is not found");
-        }
-        if (!rule->enabled) {
-            return conflict("QC rule is disabled");
-        }
-        if (!is_supported_rule_type(rule->rule_type)) {
-            return conflict("QC rule type is not executable");
-        }
-        const auto rule_config = parse_json_object(rule->rule_config_json);
-        if (!rule_config.has_value() || !rule_config->empty()) {
-            return conflict("QC rule config is not executable");
-        }
-    }
-    return Status::success();
 }
 
 }  // namespace labbridge::server

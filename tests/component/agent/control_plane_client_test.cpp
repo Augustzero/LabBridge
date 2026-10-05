@@ -410,7 +410,7 @@ TEST(ControlPlaneClientTest, SendsCompleteTaskExecutionContracts) {
     MockHttpServer server{{
         {
             http::status::created,
-            R"({"ok":true,"data":{"task_run_id":"42","replayed":false}})",
+            R"({"ok":true,"data":{"task_run_id":"42","replayed":false,"run_status":"running"}})",
         },
         {
             http::status::created,
@@ -539,7 +539,7 @@ TEST(ControlPlaneClientTest, AttachesNodeCredentialsToEveryRequest) {
         },
         {
             http::status::created,
-            R"({"ok":true,"data":{"task_run_id":"42","replayed":false}})",
+            R"({"ok":true,"data":{"task_run_id":"42","replayed":false,"run_status":"running"}})",
         },
         {
             http::status::created,

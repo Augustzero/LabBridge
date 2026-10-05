@@ -6,6 +6,7 @@
 #include "labbridge/server/postgres/management_command_executor.h"
 #include "labbridge/server/postgres/node_repository.h"
 #include "labbridge/server/postgres/qc_repository.h"
+#include "labbridge/server/postgres/task_run_repository.h"
 #include "labbridge/server/postgres/sql_transaction.h"
 #include "labbridge/server/postgres/storage_mapping.h"
 
@@ -236,7 +237,9 @@ TEST_F(ManagementCommandPostgresTest,
     labbridge::server::PostgresNodeRepository nodes{writer};
     labbridge::server::PostgresConfigRepository configs{writer};
     labbridge::server::PostgresQcRepository qc{writer};
-    labbridge::server::ManagementCommandService service{nodes, configs, qc};
+    labbridge::server::PostgresTaskRunRepository task_runs{writer};
+    labbridge::server::ManagementCommandService service{
+        nodes, configs, qc, task_runs};
     labbridge::server::SqlTransaction transaction{writer};
     const auto created = service.create_task(request);
     ASSERT_TRUE(created.status.ok) << created.status.message;
@@ -262,8 +265,10 @@ TEST_F(ManagementCommandPostgresTest,
         labbridge::server::PostgresConfigRepository failing_configs{
             failing_session};
         labbridge::server::PostgresQcRepository failing_qc{failing_session};
+        labbridge::server::PostgresTaskRunRepository failing_runs{
+            failing_session};
         labbridge::server::ManagementCommandService failing_service{
-            failing_nodes, failing_configs, failing_qc};
+            failing_nodes, failing_configs, failing_qc, failing_runs};
         EXPECT_THROW(
             failing_service.create_task(task_request(
                 source_id,

@@ -3,6 +3,7 @@
 #include "labbridge/server/application/alert_service.h"
 #include "labbridge/server/application/management_command_service.h"
 #include "labbridge/server/application/management_query_service.h"
+#include "labbridge/server/application/task_run_service.h"
 #include "labbridge/server/http/http_authenticator.h"
 #include "labbridge/server/http/http_json_response.h"
 
@@ -49,6 +50,10 @@ struct ManagementCommandHandlers {
         const ManagementTaskCreateRequest&)> create_task;
     std::function<ManagementCommandResult(const std::string&, bool)>
         set_task_enabled;
+    std::function<ManualTaskRunResult(const std::string&, const std::string&)>
+        trigger_task_run;
+    std::function<ManualTaskRunResult(const std::string&, const std::string&)>
+        retry_task_run;
     std::function<AlertDispositionResult(const std::string&)>
         acknowledge_alert;
     std::function<AlertDispositionResult(const std::string&)> close_alert;
@@ -99,6 +104,12 @@ public:
     void patch_task(const drogon::HttpRequestPtr& request,
                     const std::string& task_id,
                     ResponseCallback&& callback) const;
+    void post_task_trigger(const drogon::HttpRequestPtr& request,
+                           const std::string& task_id,
+                           ResponseCallback&& callback) const;
+    void post_task_run_retry(const drogon::HttpRequestPtr& request,
+                             const std::string& task_run_id,
+                             ResponseCallback&& callback) const;
     void post_alert_acknowledge(const drogon::HttpRequestPtr& request,
                                 const std::string& alert_id,
                                 ResponseCallback&& callback) const;
@@ -107,6 +118,12 @@ public:
                           ResponseCallback&& callback) const;
 
 private:
+    void respond_manual_task_run(
+        const drogon::HttpRequestPtr& request,
+        const std::string& operation,
+        const std::function<ManualTaskRunResult(const std::string&)>& command,
+        http::ResponseCallback& callback) const;
+
     std::shared_ptr<const HttpAuthenticator> authenticator_;
     ManagementQueryHandlers query_handlers_;
     ManagementCommandHandlers command_handlers_;

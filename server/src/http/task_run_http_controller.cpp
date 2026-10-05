@@ -23,6 +23,16 @@ std::string required_string(const Json::Value& body, const std::string& field) {
     return value;
 }
 
+std::string string_field(const Json::Value& body, const std::string& field) {
+    if (!body.isMember(field)) {
+        throw http::RequestValidationError(field + " is required");
+    }
+    if (!body[field].isString()) {
+        throw http::RequestValidationError(field + " must be a string");
+    }
+    return body[field].asString();
+}
+
 StartTaskRunRequest parse_start_request(const drogon::HttpRequestPtr& request) {
     const auto& body = request->getJsonObject();
     if (!body || !body->isObject()) {
@@ -34,9 +44,10 @@ StartTaskRunRequest parse_start_request(const drogon::HttpRequestPtr& request) {
     parsed.node_code = required_string(*body, "node_code");
     parsed.task_id = required_string(*body, "task_id");
     parsed.execution_key = required_string(*body, "execution_key");
-    parsed.scheduled_for = required_string(*body, "scheduled_for");
     parsed.started_at = required_string(*body, "started_at");
     parsed.trigger_type = required_string(*body, "trigger_type");
+    // 人工作业没有 Cron 槽位：scheduled_for 为空串，字段仍必须显式携带。
+    parsed.scheduled_for = string_field(*body, "scheduled_for");
     return parsed;
 }
 
@@ -91,6 +102,8 @@ void TaskRunHttpController::post_start(
         Json::Value data;
         data["task_run_id"] = result.id;
         data["replayed"] = result.replayed;
+        // run_status 让 Agent 识别“运行已被中心收尾”的晚到候选。
+        data["run_status"] = result.run_status;
         callback(http::success_response(drogon::k201Created, std::move(data)));
     }, callback);
 }
