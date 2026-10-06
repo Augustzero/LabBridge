@@ -149,6 +149,19 @@ labbridge::core::fs::path input_path_of(const PendingFilePlan& file) {
         : labbridge::core::fs::path{file.input_path};
 }
 
+// 按源路径从 retry 快照取原归档引用；普通采集和 source 目标没有快照，
+// 返回空串。
+std::string inherited_archive_ref(
+    const std::vector<RetryFileInput>& retry_files,
+    const std::string& source_path) {
+    for (const auto& target : retry_files) {
+        if (target.source_path == source_path) {
+            return target.archive_raw_file_id;
+        }
+    }
+    return {};
+}
+
 // 归档重放目标必须落在自己的归档根目录里，且不是符号链接。
 void validate_archive_input(const RetryFileInput& target,
                             const labbridge::core::fs::path& archive_root) {
@@ -370,10 +383,14 @@ void TaskExecutor::plan_from_retry_targets(
         // 明确选中的历史失败输入允许再次处理（不查 processed），
         // 被别的排队作业占着就记该目标失败并继续。
         if (queue_store_.is_file_in_flight(job.task.id, entry.fingerprint)) {
+            // archive 目标被占用也必须保住原归档引用：丢了引用，
+            // 下次重试会错把它当成定点补采去读源文件。
             failures.push_back({target.source_path, target.original_name,
                                 "read",
                                 "file is in flight by another pending job",
-                                ""});
+                                target.input_type == "archive"
+                                    ? target.archive_raw_file_id
+                                    : std::string{}});
             continue;
         }
         plan.push_back(std::move(entry));
@@ -397,13 +414,44 @@ RecoveredJob TaskExecutor::run_collecting_stage(const RecoveredJob& input) const
         job = load_job(job.execution_key);
     }
 
+    // 兼容旧实现留下的半写状态：error_detail 已经落库、失败清单却漏了
+    // 这条（旧版本两处分开写，中间重启就会这样）。能走到 collecting 说明
+    // 报告还没保存过，按计划行补齐清单再继续；已发报告的作业不会进这里。
+    if (!job.files.empty()) {
+        auto amended = job.file_failures;
+        bool amended_changed = false;
+        for (const auto& file : job.files) {
+            if (file.error_detail.empty()) {
+                continue;
+            }
+            // 按源路径去重：清单里已有这条就只信已保存的版本。
+            const auto recorded = std::any_of(
+                amended.begin(), amended.end(),
+                [&file](const TaskRunReportFailedFile& failed) {
+                    return failed.source_path == file.source_path;
+                });
+            if (recorded) {
+                continue;
+            }
+            amended.push_back({file.source_path, file.original_name,
+                               "archive", file.error_detail,
+                               inherited_archive_ref(job.retry_files,
+                                                     file.source_path)});
+            amended_changed = true;
+        }
+        if (amended_changed) {
+            queue_store_.save_file_failures(job.execution_key, amended);
+            job = load_job(job.execution_key);
+        }
+    }
+
     RawFileManifestRequest manifest;
     manifest.task_run_id = job.task_run_id;
     manifest.node_code = job.task.node_code;
     manifest.idempotency_key =
         make_manifest_idempotency_key(manifest.node_code, manifest.task_run_id);
     auto failures = job.file_failures;
-    bool failures_changed = false;
+    bool failed_this_run = false;
     for (const auto& file : job.files) {
         // 之前已判失败的目标（error_detail 非空）跳过，同一作业不重试它们。
         if (!file.error_detail.empty()) {
@@ -424,21 +472,16 @@ RecoveredJob TaskExecutor::run_collecting_stage(const RecoveredJob& input) const
             // 归档证据冲突可能覆盖现场证据，整体转人工，不在文件级吞掉。
             throw;
         } catch (const std::exception& error) {
-            // 单个文件归档失败：记到该文件，其他文件继续。
-            queue_store_.mark_file_failed(job.execution_key, file.ordinal,
-                                          error.what());
-            std::string archive_ref;
+            // 单个文件归档失败：错误详情和更新后的完整失败清单一次落库，
+            // 中途崩溃不会出现清单漏记；其他文件继续。
             // retry 重放读原归档失败时保留原引用，否则下次重试会错转补采。
-            for (const auto& target : job.retry_files) {
-                if (target.source_path == file.source_path) {
-                    archive_ref = target.archive_raw_file_id;
-                    break;
-                }
-            }
             failures.push_back({file.source_path, file.original_name,
                                 "archive", error.what(),
-                                std::move(archive_ref)});
-            failures_changed = true;
+                                inherited_archive_ref(job.retry_files,
+                                                      file.source_path)});
+            queue_store_.mark_file_failed(job.execution_key, file.ordinal,
+                                          error.what(), failures);
+            failed_this_run = true;
             continue;
         }
         queue_store_.mark_file_archived(job.execution_key, file.ordinal);
@@ -446,13 +489,10 @@ RecoveredJob TaskExecutor::run_collecting_stage(const RecoveredJob& input) const
             file.original_name, file.file_hash, file.archive_path,
             file.size_bytes, file.source_mtime, "archived_local"});
     }
-    if (failures_changed) {
-        queue_store_.save_file_failures(job.execution_key, failures);
-    }
     if (!manifest.files.empty()) {
         queue_store_.save_manifest(job.execution_key, manifest);
         job = load_job(job.execution_key);
-    } else if (failures_changed) {
+    } else if (failed_this_run) {
         // 没有 manifest 可发也要重载：报告构建要拿到刚持久化的失败清单，
         // 否则会拿入参里的旧快照把 failed 报成 succeeded。
         job = load_job(job.execution_key);

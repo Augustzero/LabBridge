@@ -273,6 +273,7 @@ public:
 
             // 到期 Cron 处理完后取一个人工候选，随后重新检查调度；
             // 人工执行不推进 Cron 水位、不补跑错过的槽位。
+            // 队列满时这里返回 false，落到下面的 wait_until 等下一次唤醒。
             if (dispatch_one_pending()) {
                 continue;
             }
@@ -292,8 +293,10 @@ public:
         }
     }
 
-    // 取一个人工作业交给执行器。返回 true 表示本轮做过一次派发尝试，
-    // 调度循环应立刻重新检查；队列满时把候选放回队首并不再尝试。
+    // 取一个人工作业交给执行器。返回 true 表示本轮做完一次派发
+    // （成功入队或本地已有同键作业），调度循环应立刻重新检查调度；
+    // 队列满时把候选放回队首并返回 false，让外层进 wait_until 等唤醒，
+    // 不立刻重试——否则队列一直满就会原地空转。
     bool dispatch_one_pending() {
         std::optional<ManualTaskExecution> dispatch;
         {
@@ -327,12 +330,12 @@ public:
             PendingExecution candidate = dispatch->execution;
             const auto result = executor.execute_pending(std::move(*dispatch));
             if (result == PendingDispatchResult::QueueFull) {
-                // 请求留在中心 pending：把候选放回队首，本轮到此为止，
-                // 等正常唤醒（下一个 Cron 槽或配置刷新）再试。
+                // 请求留在中心 pending：候选放回队首并返回 false，
+                // 等正常唤醒（下一个 Cron 槽、配置刷新或时钟复查）再试。
                 std::lock_guard<std::mutex> lock{mutex};
                 pending_candidates.insert(
                     pending_candidates.begin(), std::move(candidate));
-                return true;
+                return false;
             }
         } catch (const DeliveryAbandoned& error) {
             labbridge::core::log_warn(kComponent, error.what());

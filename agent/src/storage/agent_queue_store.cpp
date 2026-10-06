@@ -914,26 +914,48 @@ void AgentQueueStore::save_file_failures(
     transaction.commit();
 }
 
-void AgentQueueStore::mark_file_failed(const std::string& execution_key,
-                                       int ordinal,
-                                       const std::string& error_detail) {
+void AgentQueueStore::mark_file_failed(
+    const std::string& execution_key,
+    int ordinal,
+    const std::string& error_detail,
+    const std::vector<TaskRunReportFailedFile>& failures) {
+    const auto failures_json = encode_file_failures(failures);
     std::lock_guard<std::mutex> lock{impl_->mutex};
-    auto statement = prepare(
+    // error_detail 和失败清单必须一起提交：分开写的话，进程在两次写之间
+    // 崩溃，重启后清单会漏掉这条失败，报告就把它报成成功了。
+    Transaction transaction{impl_->database, "mark file failed"};
+    auto file = prepare(
         impl_->database,
         "UPDATE pending_files SET error_detail = ? "
         "WHERE execution_key = ? AND ordinal = ?",
         "mark file failed");
-    bind_text(impl_->database, statement.get(), 1, error_detail,
+    bind_text(impl_->database, file.get(), 1, error_detail,
               "mark file failed");
-    bind_text(impl_->database, statement.get(), 2, execution_key,
-              "mark file failed");
-    check_result(sqlite3_bind_int(statement.get(), 3, ordinal),
-                 impl_->database, "mark file failed");
-    check_result(sqlite3_step(statement.get()), impl_->database,
+    bind_text(
+        impl_->database, file.get(), 2, execution_key, "mark file failed");
+    check_result(sqlite3_bind_int(file.get(), 3, ordinal), impl_->database,
                  "mark file failed");
+    check_result(
+        sqlite3_step(file.get()), impl_->database, "mark file failed");
     if (sqlite3_changes(impl_->database) != 1) {
         throw AgentQueueError("pending file does not exist");
     }
+    auto job = prepare(
+        impl_->database,
+        "UPDATE pending_jobs SET file_failures_json = ?, "
+        "updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') "
+        "WHERE execution_key = ?",
+        "mark file failed");
+    bind_text(
+        impl_->database, job.get(), 1, failures_json, "mark file failed");
+    bind_text(
+        impl_->database, job.get(), 2, execution_key, "mark file failed");
+    check_result(
+        sqlite3_step(job.get()), impl_->database, "mark file failed");
+    if (sqlite3_changes(impl_->database) != 1) {
+        throw AgentQueueError("mark file failed requires a pending job");
+    }
+    transaction.commit();
 }
 
 void AgentQueueStore::accept_start(const std::string& execution_key,

@@ -332,7 +332,7 @@ async function retryTriggerAfterError(): Promise<void> {
             link
             type="primary"
             size="small"
-            :disabled="!row.enabled || triggerSubmitting"
+            :disabled="!row.enabled || triggerSubmitting || triggerAwaiting"
             @click="onTriggerRun(row)"
           >
             执行一次

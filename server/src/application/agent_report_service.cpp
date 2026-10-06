@@ -481,7 +481,27 @@ labbridge::core::Status AgentReportService::validate_failed_files(
                 "failed files must be unique by source_path");
         }
 
+        // 同路径的固定目标，后面的引用校验都要用它。
+        const TaskRunRetryFile* target = nullptr;
+        if (retry_files.has_value()) {
+            const auto matched = std::find_if(
+                retry_files->begin(), retry_files->end(),
+                [&failed](const TaskRunRetryFile& retry_file) {
+                    return retry_file.source_path == failed.source_path;
+                });
+            if (matched != retry_files->end()) {
+                target = &*matched;
+            }
+        }
+
         if (failed.archive_raw_file_id.empty()) {
+            // archive 目标失败必须带原归档引用：丢了引用，下次重试会错转
+            // 成定点补采去读源文件。普通采集和 source 补采仍允许空引用。
+            if (target != nullptr && target->input_type == "archive") {
+                return labbridge::core::Status::failure(
+                    labbridge::core::StatusCode::Conflict,
+                    "archive retry target must keep its archive reference");
+            }
             continue;
         }
         // 情况一：本运行新产生的归档（本次解析失败指向本次 raw_file）。
@@ -495,15 +515,9 @@ labbridge::core::Status AgentReportService::validate_failed_files(
         // 目标必须对得上；不能因文件当前不可读而清空引用，
         // 否则下次重试会错转为补采。
         const bool inherited =
-            retry_files.has_value() &&
-            std::any_of(
-                retry_files->begin(), retry_files->end(),
-                [&failed](const TaskRunRetryFile& retry_file) {
-                    return retry_file.input_type == "archive" &&
-                           retry_file.archive_raw_file_id ==
-                               failed.archive_raw_file_id &&
-                           retry_file.source_path == failed.source_path;
-                });
+            target != nullptr &&
+            target->input_type == "archive" &&
+            target->archive_raw_file_id == failed.archive_raw_file_id;
         if (!inherited) {
             // 情况一/二都不满足：引用了别处存在或根本不存在的文件。
             return labbridge::core::Status::failure(

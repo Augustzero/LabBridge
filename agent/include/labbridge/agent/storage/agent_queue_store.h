@@ -37,7 +37,9 @@ public:
         const std::vector<TaskRunReportFailedFile>& failures) override;
     void mark_file_failed(const std::string& execution_key,
                           int ordinal,
-                          const std::string& error_detail) override;
+                          const std::string& error_detail,
+                          const std::vector<TaskRunReportFailedFile>& failures)
+        override;
     void mark_file_archived(const std::string& execution_key,
                             int ordinal) override;
     void save_manifest(const std::string& execution_key,

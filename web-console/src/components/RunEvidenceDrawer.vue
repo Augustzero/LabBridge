@@ -483,7 +483,7 @@ async function onCloseAlert(row: Alert): Promise<void> {
         <el-button
           size="small"
           type="primary"
-          :disabled="!detail.retryable"
+          :disabled="!detail.retryable || retryAwaiting"
           :loading="retrySubmitting"
           @click="onRetryFailedFiles"
         >

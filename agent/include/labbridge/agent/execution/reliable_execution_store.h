@@ -77,15 +77,19 @@ public:
         const std::string& execution_key,
         const std::vector<PendingFilePlan>& files,
         const std::vector<TaskRunReportFailedFile>& failures) = 0;
-    // 阶段推进中更新失败清单（归档失败等）。
+    // 独立更新失败清单，只用于恢复时补齐旧版本留下的半写状态；
+    // 正常执行路径的清单更新走 mark_file_failed 的事务。
     virtual void save_file_failures(
         const std::string& execution_key,
         const std::vector<TaskRunReportFailedFile>& failures) = 0;
-    // 计划内某个目标的归档/读取失败：写 pending_files.error_detail，
-    // 恢复时跳过已记失败的项，不在同一作业里重试它们。
+    // 计划内某个目标的归档/读取失败：error_detail 与更新后的完整失败清单
+    // 同一事务提交，中途崩溃要么都在要么都不在。恢复时跳过已记失败的项，
+    // 不在同一作业里重试它们。
     virtual void mark_file_failed(const std::string& execution_key,
                                   int ordinal,
-                                  const std::string& error_detail) = 0;
+                                  const std::string& error_detail,
+                                  const std::vector<TaskRunReportFailedFile>&
+                                      failures) = 0;
     virtual void mark_file_archived(const std::string& execution_key,
                                     int ordinal) = 0;
     virtual void save_manifest(const std::string& execution_key,
